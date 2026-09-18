@@ -1,7 +1,11 @@
-﻿name = "clean-manga-reader"
+name = "clean-manga-reader"
 main = "worker/worker.js"
 compatibility_date = "2024-09-01"
 
 [assets]
 directory = "."
 binding = "ASSETS"
+
+[[kv_namespaces]]
+binding = "CHAT_KV"
+id = "c48882cff6f949a6a36fd7e67aa441a2"
