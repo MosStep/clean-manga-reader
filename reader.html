@@ -10,15 +10,26 @@
 
   <!-- Reader Top Bar -->
   <header class="reader-navbar">
-    <div style="display: flex; align-items: center; gap: 8px;">
-      <button id="backBtn" class="btn-nav" title="กลับไปหน้ารายการตอน">← รายการตอน</button>
-      <button id="readerChaptersBtn" class="btn-nav" title="เปิดรายการตอนทั้งหมด">📋 เลือกตอน</button>
-      <div id="readerTitle" class="reader-nav-title">กำลังโหลด...</div>
+    <div class="reader-nav-left">
+      <button id="backBtn" class="btn-nav" title="กลับไปหน้ารายการตอน">
+        <span class="nav-icon">←</span>
+        <span class="nav-label">รายการตอน</span>
+      </button>
+      <button id="readerChaptersBtn" class="btn-nav" title="เปิดรายการตอนทั้งหมด">
+        <span class="nav-icon">📋</span>
+        <span class="nav-label">เลือกตอน</span>
+      </button>
     </div>
-    <div class="reader-controls">
-      <a id="readerSourceBtn" href="#" target="_blank" class="btn-nav btn-source-link" title="เปิดอ่านที่หน้าเว็บต้นทาง">🌐 เว็บต้นทาง ↗</a>
-      <button id="prevBtn" class="btn-nav" disabled>◀ ตอนก่อน</button>
-      <button id="nextBtn" class="btn-nav" disabled>ตอนต่อไป ▶</button>
+    
+    <div id="readerTitle" class="reader-nav-title">กำลังโหลด...</div>
+
+    <div class="reader-nav-right">
+      <a id="readerSourceBtn" href="#" target="_blank" class="btn-nav btn-source-link" title="เปิดอ่านที่หน้าเว็บต้นทาง">
+        <span class="nav-icon">🌐</span>
+        <span class="nav-label">ต้นทาง ↗</span>
+      </a>
+      <button id="prevChapterBtn" class="btn-nav" title="ตอนก่อนหน้า" disabled>◀</button>
+      <button id="nextChapterBtn" class="btn-nav" title="ตอนต่อไป" disabled>▶</button>
     </div>
   </header>
 

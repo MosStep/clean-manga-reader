@@ -78,13 +78,26 @@ function parseMangaReaderHtml(html, sourceInfo) {
     const linkEl = card.querySelector('a.ntr-upd-title, a.ntr-upd-cover, a');
     const titleEl = card.querySelector('.ntr-upd-title h3, .tt, h2, h3, .title');
     const imgEl = card.querySelector('img');
-    const epEl = card.querySelector('.ntr-upd-epnum, .epxs, .eggchap, .fivchap, .chfiv li a, .ntr-upd-ep');
+    const epNumEl = card.querySelector('.ntr-upd-epnum');
+    const epEl = card.querySelector('.epxs, .eggchap, .fivchap, .chfiv li a, .ntr-upd-ep');
     const typeEl = card.querySelector('.typename, .type');
 
     if (linkEl && titleEl) {
       let mangaUrl = linkEl.getAttribute('href') || '';
       let title = titleEl.textContent.trim();
-      let latestEp = epEl ? epEl.textContent.trim() : 'ตอนล่าสุด';
+      let latestEp = 'ตอนล่าสุด';
+
+      if (epNumEl) {
+        latestEp = epNumEl.textContent.trim();
+      } else if (epEl) {
+        const clone = epEl.cloneNode(true);
+        clone.querySelectorAll('.ntr-upd-eptime, .date, .time, time, i').forEach(t => t.remove());
+        latestEp = clone.textContent.trim();
+      }
+
+      // กรองคำระบุเวลาออก เช่น "2 ชั่วโมงที่แล้ว", "3 วันที่แล้ว" เพื่อไม่ให้เลขเวลามาซ้อนทับกับเลขตอน
+      latestEp = latestEp.replace(/\s*\d+\s*(?:ชั่วโมง|นาที|วัน|วินาที|ชม\.|วัน|เดือน|ปี|hours?|mins?|days?|ago)\s*(?:ที่แล้ว|ago)?/gi, '').trim() || latestEp;
+
       let type = typeEl ? typeEl.textContent.trim() : (sourceInfo.name.includes('Doujin') || sourceInfo.name.includes('NTR') ? '18+ / Doujin' : 'Manga');
       let cover = extractCoverUrl(imgEl, sourceInfo.url);
 
@@ -1729,19 +1742,27 @@ async function openChapterModal(manga, activeSource = null) {
 
   try {
     let html = await fetchViaProxy(currentSource.mangaUrl);
-    if (currentSource.sourceType === 'madara' && !html.includes('wp-manga-chapter')) {
+    let chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType);
+
+    // สำหรับเว็บตระกูล Madara (เช่น Du-Manga) หากหน้าแรกไม่ได้ใส่รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที
+    if (currentSource.sourceType === 'madara' && chapters.length === 0) {
       try {
         const ajaxUrl = currentSource.mangaUrl.replace(/\/$/, '') + '/ajax/chapters/';
-        const ajaxHtml = await fetchViaProxy(ajaxUrl, { method: 'POST', body: 'action=manga_get_chapters' });
-        if (ajaxHtml && ajaxHtml.includes('wp-manga-chapter')) {
-          html = ajaxHtml;
+        const ajaxHtml = await fetchViaProxy(ajaxUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'action=manga_get_chapters'
+        });
+        if (ajaxHtml) {
+          const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, currentSource.sourceType);
+          if (ajaxChapters.length > 0) {
+            chapters = ajaxChapters;
+          }
         }
       } catch (errAjax) {
         console.warn("Madara ajax chapters fetch:", errAjax);
       }
     }
-
-    const chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType);
 
     if (!chapterList) return;
 
@@ -2004,11 +2025,13 @@ async function initReaderPage() {
   const directSourceUrl = chapterUrl || mangaObj.mangaUrl || mangaObj.sourceUrl;
   if (readerSourceBtn && directSourceUrl) {
     readerSourceBtn.href = directSourceUrl;
-    readerSourceBtn.textContent = `🌐 เว็บต้นทาง (${mangaObj.sourceName}) ↗`;
+    readerSourceBtn.innerHTML = `<span class="nav-icon">🌐</span> <span class="nav-label">ต้นทาง (${mangaObj.sourceName}) ↗</span>`;
+    readerSourceBtn.title = `เปิดดูที่เว็บต้นทาง (${mangaObj.sourceName}) ↗`;
   }
   if (footerSourceBtn && directSourceUrl) {
     footerSourceBtn.href = directSourceUrl;
-    footerSourceBtn.textContent = `🌐 ต้นทาง (${mangaObj.sourceName}) ↗`;
+    footerSourceBtn.innerHTML = `<span class="nav-icon">🌐</span> <span class="nav-label">ต้นทาง (${mangaObj.sourceName}) ↗</span>`;
+    footerSourceBtn.title = `เปิดดูที่เว็บต้นทาง (${mangaObj.sourceName}) ↗`;
   }
 
   const goBackToChapters = (e) => {

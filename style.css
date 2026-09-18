@@ -1013,22 +1013,32 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 18px;
+  padding: 0 16px;
   z-index: 100;
+  gap: 8px;
+}
+
+.reader-nav-left, .reader-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .reader-nav-title {
-  font-size: 0.95rem;
+  flex: 1;
+  font-size: 0.92rem;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 450px;
+  text-align: center;
+  padding: 0 4px;
 }
 
 .reader-controls {
   display: flex;
-  gap: 10px;
+  gap: 6px;
 }
 
 .btn-nav {
@@ -1120,8 +1130,37 @@ body {
     grid-template-columns: repeat(2, 1fr);
     gap: 14px;
   }
+  .reader-navbar {
+    padding: 0 8px;
+    height: 48px;
+    gap: 4px;
+  }
+  .reader-nav-left, .reader-nav-right {
+    gap: 4px;
+  }
+  .reader-navbar .btn-nav {
+    padding: 5px 8px;
+    min-width: 34px;
+    height: 34px;
+    justify-content: center;
+    border-radius: 8px;
+    font-size: 0.82rem;
+  }
+  .reader-navbar .nav-label {
+    display: none !important;
+  }
   .reader-nav-title {
-    max-width: 160px;
+    font-size: 0.8rem;
+    max-width: 140px;
+    padding: 0 2px;
+  }
+  .reader-footer {
+    padding: 8px;
+    gap: 6px;
+  }
+  .reader-footer .btn-nav {
+    padding: 10px 8px !important;
+    font-size: 0.78rem;
   }
   .source-bar-wrapper {
     padding: 12px 14px;
