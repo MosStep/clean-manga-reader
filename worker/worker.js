@@ -173,21 +173,23 @@ export default {
         const itemKey = (item.mangaUrl || item.title).trim();
         if (item.updatedAt && item.updatedAt < cutoff) continue; // ลบเมื่อเกิน 2 ปี
 
+        const itemReadChapters = Array.isArray(item.readChapters) 
+          ? item.readChapters 
+          : (typeof item.readChapters === 'string' && item.readChapters ? [item.readChapters] : []);
+
         if (!map.has(itemKey)) {
           map.set(itemKey, { 
             ...item,
-            readChapters: Array.isArray(item.readChapters) ? [...item.readChapters] : []
+            readChapters: itemReadChapters
           });
         } else {
           const existing = map.get(itemKey);
-          const readChapters = Array.from(new Set([
-            ...(Array.isArray(existing.readChapters) ? existing.readChapters : []),
-            ...(Array.isArray(item.readChapters) ? item.readChapters : [])
-          ]));
+          const existRead = Array.isArray(existing.readChapters) ? existing.readChapters : [];
+          const combinedRead = Array.from(new Set([...existRead, ...itemReadChapters]));
           const newer = (item.updatedAt || 0) >= (existing.updatedAt || 0) ? item : existing;
           map.set(itemKey, {
             ...newer,
-            readChapters,
+            readChapters: combinedRead,
             updatedAt: Math.max(existing.updatedAt || 0, item.updatedAt || 0)
           });
         }
