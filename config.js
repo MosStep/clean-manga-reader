@@ -3,7 +3,7 @@ const CONFIG = {
   // Proxy URL สำหรับ Local Test, Cloudflare Worker, หรือ GitHub Pages
   PROXY_URL: (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1') || window.location.hostname.endsWith('workers.dev') || window.location.hostname.endsWith('pages.dev'))
     ? '/api/proxy?url='
-    : 'https://clean-manga-reader.tanaphut1256.workers.dev/api/proxy?url=',
+    : 'https://clean-manga-reader.mosstep.workers.dev/api/proxy?url=',
 
   // รายการเว็บต้นทางทั้งหมด
   // เว็บที่ readable: true สามารถอ่านภาพแนวตั้งได้สมบูรณ์แบบในเว็บนี้ 100%
