@@ -1,9 +1,11 @@
 // การตั้งค่าระบบ Clean Manga Reader
 const CONFIG = {
-  // Proxy URL สำหรับ Local Test หรือเปลี่ยนเป็น Cloudflare Worker เมื่อขึ้น GitHub
-  PROXY_URL: window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')
+  // Proxy URL สำหรับ Local Test หรือ Cloudflare Worker
+  PROXY_URL: (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1'))
     ? '/api/proxy?url='
-    : 'https://manga-proxy.free-reader.workers.dev/?url=',
+    : (window.location.hostname.endsWith('workers.dev') || window.location.hostname.endsWith('pages.dev')
+        ? `${window.location.origin}/?url=`
+        : 'https://clean-manga-reader.workers.dev/?url='),
 
   // รายการเว็บต้นทางทั้งหมด
   // เว็บที่ readable: true สามารถอ่านภาพแนวตั้งได้สมบูรณ์แบบในเว็บนี้ 100%
