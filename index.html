@@ -57,7 +57,14 @@
           <span class="source-pulse-dot"></span>
           <span>แยกตามเว็บต้นทาง:</span>
         </div>
-        <div class="stats-counter" id="mangaCount">กำลังรวบรวมเรื่อง...</div>
+        <div class="source-bar-controls">
+          <div class="stats-counter" id="mangaCount">กำลังรวบรวมเรื่อง...</div>
+          <button id="btnToggleSources" class="btn-toggle-sources" type="button">
+            <span id="toggleSourcesIcon" class="toggle-icon">▲</span>
+            <span id="toggleSourcesText">ย่อรายการเว็บ</span>
+          </button>
+        </div>
+      </div>
       <div id="sourceAlertBar" style="display: none;"></div>
       <div class="source-tags" id="sourceTabs">
         <!-- จะถูกสร้างอัตโนมัติโดย app.js พร้อมจำนวนเรื่องของแต่ละเว็บ -->

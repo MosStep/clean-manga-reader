@@ -761,13 +761,20 @@ async function fetchMangaBatch(page = 1) {
 
       if (items.length > 0) {
         sourceHealthStatus[source.id] = { ok: true, count: items.length };
-      } else if (!sourceHealthStatus[source.id] || !sourceHealthStatus[source.id].ok) {
-        sourceHealthStatus[source.id] = { ok: false, error: 'ไม่พบรายการเรื่องในหน้านี้' };
+      } else {
+        if (!sourceHealthStatus[source.id]) {
+          sourceHealthStatus[source.id] = { ok: true };
+        }
       }
       return items;
     } catch (e) {
       console.warn(`Fetch error for ${source.name} page ${page}:`, e.message);
-      sourceHealthStatus[source.id] = { ok: false, error: e.message };
+      const isOriginDead = /HTTP (?:404|500|502|503)|ENOTFOUND|getaddrinfo/i.test(e.message);
+      if (isOriginDead && !source.isCoin) {
+        sourceHealthStatus[source.id] = { ok: false, error: e.message };
+      } else {
+        sourceHealthStatus[source.id] = { ok: true };
+      }
       return [];
     }
   });
@@ -845,10 +852,44 @@ function applyFilters() {
   updateHistoryAndFavCounts();
 }
 
+// ฟังก์ชันจัดการปุ่มย่อ/ขยายรายการเว็บต้นทาง (Collapsible Source Bar)
+function initSourceBarToggle() {
+  const toggleBtn = document.getElementById('btnToggleSources');
+  const sourceTabs = document.getElementById('sourceTabs');
+  const toggleIcon = document.getElementById('toggleSourcesIcon');
+  const toggleText = document.getElementById('toggleSourcesText');
+
+  if (!toggleBtn || !sourceTabs) return;
+
+  // ถ้าเป็นหน้าจอมือถือ (ความกว้าง <= 768px) ให้ย่อรายการไว้เป็นค่าเริ่มต้นเพื่อไม่ให้บังหน้าจอ
+  const isMobile = window.innerWidth <= 768;
+  let isCollapsed = isMobile;
+
+  const updateUi = () => {
+    if (isCollapsed) {
+      sourceTabs.classList.add('collapsed');
+      if (toggleIcon) toggleIcon.textContent = '▼';
+      if (toggleText) toggleText.textContent = `เลือกเว็บ (${CONFIG.SOURCES.length})`;
+    } else {
+      sourceTabs.classList.remove('collapsed');
+      if (toggleIcon) toggleIcon.textContent = '▲';
+      if (toggleText) toggleText.textContent = 'ย่อรายการเว็บ';
+    }
+  };
+
+  updateUi();
+
+  toggleBtn.onclick = (e) => {
+    e.preventDefault();
+    isCollapsed = !isCollapsed;
+    updateUi();
+  };
+}
+
 // อัปเดตแถบแจ้งเตือนและป้ายสถานะสีแดงเมื่อมีเว็บต้นทางขัดข้อง
 function updateSourceHealthUi() {
   const alertBar = document.getElementById('sourceAlertBar');
-  const offlineSources = CONFIG.SOURCES.filter(s => sourceHealthStatus[s.id] && sourceHealthStatus[s.id].ok === false);
+  const offlineSources = CONFIG.SOURCES.filter(s => !s.isCoin && sourceHealthStatus[s.id] && sourceHealthStatus[s.id].ok === false);
 
   if (alertBar) {
     if (offlineSources.length > 0) {
@@ -870,7 +911,7 @@ function updateSourceHealthUi() {
   CONFIG.SOURCES.forEach(source => {
     const btn = document.querySelector(`.source-tag[data-source="${source.id}"]`);
     if (btn) {
-      const isOffline = sourceHealthStatus[source.id] && sourceHealthStatus[source.id].ok === false;
+      const isOffline = !source.isCoin && sourceHealthStatus[source.id] && sourceHealthStatus[source.id].ok === false;
       const existingBadge = btn.querySelector('.source-status-badge');
       if (isOffline) {
         btn.classList.add('offline');
@@ -902,7 +943,7 @@ function renderSourceTabs() {
   `;
 
   CONFIG.SOURCES.forEach(source => {
-    const isOffline = sourceHealthStatus[source.id] && sourceHealthStatus[source.id].ok === false;
+    const isOffline = !source.isCoin && sourceHealthStatus[source.id] && sourceHealthStatus[source.id].ok === false;
     const btn = document.createElement('button');
     btn.className = `source-tag ${currentSourceFilter === source.id ? 'active' : ''} ${isOffline ? 'offline' : ''}`;
     btn.setAttribute('data-source', source.id);
@@ -980,6 +1021,7 @@ async function initAggregatorPage() {
 
   setupHeroSpotlight(allMangaList);
   renderSourceTabs();
+  initSourceBarToggle();
   renderMangaCards();
 
   // Search
@@ -1704,7 +1746,7 @@ async function openChapterModal(manga, activeSource = null) {
     if (!chapterList) return;
 
     if (chapters.length === 0) {
-      if (sourceHealthStatus[currentSource.sourceId]) {
+      if (!currentSource.isCoin && sourceHealthStatus[currentSource.sourceId]) {
         sourceHealthStatus[currentSource.sourceId] = { ok: false, error: 'ไม่พบรายการตอน' };
         updateSourceHealthUi();
       }
