@@ -25,6 +25,17 @@ export default {
     const targetUrl = url.searchParams.get("url");
 
     if (!targetUrl) {
+      if (url.pathname === '/favicon.ico' || url.pathname === '/favicon.svg') {
+        const faviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e676"/><stop offset="100%" stop-color="#00b0ff"/></linearGradient></defs><rect width="64" height="64" rx="16" fill="#0c0d12"/><rect x="1.5" y="1.5" width="61" height="61" rx="14.5" fill="none" stroke="url(#g)" stroke-width="2" stroke-opacity="0.6"/><path d="M36 7 L17 34 L31 34 L26 57 L47 27 L33 27 Z" fill="url(#g)"/></svg>`;
+        return new Response(faviconSvg, {
+          status: 200,
+          headers: {
+            "Content-Type": "image/svg+xml",
+            "Cache-Control": "public, max-age=604800",
+            "Access-Control-Allow-Origin": "*"
+          }
+        });
+      }
       if (env && env.ASSETS) {
         return env.ASSETS.fetch(request);
       }
