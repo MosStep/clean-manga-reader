@@ -17,9 +17,14 @@ class MangaHandler(http.server.SimpleHTTPRequestHandler):
                 parsed = urllib.parse.urlparse(target_url)
                 origin = f"{parsed.scheme}://{parsed.netloc}/"
                 
+                custom_referer = None
+                if '&referer=' in self.path:
+                    custom_referer = urllib.parse.unquote(self.path.split('&referer=', 1)[1].split('&', 1)[0])
+                referer_header = custom_referer or ('https://ped-manga.com/' if 'webtoon168' in target_url else origin)
+
                 req = urllib.request.Request(target_url, headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                    'Referer': origin
+                    'Referer': referer_header
                 })
                 with urllib.request.urlopen(req, timeout=15) as resp:
                     self.send_response(resp.status)

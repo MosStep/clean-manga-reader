@@ -8,10 +8,16 @@ let currentSearchQuery = '';    // ข้อความค้นหา
 let currentDisplayCount = 40;   // แสดงครั้งละ 40 เรื่อง
 let loadedPagesPerSource = 1;
 
-// ตัวช่วยสร้าง URL ผ่าน Proxy
-function getProxyUrl(targetUrl) {
+// ตัวช่วยสร้าง URL ผ่าน Proxy (รองรับการส่ง Referer ข้ามเว็บ เช่น webtoon168 ของ Ped-Manga)
+function getProxyUrl(targetUrl, referer = '') {
   if (!targetUrl) return '';
-  return `${CONFIG.PROXY_URL}${encodeURIComponent(targetUrl)}`;
+  let url = `${CONFIG.PROXY_URL}${encodeURIComponent(targetUrl)}`;
+  if (referer) {
+    url += `&referer=${encodeURIComponent(referer)}`;
+  } else if (targetUrl.includes('webtoon168')) {
+    url += `&referer=${encodeURIComponent('https://ped-manga.com/')}`;
+  }
+  return url;
 }
 
 // 1. ดึงข้อมูลผ่าน Proxy พร้อม Timeout และรองรับ GET / POST
@@ -3132,7 +3138,7 @@ function parseReaderData(html, currentUrl = '') {
       return {
         prevUrl: readerJson.prevUrl || '',
         nextUrl: readerJson.nextUrl || '',
-        images: rawImages.map(imgUrl => getProxyUrl(imgUrl))
+        images: rawImages.map(imgUrl => getProxyUrl(imgUrl, currentUrl || 'https://ped-manga.com/'))
       };
     } catch (e) {
       console.warn("Failed to parse ts_reader JSON:", e);

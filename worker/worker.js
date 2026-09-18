@@ -495,11 +495,19 @@ export default {
       const parsedTarget = new URL(targetUrl);
       const origin = parsedTarget.origin;
 
+      const customReferer = url.searchParams.get("referer") || request.headers.get("x-referer");
+      let refererHeader = origin + "/";
+      if (customReferer) {
+        refererHeader = customReferer;
+      } else if (origin.includes("webtoon168") || targetUrl.includes("webtoon168")) {
+        refererHeader = "https://ped-manga.com/";
+      }
+
       const fetchOptions = {
         method: request.method,
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Referer": origin + "/",
+          "Referer": refererHeader,
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
           "Accept-Language": "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7",
           "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',

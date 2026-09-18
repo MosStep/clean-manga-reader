@@ -79,6 +79,8 @@ while ($listener.IsListening) {
 
             $safeTargetUrl = $uriObj.AbsoluteUri
             $origin = "$($uriObj.Scheme)://$($uriObj.Host)/"
+            $customReferer = $query["referer"]
+            $referer = if ($customReferer) { $customReferer } elseif ($safeTargetUrl -match "webtoon168") { "https://ped-manga.com/" } else { $origin }
 
             $bytes = $null
             $contentType = $null
@@ -88,7 +90,7 @@ while ($listener.IsListening) {
             try {
                 $httpReq = New-Object System.Net.Http.HttpRequestMessage($method, $safeTargetUrl)
                 $httpReq.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-                $httpReq.Headers.Add("Referer", $origin)
+                $httpReq.Headers.Add("Referer", $referer)
                 $httpReq.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 
                 if ($req.HttpMethod -eq "POST" -and $req.HasEntityBody) {
@@ -114,7 +116,7 @@ while ($listener.IsListening) {
                 try {
                     $tempFile = [System.IO.Path]::GetTempFileName()
                     $curlMethod = if ($req.HttpMethod -eq "POST") { "-X POST" } else { "" }
-                    & curl.exe -s -L $curlMethod -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -H "Referer: $origin" -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" -o $tempFile "$safeTargetUrl"
+                    & curl.exe -s -L $curlMethod -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -H "Referer: $referer" -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" -o $tempFile "$safeTargetUrl"
                     if (Test-Path $tempFile) {
                         $bytes = [System.IO.File]::ReadAllBytes($tempFile)
                         [System.IO.File]::Delete($tempFile)
