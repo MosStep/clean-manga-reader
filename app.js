@@ -2060,113 +2060,10 @@ async function initAggregatorPage() {
     }
   };
 
-  // 1. ตรวจสอบแคชในเครื่อง หากมีข้อมูลอยู่แล้ว ให้แสดงทันทีใน 0 วินาที
-  let hasRenderedFromCache = false;
-  try {
-    const cached = sessionStorage.getItem('cached_all_manga');
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        allMangaList = parsed;
-        filteredList = [...allMangaList];
-        setupHeroSpotlight(allMangaList);
-        renderSourceTabs();
-        initSourceBarToggle();
-        renderMangaCards();
-        if (statusEl) statusEl.style.display = 'none';
-        hasRenderedFromCache = true;
-      }
-    }
-  } catch (e) {}
-
-  if (!hasRenderedFromCache && statusEl) {
-    statusEl.style.display = 'block';
-    statusEl.innerHTML = `<div class="spinner"></div>กำลังรวบรวมเรื่องอัปเดตล่าสุดจาก ${CONFIG.SOURCES.length} เว็บชั้นนำ...`;
-  }
-
-  // 2. Progressive Streaming + Interleaving: ยิงดึงข้อมูลทุกเว็บพร้อมกันในเบื้องหลัง
-  // ทันทีที่เว็บแรกตอบกลับ (ภายใน 1-2 วินาที) จะแสดงการ์ดบนจอทันที
-  // และเมื่อเว็บอื่นๆ ทยอยตามมา จะนำเรื่องอัปเดตของแต่ละเว็บมาสลับไขว้ (Round-Robin Interleaving) ด้านบนอย่างสมดุล ไม่กระจุกอยู่ที่เว็บเดียว!
-  let isUiInitialized = hasRenderedFromCache;
-  let completedSources = 0;
-  const totalSources = CONFIG.SOURCES.length;
-  const loadedSourceMap = new Map();
-  updateBgProgress(completedSources, totalSources);
-
-  const fetchPromises = CONFIG.SOURCES.map(async (source) => {
-    const items = await fetchSingleSource(source, 1, 15000);
-    completedSources++;
-    updateBgProgress(completedSources, totalSources);
-
-    if (items && items.length > 0) {
-      loadedSourceMap.set(source.id, items);
-
-      // นำทุกเว็บที่ดึงเสร็จแล้วมาสลับไขว้แบบ Round-Robin
-      const interleaved = interleaveSources(Array.from(loadedSourceMap.values()));
-      allMangaList = mergeAndDeduplicate(interleaved);
-
-      if (!isUiInitialized) {
-        // ครั้งแรกที่เว็บใดเว็บหนึ่งโหลดเสร็จ -> แสดงผลขึ้นจอทันที!
-        isUiInitialized = true;
-        if (statusEl) statusEl.style.display = 'none';
-        setupHeroSpotlight(allMangaList);
-        renderSourceTabs();
-        initSourceBarToggle();
-        applyFilters();
-      } else {
-        // อัปเดตตัวเลขจำนวนเรื่องของแท็บ
-        updateSourceCounts();
-        // ถ้าผู้ใช้อยู่หน้า 'all' และยังไม่ได้ค้นหาหรือเลื่อนจอลงไปลึก ให้อัปเดตการ์ดต่อเนื่องแบบไร้รอยต่อ
-        if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 300) {
-          applyFilters();
-        }
-      }
-
-      try {
-        sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
-      } catch (e) {}
-    }
-
-    return items;
-  });
-
-  // รอจนทุกเว็บเสร็จสิ้น (หรือไม่เกิน 15 วินาทีต่อเว็บ)
-  await Promise.allSettled(fetchPromises);
-  updateBgProgress(totalSources, totalSources);
-
-  if (loadedSourceMap.size > 0) {
-    const finalInterleaved = interleaveSources(Array.from(loadedSourceMap.values()));
-    allMangaList = mergeAndDeduplicate(finalInterleaved);
-    try {
-      sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
-    } catch (e) {}
-  }
-
-  if (allMangaList.length === 0) {
-    if (statusEl) {
-      statusEl.style.display = 'block';
-      statusEl.innerHTML = '<p style="color:#ff5555;">ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง</p>';
-    }
-    return;
-  }
-
-  // อัปเดตครั้งสุดท้ายเพื่อให้ข้อมูลและตัวเลขครบถ้วน 100%
-  if (!isUiInitialized) {
-    isUiInitialized = true;
-    if (statusEl) statusEl.style.display = 'none';
-    setupHeroSpotlight(allMangaList);
-    renderSourceTabs();
-    initSourceBarToggle();
-  }
-  updateSourceCounts();
-  updateSourceHealthUi();
-  applyFilters();
-
-  // Search
-  const globalSearchBanner = document.getElementById('globalSearchBanner');
-  const globalSearchBtnText = document.getElementById('globalSearchBtnText');
-  const btnGlobalSearch = document.getElementById('btnGlobalSearch');
-
+  // ============================================================
+  // 1. ปลดล็อกปุ่มและ Event Listener ทั้งหมดทันทีใน 0.01 วินาที (Instant UI Unlock)
+  // ให้ผู้ใช้สามารถกดคลิกแท็บ "🕒 ประวัติ" หรือ "⭐ เรื่องโปรด" ได้ทันที ไม่ต้องรอเครือข่ายภายนอกแม้แต่เสี้ยววิ
+  // ============================================================
   if (searchInput && !searchInput.dataset.bound) {
     searchInput.dataset.bound = "1";
     searchInput.addEventListener('input', (e) => {
@@ -2174,6 +2071,8 @@ async function initAggregatorPage() {
       if (clearSearchBtn) clearSearchBtn.style.display = currentSearchQuery ? 'block' : 'none';
 
       // แสดงปุ่มค้นหาคลังใหญ่ข้ามเว็บเมื่อพิมพ์ตั้งแต่ 2 ตัวอักษรขึ้นไป
+      const globalSearchBanner = document.getElementById('globalSearchBanner');
+      const globalSearchBtnText = document.getElementById('globalSearchBtnText');
       if (globalSearchBanner) {
         if (currentSearchQuery.length >= 2) {
           globalSearchBanner.style.display = 'block';
@@ -2195,12 +2094,14 @@ async function initAggregatorPage() {
       searchInput.value = '';
       clearSearchBtn.style.display = 'none';
       currentSearchQuery = '';
+      const globalSearchBanner = document.getElementById('globalSearchBanner');
       if (globalSearchBanner) globalSearchBanner.style.display = 'none';
       applyFilters();
     });
   }
 
   // ผูกปุ่มค้นหาคลังใหญ่ข้ามเว็บ (Global Live Search)
+  const btnGlobalSearch = document.getElementById('btnGlobalSearch');
   if (btnGlobalSearch && !btnGlobalSearch.dataset.bound) {
     btnGlobalSearch.dataset.bound = "1";
     btnGlobalSearch.addEventListener('click', () => {
@@ -2227,7 +2128,7 @@ async function initAggregatorPage() {
     });
   }
 
-  // Tags
+  // ผูกแท็บหมวดหมู่, ประวัติ, เรื่องโปรด (คลิกแล้วตอบสนองทันที 0 วินาที!)
   filterTags.forEach(btn => {
     if (!btn.dataset.bound) {
       btn.dataset.bound = "1";
@@ -2240,7 +2141,7 @@ async function initAggregatorPage() {
     }
   });
 
-  // Load More (ดึงหน้าถัดไปอัตโนมัติ)
+  // ผูกปุ่มโหลดเรื่องเพิ่มเติม
   if (loadMoreBtn && !loadMoreBtn.dataset.bound) {
     loadMoreBtn.dataset.bound = "1";
     loadMoreBtn.addEventListener('click', async () => {
@@ -2282,7 +2183,9 @@ async function initAggregatorPage() {
     btnClearAllFavorites.onclick = clearAllFavorites;
   }
 
-  // อัปเดตตัวเลขประวัติและเรื่องโปรด
+  // สร้างแท็บแหล่งเว็บและอัปเดตตัวเลข
+  renderSourceTabs();
+  initSourceBarToggle();
   updateHistoryAndFavCounts();
 
   // เริ่มต้นระบบ Private Sync Key ข้ามอุปกรณ์
@@ -2291,7 +2194,7 @@ async function initAggregatorPage() {
   // เริ่มต้นระบบแชทส่วนกลางหน้าแรก
   initChatComponent(null);
 
-  // คืนค่าหน้าต่างเลือกตอนเฉพาะเมื่อผู้ใช้กดปุ่มย้อนกลับมาจากหน้าอ่าน (?restore=1) เท่านั้น
+  // คืนค่าหน้าต่างเลือกตอนเมื่อกลับมาจาก reader (?restore=1)
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('restore') === '1') {
     restoreActiveModal();
@@ -2299,6 +2202,123 @@ async function initAggregatorPage() {
       window.history.replaceState({}, '', window.location.pathname);
     } catch (e) {}
   }
+
+  // ============================================================
+  // 2. ตรวจสอบแคชในเครื่อง หากมีข้อมูลอยู่แล้ว ให้แสดงทันทีใน 0 วินาที
+  // ============================================================
+  let hasRenderedFromCache = false;
+  try {
+    const cached = sessionStorage.getItem('cached_all_manga');
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        allMangaList = parsed;
+        filteredList = [...allMangaList];
+        setupHeroSpotlight(allMangaList);
+        renderMangaCards();
+        if (statusEl) statusEl.style.display = 'none';
+        hasRenderedFromCache = true;
+      }
+    }
+  } catch (e) {}
+
+  if (!hasRenderedFromCache && statusEl) {
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = `<div class="spinner"></div>กำลังรวบรวมเรื่องอัปเดตล่าสุดจาก ${CONFIG.SOURCES.length} เว็บชั้นนำ...`;
+  }
+
+  // ============================================================
+  // 3. ปรับระบบรอหน้าแรกเหลือ 1 วินาที แล้วปล่อยโหลดเบื้องหลัง (1s Fast-Release)
+  // Timeout สูงสุดคงไว้ 15 วินาทีเท่าเดิมในเบื้องหลัง เพื่อให้ดึงข้อมูลได้ครบถ้วน
+  // ============================================================
+  let isUiInitialized = hasRenderedFromCache;
+  let completedSources = 0;
+  const totalSources = CONFIG.SOURCES.length;
+  const loadedSourceMap = new Map();
+  updateBgProgress(completedSources, totalSources);
+
+  let notifyFirstSourceReady = null;
+  const firstSourceReadyPromise = new Promise(resolve => {
+    notifyFirstSourceReady = resolve;
+  });
+
+  const fetchPromises = CONFIG.SOURCES.map(async (source) => {
+    try {
+      const items = await fetchSingleSource(source, 1, 15000); // 15 วิในเบื้องหลัง
+      completedSources++;
+      updateBgProgress(completedSources, totalSources);
+
+      if (items && items.length > 0) {
+        loadedSourceMap.set(source.id, items);
+
+        // นำทุกเว็บที่ดึงเสร็จแล้วมาสลับไขว้แบบ Round-Robin
+        const interleaved = interleaveSources(Array.from(loadedSourceMap.values()));
+        allMangaList = mergeAndDeduplicate(interleaved);
+
+        if (notifyFirstSourceReady) {
+          notifyFirstSourceReady();
+          notifyFirstSourceReady = null;
+        }
+
+        if (!isUiInitialized) {
+          isUiInitialized = true;
+          if (statusEl) statusEl.style.display = 'none';
+          setupHeroSpotlight(allMangaList);
+          applyFilters();
+        } else {
+          updateSourceCounts();
+          updateSourceHealthUi();
+          // ถ้ากำลังดูหน้า 'all' และยังไม่ได้เลื่อนจอลงไปลึก ให้อัปเดตการ์ดต่อเนื่อง
+          if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) {
+            applyFilters();
+          }
+        }
+
+        try {
+          sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+        } catch (e) {}
+      } else {
+        updateSourceHealthUi();
+      }
+      return items;
+    } catch (e) {
+      completedSources++;
+      updateBgProgress(completedSources, totalSources);
+      updateSourceHealthUi();
+      return [];
+    }
+  });
+
+  // รอสูงสุด 1 วินาที หรือจนกว่าเว็บแรกจะตอบกลับ เพื่อปลด Spinner และเปิดหน้าแรกให้เร็วที่สุด
+  await Promise.race([
+    firstSourceReadyPromise,
+    new Promise(resolve => setTimeout(resolve, 1000))
+  ]);
+
+  // ปลดล็อกหน้าจอทันทีเมื่อครบ 1 วินาที
+  if (statusEl) statusEl.style.display = 'none';
+  if (!isUiInitialized && allMangaList.length > 0) {
+    isUiInitialized = true;
+    setupHeroSpotlight(allMangaList);
+    applyFilters();
+  }
+
+  // ปล่อยให้ทุกเว็บที่เหลือทำงานในเบื้องหลังต่อไปอย่างเงียบๆ โดยไม่บล็อกผู้ใช้
+  Promise.allSettled(fetchPromises).then(() => {
+    updateBgProgress(totalSources, totalSources);
+    if (loadedSourceMap.size > 0) {
+      const finalInterleaved = interleaveSources(Array.from(loadedSourceMap.values()));
+      allMangaList = mergeAndDeduplicate(finalInterleaved);
+      try {
+        sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+      } catch (e) {}
+      updateSourceCounts();
+      updateSourceHealthUi();
+      if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) {
+        applyFilters();
+      }
+    }
+  });
 }
 
 // ฟังก์ชันคืนค่าหน้าต่างเลือกตอน (Restore Chapter Modal) เมื่อกลับมาจากหน้า Reader
