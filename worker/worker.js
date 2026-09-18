@@ -35,10 +35,45 @@ export default {
 
     const url = new URL(request.url);
 
-    // 1. ระบบแชทส่วนกลาง (Community Chat API)
+    // ค่าคงที่: จำกัดไม่เกิน 50 ข้อความ และเก็บไม่เกิน 60 วัน (2 เดือน)
+    const MAX_CHAT_MESSAGES = 50;
+    const TWO_MONTHS_MS = 60 * 24 * 60 * 60 * 1000;
+    const TWO_MONTHS_SECONDS = 60 * 24 * 60 * 60; // 5,184,000 วินาที
+
+    const filterValidMessages = (msgs) => {
+      const cutoff = Date.now() - TWO_MONTHS_MS;
+      return (Array.isArray(msgs) ? msgs : [])
+        .filter(m => m && m.time && m.time > cutoff)
+        .slice(0, MAX_CHAT_MESSAGES);
+    };
+
+    // 1. ระบบแชทส่วนกลาง (Community Chat API รองรับ Cloudflare KV + In-Memory Fallback)
     if (url.pathname === '/api/chat') {
       if (request.method === "GET") {
-        return new Response(JSON.stringify({ success: true, messages: chatMessages }), {
+        let currentMessages = chatMessages;
+        let isKvActive = false;
+
+        if (env && env.CHAT_KV) {
+          try {
+            const kvData = await env.CHAT_KV.get('chat_messages', { type: 'json' });
+            if (Array.isArray(kvData) && kvData.length > 0) {
+              currentMessages = filterValidMessages(kvData);
+              chatMessages = currentMessages;
+              isKvActive = true;
+            }
+          } catch (err) {
+            console.warn("KV read error:", err);
+          }
+        } else {
+          currentMessages = filterValidMessages(chatMessages);
+          chatMessages = currentMessages;
+        }
+
+        return new Response(JSON.stringify({ 
+          success: true, 
+          messages: currentMessages,
+          storage: isKvActive ? "kv" : "ram"
+        }), {
           status: 200,
           headers: {
             "Content-Type": "application/json; charset=utf-8",
@@ -72,13 +107,39 @@ export default {
             time: Date.now()
           };
 
-          chatMessages.unshift(newMsg);
-          // ตัดทิ้งอัตโนมัติหากเกิน 50 ข้อความ เพื่อไม่ให้เปลืองพื้นที่
-          if (chatMessages.length > 50) {
-            chatMessages = chatMessages.slice(0, 50);
+          let currentList = chatMessages;
+          if (env && env.CHAT_KV) {
+            try {
+              const kvData = await env.CHAT_KV.get('chat_messages', { type: 'json' });
+              if (Array.isArray(kvData)) {
+                currentList = filterValidMessages(kvData);
+              }
+            } catch (err) {
+              console.warn("KV pre-read error:", err);
+            }
           }
 
-          return new Response(JSON.stringify({ success: true, messages: chatMessages }), {
+          // กรองไม่เกิน 2 เดือน และจำกัดสูงสุด 50 ข้อความ
+          const updatedMessages = filterValidMessages([newMsg, ...currentList]);
+          chatMessages = updatedMessages;
+
+          let isKvActive = false;
+          if (env && env.CHAT_KV) {
+            try {
+              await env.CHAT_KV.put('chat_messages', JSON.stringify(updatedMessages), {
+                expirationTtl: TWO_MONTHS_SECONDS // หมดอายุอัตโนมัติเมื่อครบ 2 เดือน
+              });
+              isKvActive = true;
+            } catch (err) {
+              console.warn("KV write error:", err);
+            }
+          }
+
+          return new Response(JSON.stringify({ 
+            success: true, 
+            messages: updatedMessages,
+            storage: isKvActive ? "kv" : "ram"
+          }), {
             status: 200,
             headers: {
               "Content-Type": "application/json; charset=utf-8",
