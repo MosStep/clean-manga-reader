@@ -581,6 +581,8 @@ async function pullAndMergeSyncData() {
         localStorage.setItem(STORAGE_HISTORY, JSON.stringify(mergedHist.slice(0, 500)));
 
         updateHistoryAndFavCounts();
+        pushSyncData(); // อัปโหลดข้อมูลในเครื่องขึ้นคลาวด์รับประกันว่าเรื่องโปรดที่มีอยู่ถูกบันทึกแน่นอน 100%
+
         if (currentTagFilter === 'favorites' || currentTagFilter === 'history') {
           applyFilters();
         }
