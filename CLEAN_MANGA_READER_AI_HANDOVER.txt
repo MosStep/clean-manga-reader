@@ -1,0 +1,96 @@
+﻿================================================================================
+           CLEAN MANGA READER - AI HANDOVER & PROJECT SPECIFICATION
+                     (เอกสารส่งต่องานสำหรับ AI ตัวต่อไป)
+================================================================================
+
+[ 1. ภาพรวมโปรเจกต์ (PROJECT OVERVIEW) ]
+- ชื่อโปรเจกต์: Clean Manga Reader (เว็บรวมการ์ตูนแปลไทย ไร้โฆษณา อ่านแนวตั้งสมบูรณ์แบบ)
+- เว็บไซต์ใช้งานจริง (Production URL): https://clean-manga-reader.mosstep.workers.dev/
+- Git Repository: https://github.com/MosStep/clean-manga-reader.git (Branch: main)
+- ที่ตั้งโปรเจกต์ในเครื่อง: C:\Users\DELL\.gemini\antigravity\scratch\clean-manga-reader\
+- Cloud Backend: Cloudflare Workers + Cloudflare KV (Proxy, Central Chat, Multi-device Sync)
+
+--------------------------------------------------------------------------------
+[ 2. กฎเหล็กและข้อกำหนดที่ต้องทำตามเสมอ (CRITICAL RULES & CONSTRAINTS) ]
+
+1. กฎการแนบลิงก์ (STRICT LINK RULE):
+   - ทุกครั้งที่ตอบผู้ใช้ ตอนท้ายของข้อความให้แนบเฉพาะลิงก์นี้ลิงก์เดียวเท่านั้น:
+     👉 https://clean-manga-reader.mosstep.workers.dev/
+   - ห้ามแนบลิงก์ GitHub Repo หรือ GitHub Pages เว้นแต่ผู้ใช้จะเอ่ยปากขอโดยตรง
+
+2. กฎการจัดลำดับตอน (CHAPTER SORTING RULE):
+   - เมื่อเปิดดูรายชื่อตอนของมังงะทุกเรื่อง ทุกเว็บ ต้องจัดเรียงให้:
+      ตอนที่ 1 อยู่ด้านล่างสุดเสมอ และตอนถัดไปไล่ขึ้นมา โดยตอนล่าสุดอยู่บนสุด
+     (Numeric Descending: เช่น ตอนที่ 177, 176 ... ตอนที่ 2, ตอนที่ 1, บทนำ/Prologue)
+
+3. กฎการเลือกเว็บเริ่มต้น (SOURCE PRIORITY RULE):
+   - เมื่อกดเปิดดูตอนของมังงะเรื่องใดๆ ระบบต้องเลือกเว็บฟรีที่มี จำนวนตอนมากที่สุด ขึ้นเป็นเว็บแรกเสมอ
+     (เช่น ถ้า Speed-Manga มี 177 ตอน และ Go-Manga มี 174 ตอน -> ต้องเลือก Speed-Manga เป็นตัวหลัก)
+   - แถบสลับเว็บ (Modal Source Pills) ต้องเรียงจากเว็บฟรีที่มีตอนมากที่สุดอยู่ซ้ายสุด และแสดงจำนวนตอน
+
+4. กฎประสิทธิภาพและการโหลดข้อมูล (PERFORMANCE & BACKGROUND LOADING):
+   - ปลดล็อกหน้า UI ทันที 0s หากมีแคชในเครื่อง ผู้ใช้ต้องคลิกและเลื่อนดูเรื่องที่โหลดมาแล้วได้ทันที
+   - ปล่อยหน้าเว็บให้แสดงผลภายใน 1 วินาที (Fast-Release)
+   - เว็บไหนที่ตอบสนองช้า ให้ปล่อยโหลดเบื้องหลัง (Background Fetching) ด้วย Timeout 15 วินาที (timeoutMs = 15000)
+
+5. ระบบประวัติการอ่าน & เรื่องโปรด & ซิงก์ข้ามเครื่อง (CLOUD SYNC & TOMBSTONES):
+   - มีระบบ Private Sync Key 6 ตัวอักษร (เช่น ABC123) ซิงก์ข้อมูลขึ้น Cloudflare KV
+   - เมื่อผู้ใช้ ลบ เรื่องโปรดหรือประวัติ จะมีการสร้าง Tombstone (deletedFavorites, deletedHistory)
+     เพื่อป้องกันไม่ให้ข้อมูลเก่าที่อยู่บนคลาวด์ฟื้นคืนชีพกลับมาตอนซิงก์
+   - จดจำชื่อเล่นที่ใช้คอมเมนต์ในห้องแชทผ่าน localStorage (CHAT_STORAGE_NICKNAME) และซิงก์ตาม Sync Key
+
+6. การแก้ปัญหารูปภาพติด Hotlink Protection:
+   - รูปภาพบนโดเมน server1.webtoon168.com (ของ Ped-Manga และ MangaStep)
+     ต้องส่ง Referer เป็น https://ped-manga.com/ ใน Proxy Header เสมอ (ระบบใน app.js และ worker.js ทำไว้แล้ว)
+
+--------------------------------------------------------------------------------
+[ 3. แหล่งการ์ตูนทั้งหมด 16 เว็บในระบบ (CONFIG.SOURCES) ]
+อยู่ใน config.js:
+ 1. Go-Manga      (id: 'go-manga',     url: 'https://www.go-manga.com',    type: 'mangareader', icon: '⚡')
+ 2. Slow-Manga    (id: 'slow-manga',   url: 'https://www.slow-manga.net',  type: 'mangareader', icon: '🐢')
+ 3. Ped-Manga     (id: 'ped-manga',    url: 'https://ped-manga.com',       type: 'mangareader', icon: '🦆')
+ 4. MangaStep     (id: 'manga-step',   url: 'https://mangastep.com',       type: 'mangareader', icon: '🐾')
+ 5. NTR-Manga     (id: 'ntr-manga',    url: 'https://www.ntr-manga.net',  type: 'mangareader', icon: '🔥')
+ 6. Dark-Manga    (id: 'dark-manga',   url: 'https://www.dark-manga.com', type: 'mangareader', icon: '🌑')
+ 7. Fin-Manga     (id: 'fin-manga',    url: 'https://www.fin-manga.com',  type: 'mangareader', icon: '🌸')
+ 8. Up-Manga      (id: 'up-manga',     url: 'https://www.up-manga.com',   type: 'mangareader', icon: '🚀')
+ 9. Speed-Manga   (id: 'speed-manga',  url: 'https://speed-manga.net',    type: 'mangareader', icon: '⚡')
+10. Du-Manga      (id: 'du-manga',     url: 'https://www.du-manga.com',   type: 'madara',      icon: '📖')
+11. Manga-LC      (id: 'manga-lc',     url: 'https://manga-lc.net',       type: 'madara',      icon: '📚')
+12. Sing-Manga    (id: 'sing-manga',   url: 'https://www.sing-manga.com', type: 'mangareader', icon: '🎤')
+13. Flash-Manga   (id: 'flash-manga',  url: 'https://www.flash-manga.net',type: 'mangareader', icon: '⚡')
+14. Chibi-Manga   (id: 'chibi-manga',  url: 'https://chibi-manga.com',    type: 'mangareader', icon: '🧸')
+15. Nano-Manga    (id: 'nano-manga',   url: 'https://nano-manga.com',     type: 'madara',      icon: '🧬')
+16. Ecchi-Doujin  (id: 'ecchi-doujin', url: 'https://ecchi-doujin.com',   type: 'mangareader', icon: '🔞')
+
+--------------------------------------------------------------------------------
+[ 4. โครงสร้างไฟล์และหน้าที่ (FILE ARCHITECTURE) ]
+- index.html:
+  หน้าหลัก แสดงคลังการ์ตูนทุกเว็บ, แท็บหมวดหมู่ (ทั้งหมด, มันฮวา, ประวัติ, เรื่องโปรด),
+  กล่องค้นหาแบบ Realtime ข้ามค่าย, หน้าต่าง Modal รายชื่อตอน และแถบตั้งค่า Sync Key
+- reader.html:
+  หน้าอ่านการ์ตูนแนวตั้ง (Vertical Continuous Scroll), ปุ่มเปลี่ยนตอนก่อนหน้า/ถัดไป (ทั้งบนและล่าง),
+  ปุ่มเปิดดูเว็บต้นทาง, ห้องแชทส่วนกลางที่ผูกแท็กการ์ตูนเรื่องนั้นให้อัตโนมัติ
+- app.js:
+  หัวใจหลักของฝั่ง Frontend:
+  - fetchSingleSource, fetchMangaBatch: รวบรวมข้อมูลเรื่องล่าสุด
+  - mergeAndDeduplicate: ผสานเรื่องซ้ำข้ามค่าย เลือกเว็บฟรีที่มีตอนมากที่สุดขึ้นนำ
+  - parseChaptersFromHtml: แกะรายชื่อตอน และเรียก sortChaptersDescending (ตอน 1 อยู่ล่างสุดเสมอ)
+  - recordReadingHistory: บันทึกประวัติอ่านลง localStorage อัตโนมัติ
+  - initSyncEngine, pushSyncData, pullAndMergeSyncData: ระบบซิงก์ข้ามเครื่องผ่าน Cloudflare KV
+- config.js:
+  ตั้งค่า SOURCES, PROXY_URL, CHAT_API_URL, SYNC_API_BASE
+- style.css:
+  สไตล์ Dark Modern ธีมเขียว-ฟ้า นีออน ปรับแต่ง Mobile First สบายตา
+- worker/worker.js:
+  Cloudflare Worker สำหรับทำ Proxy ปลดล็อก CORS, จัดการระบบแชทส่วนกลาง และเก็บข้อมูล KV Sync
+
+--------------------------------------------------------------------------------
+[ 5. คำสั่งสำหรับการทดสอบและ Deploy ]
+- เมื่อแก้ไขโค้ด:
+  1. เพิ่มตัวเลข Cache Buster เสมอ เช่น ?v=2.7 -> ?v=2.8 ใน index.html และ reader.html
+  2. สั่ง commit และ push ขึ้น GitHub:
+     git add .
+     git commit -m \ข้อความอธิบายการแก้ไข\
+     git push origin main
+================================================================================

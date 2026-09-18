@@ -1192,8 +1192,19 @@ function updateModalFavButton(manga) {
   }
 }
 
+// ฟังก์ชันดึงเลขตอนสูงสุดจากข้อความ เช่น "ตอนที่ 177", "Ch. 174"
+function extractEpNumberFromText(text) {
+  if (!text) return 0;
+  const str = String(text);
+  const m = str.match(/ตอนที่\s*(\d+(?:\.\d+)?)/i) ||
+            str.match(/ch(?:apter)?\.?\s*(\d+(?:\.\d+)?)/i) ||
+            str.match(/ep(?:isode)?\.?\s*(\d+(?:\.\d+)?)/i) ||
+            str.match(/\b(\d+(?:\.\d+)?)\b/);
+  return m ? parseFloat(m[1]) : 0;
+}
+
 // 8. รวมข้อมูลและตัดเรื่องซ้ำ (Deduplication)
-// กฎเหล็ก: "เอาเว็บฟรีขึ้นก่อนเป็นหลัก" + ระบบตรวจจับชื่อเรื่องข้ามค่าย
+// กฎเหล็ก: "เอาเว็บฟรีขึ้นก่อน" + "ถ้าสถานะเหมือนกัน ให้เอาเว็บที่มีตอนมากที่สุดขึ้นนำ" + ระบบตรวจจับชื่อเรื่องข้ามค่าย
 function mergeAndDeduplicate(list) {
   const map = new Map();
   const keyToManga = new Map();
@@ -1238,9 +1249,16 @@ function mergeAndDeduplicate(list) {
 
       const isNewFree = m.readable !== false;
       const isExistingFree = existing.readable !== false;
+      const newEp = extractEpNumberFromText(m.latestEp);
+      const existingEp = extractEpNumberFromText(existing.latestEp);
 
-      // ถ้าเรื่องเดิมติดเหรียญ/อ่านไม่ได้ แต่เรื่องใหม่เป็นเว็บฟรี 100% -> สลับเว็บฟรีขึ้นเป็นตัวหลักทันที!
-      if (!isExistingFree && isNewFree) {
+      // เงื่อนไขสลับเว็บใหม่ขึ้นเป็นตัวหลัก:
+      // 1. เรื่องเดิมติดเหรียญ/อ่านไม่ได้ แต่เรื่องใหม่เป็นเว็บฟรี 100%
+      // 2. ทั้งคู่ฟรี (หรือทั้งคู่ติดเหรียญ) แต่เรื่องใหม่มีจำนวนตอนมากกว่า! (เช่น 177 ชนะ 174)
+      const shouldPromoteNew = (!isExistingFree && isNewFree) ||
+                               ((isNewFree === isExistingFree) && newEp > existingEp);
+
+      if (shouldPromoteNew) {
         const oldAlts = existing.altSources || [];
         existing.altSources = [];
         
@@ -1265,6 +1283,10 @@ function mergeAndDeduplicate(list) {
         if (!existing.altSources) existing.altSources = [];
         if (existing.sourceId !== m.sourceId && !existing.altSources.some(a => a.sourceId === m.sourceId)) {
           existing.altSources.push(m);
+        }
+        // อัปเดต latestEp ให้โชว์ตอนสูงสุดเสมอหากเรื่องใหม่มีตอนมากกว่า
+        if (newEp > existingEp && m.latestEp) {
+          existing.latestEp = m.latestEp;
         }
         keys.forEach(k => keyToManga.set(k, existing));
       }
@@ -2888,15 +2910,22 @@ async function openChapterModal(manga, activeSource = null) {
     }
   });
 
-  // แหล่งที่กำลังเลือกดู (หากไม่ได้ระบุ และเรื่องนี้มีเว็บฟรี ให้เปิดเว็บฟรีก่อนเป็นอันดับแรกเสมอ!)
+  // แหล่งที่กำลังเลือกดู (หากไม่ได้ระบุ ให้เลือกเว็บฟรีที่มีจำนวนตอนมากที่สุดขึ้นนำเสมอ!)
   let currentSource = activeSource;
   if (!currentSource) {
-    const freeAlt = (manga.altSources || []).find(s => s.readable !== false);
-    if (manga.readable === false && freeAlt) {
-      currentSource = freeAlt; // ผู้ใช้จะเห็นเว็บฟรี 100% ทันทีโดยไม่ต้องติดเหรียญ!
-    } else {
-      currentSource = manga;
-    }
+    const allCandidates = [manga, ...(manga.altSources || [])];
+    allCandidates.sort((a, b) => {
+      const aFree = a.readable !== false ? 1 : 0;
+      const bFree = b.readable !== false ? 1 : 0;
+      if (bFree !== aFree) return bFree - aFree; // เอาเว็บฟรีก่อน
+
+      const aEp = extractEpNumberFromText(a.latestEp);
+      const bEp = extractEpNumberFromText(b.latestEp);
+      if (bEp !== aEp) return bEp - aEp; // เอาเว็บที่มีตอนมากที่สุดก่อน
+
+      return 0;
+    });
+    currentSource = allCandidates[0] || manga;
   }
 
   // บันทึกข้อมูลมังงะและแหล่งที่เลือก เพื่อจำไว้เวลา Back กลับมา
@@ -3042,14 +3071,29 @@ async function openChapterModal(manga, activeSource = null) {
     sourceSelector.style.display = 'flex';
     sourcePills.innerHTML = '';
 
+    // เรียงลำดับแถบปุ่ม: เว็บฟรีก่อน + เว็บที่มีจำนวนตอนมากที่สุดอยู่หน้าสุด!
+    allSources.sort((a, b) => {
+      const aFree = a.readable !== false ? 1 : 0;
+      const bFree = b.readable !== false ? 1 : 0;
+      if (bFree !== aFree) return bFree - aFree;
+
+      const aEp = extractEpNumberFromText(a.latestEp);
+      const bEp = extractEpNumberFromText(b.latestEp);
+      if (bEp !== aEp) return bEp - aEp;
+
+      return 0;
+    });
+
     allSources.forEach(s => {
       const isFree = s.readable !== false;
       const isSelected = s.sourceId === currentSource.sourceId;
       const pill = document.createElement('button');
       pill.className = `modal-source-pill ${isSelected ? 'active' : ''} ${!isFree ? 'locked' : ''}`;
+      const epNum = extractEpNumberFromText(s.latestEp);
+      const epLabel = epNum > 0 ? ` (${epNum} ตอน)` : (s.latestEp ? ` (${s.latestEp})` : '');
       pill.innerHTML = `
         <span>${s.icon || (isFree ? '⚡' : '🔒')}</span>
-        <span>${s.sourceName}</span>
+        <span>${s.sourceName}${epLabel}</span>
         <span class="source-pill-badge ${isFree ? 'free' : 'coin'}">${isFree ? 'ฟรี' : 'ติดเหรียญ'}</span>
       `;
       pill.addEventListener('click', (e) => {
