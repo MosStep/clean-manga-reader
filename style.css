@@ -688,6 +688,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
   box-shadow: 0 20px 40px rgba(0,0,0,0.6);
 }
 
@@ -801,6 +802,74 @@ body {
 
 .modal-footer-tip strong {
   color: var(--primary);
+}
+
+/* ปุ่มลูกศรลอยวาร์ปเลื่อนตอน (Modal Scroll Controls: ตอนที่ 1 / ตอนล่าสุด) */
+.modal-scroll-controls {
+  position: absolute;
+  right: 18px;
+  bottom: 56px; /* ลอยอยู่เหนือ modal-footer-tip */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.btn-modal-scroll {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: rgba(18, 22, 34, 0.92);
+  border: 1px solid rgba(0, 230, 118, 0.4);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 30px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6), 0 0 12px rgba(0, 230, 118, 0.25);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.btn-modal-scroll:hover {
+  background: rgba(0, 230, 118, 0.2);
+  border-color: var(--primary);
+  color: var(--primary);
+  transform: translateY(-2px) scale(1.04);
+  box-shadow: 0 6px 20px rgba(0, 230, 118, 0.4);
+}
+
+.btn-modal-scroll:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.btn-modal-scroll .scroll-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+  color: var(--primary);
+}
+
+.btn-modal-scroll .scroll-text {
+  font-size: 0.8rem;
+  letter-spacing: 0.2px;
+}
+
+@media (max-width: 600px) {
+  .modal-scroll-controls {
+    right: 12px;
+    bottom: 52px;
+    gap: 6px;
+  }
+  .btn-modal-scroll {
+    padding: 7px 12px;
+    font-size: 0.78rem;
+  }
 }
 
 .close-btn {

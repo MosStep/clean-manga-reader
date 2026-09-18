@@ -3197,6 +3197,9 @@ async function openChapterModal(manga, activeSource = null) {
     }
   }
 
+  const initScrollControls = document.getElementById('modalScrollControls');
+  if (initScrollControls) initScrollControls.style.display = 'none';
+
   if (chapterList) chapterList.innerHTML = `<div class="spinner"></div>กำลังโหลดรายชื่อตอนจาก ${currentSource.sourceName}...`;
   if (modal) modal.style.display = 'flex';
 
@@ -3308,6 +3311,53 @@ async function openChapterModal(manga, activeSource = null) {
       chapterList.appendChild(a);
     });
 
+    // จัดการปุ่มลูกศรวาร์ปเลื่อนตอน (⬇️ ตอนที่ 1 / ⬆️ ตอนล่าสุด)
+    const modalBody = modal ? modal.querySelector('.modal-body') : null;
+    const scrollControls = document.getElementById('modalScrollControls');
+    const btnScrollTop = document.getElementById('btnModalScrollTop');
+    const btnScrollBottom = document.getElementById('btnModalScrollBottom');
+
+    if (modalBody && scrollControls && btnScrollTop && btnScrollBottom) {
+      if (chapters.length > 8) {
+        scrollControls.style.display = 'flex';
+
+        btnScrollBottom.onclick = (e) => {
+          if (e) e.stopPropagation();
+          modalBody.scrollTo({
+            top: modalBody.scrollHeight,
+            behavior: (chapters.length > 300) ? 'auto' : 'smooth'
+          });
+        };
+
+        btnScrollTop.onclick = (e) => {
+          if (e) e.stopPropagation();
+          modalBody.scrollTo({
+            top: 0,
+            behavior: (chapters.length > 300) ? 'auto' : 'smooth'
+          });
+        };
+
+        const handleModalScroll = () => {
+          const st = modalBody.scrollTop;
+          const maxScroll = modalBody.scrollHeight - modalBody.clientHeight;
+          if (maxScroll <= 40) {
+            scrollControls.style.display = 'none';
+            return;
+          }
+          scrollControls.style.display = 'flex';
+          btnScrollTop.style.display = (st > 120) ? 'inline-flex' : 'none';
+          btnScrollBottom.style.display = (st < maxScroll - 120) ? 'inline-flex' : 'none';
+        };
+
+        modalBody.onscroll = handleModalScroll;
+        // เรียกอัปเดตสถานะปุ่มรอบแรก
+        setTimeout(handleModalScroll, 50);
+      } else {
+        scrollControls.style.display = 'none';
+        modalBody.onscroll = null;
+      }
+    }
+
     if (currentReadingChapterUrl) {
       setTimeout(() => {
         const cur = chapterList.querySelector('.chapter-item.current-chapter');
@@ -3331,6 +3381,8 @@ async function openChapterModal(manga, activeSource = null) {
 function closeChapterModal() {
   const modal = document.getElementById('chapterModal');
   if (modal) modal.style.display = 'none';
+  const scrollControls = document.getElementById('modalScrollControls');
+  if (scrollControls) scrollControls.style.display = 'none';
   if (!window.location.pathname.includes('reader.html')) {
     try {
       sessionStorage.removeItem('currentManga');
