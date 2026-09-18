@@ -262,12 +262,15 @@ function parseNtrNajaHtml(html, sourceInfo) {
     if (titleEl && !title) title = titleEl.textContent.trim();
 
     const metaEl = card.querySelector('.ntr-genre-card__meta');
-    let latestEp = 'ตอนล่าสุด';
-    if (metaEl) {
-      const metaText = metaEl.textContent.trim();
-      // หากเป็นวันที่ เช่น "อัปเดต 2026-09-18" ห้ามนำมาเป็นชื่อตอน ให้ใช้ "ตอนล่าสุด"
-      if (!/อัปเดต|อัพเดต|\b\d{4}-\d{2}-\d{2}\b/i.test(metaText)) {
-        latestEp = metaText;
+    const ntrCache = getNtrChapterCache();
+    let latestEp = ntrCache[mangaUrl] || 'ตอนล่าสุด';
+    if (!latestEp || latestEp === 'ตอนล่าสุด') {
+      if (metaEl) {
+        const metaText = metaEl.textContent.trim();
+        // หากเป็นวันที่ เช่น "อัปเดต 2026-09-18" ห้ามนำมาเป็นชื่อตอน ให้ใช้ "ตอนล่าสุด"
+        if (!/อัปเดต|อัพเดต|\b\d{4}-\d{2}-\d{2}\b/i.test(metaText)) {
+          latestEp = metaText;
+        }
       }
     }
 
@@ -295,6 +298,86 @@ function parseNtrNajaHtml(html, sourceInfo) {
   });
 
   return items;
+}
+
+// ระบบแคชและสแกนเลขตอนล่าสุดของ NTRnaja เบื้องหลังแบบ Progressive (ให้หน้าแรกโชว์เลขตอนจริง ไม่หน่วง)
+const NTR_CH_CACHE_KEY = 'clean_manga_ntrnaja_ch_cache';
+function getNtrChapterCache() {
+  try {
+    return JSON.parse(localStorage.getItem(NTR_CH_CACHE_KEY) || sessionStorage.getItem(NTR_CH_CACHE_KEY) || '{}');
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveNtrChapterCache(url, epTitle) {
+  if (!url || !epTitle) return;
+  try {
+    const cache = getNtrChapterCache();
+    cache[url] = epTitle;
+    const json = JSON.stringify(cache);
+    sessionStorage.setItem(NTR_CH_CACHE_KEY, json);
+    localStorage.setItem(NTR_CH_CACHE_KEY, json);
+  } catch (e) {}
+}
+
+function updateCardLatestEpInDom(mangaUrl, title, newEp) {
+  if (!newEp) return;
+  const cards = document.querySelectorAll('.manga-card');
+  cards.forEach(card => {
+    if ((mangaUrl && card.dataset.url === mangaUrl) || (title && card.dataset.title === title)) {
+      const epEl = card.querySelector('.manga-latest-ep, .manga-latest span:first-child');
+      if (epEl) {
+        epEl.textContent = newEp;
+      }
+    }
+  });
+}
+
+async function probeNtrnajaChapters(items) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const cache = getNtrChapterCache();
+
+  // กรองเฉพาะเรื่องที่ยังไม่มีเลขตอน (เช่น ยังเป็น 'ตอนล่าสุด')
+  const toProbe = items.filter(m => {
+    if (!m.mangaUrl) return false;
+    if (cache[m.mangaUrl]) {
+      m.latestEp = cache[m.mangaUrl];
+      return false;
+    }
+    return !m.latestEp || !m.latestEp.startsWith('ตอนที่');
+  });
+
+  if (toProbe.length === 0) return;
+
+  const queue = [...toProbe];
+  const BATCH_SIZE = 3;
+  while (queue.length > 0) {
+    const batch = queue.splice(0, BATCH_SIZE);
+    await Promise.allSettled(batch.map(async (m) => {
+      try {
+        const html = await fetchViaProxy(m.mangaUrl, {}, 6000);
+        const matchTitle = html.match(/class="ss-ch-title">\s*(ตอนที่\s*\d+(?:\.\d+)?)/i);
+        const matchTotal = html.match(/id="ss-total">\s*(\d+)\s*<\/span>\s*ตอน/i);
+        const matchBtn = html.match(/class="ss-btn[^"]*"[^>]*chapter=-?(\d+(?:\.\d+)?)/i);
+
+        let foundEp = '';
+        if (matchTitle) {
+          foundEp = matchTitle[1];
+        } else if (matchTotal) {
+          foundEp = `ตอนที่ ${matchTotal[1]}`;
+        } else if (matchBtn) {
+          foundEp = `ตอนที่ ${matchBtn[1]}`;
+        }
+
+        if (foundEp) {
+          m.latestEp = foundEp;
+          saveNtrChapterCache(m.mangaUrl, foundEp);
+          updateCardLatestEpInDom(m.mangaUrl, m.title, foundEp);
+        }
+      } catch (err) {}
+    }));
+  }
 }
 
 // 7. แกะข้อมูลจาก Kairew
@@ -1359,6 +1442,7 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
       items = parseReadToonHtml(html, source);
     } else if (source.type === 'ntrnaja') {
       items = parseNtrNajaHtml(html, source);
+      probeNtrnajaChapters(items);
     } else if (source.type === 'kairew') {
       items = parseKairewHtml(html, source);
     } else if (source.type === 'madara') {
@@ -1946,6 +2030,7 @@ async function performGlobalLiveSearch(query) {
         items = parseMadaraHtml(html, source);
       } else if (source.type === 'ntrnaja') {
         items = parseNtrNajaHtml(html, source);
+        probeNtrnajaChapters(items);
       } else {
         items = parseMangaReaderHtml(html, source);
       }
@@ -2497,6 +2582,8 @@ function renderMangaCards() {
   slice.forEach(m => {
     const card = document.createElement('div');
     card.className = 'manga-card';
+    if (m.mangaUrl) card.dataset.url = m.mangaUrl;
+    if (m.title) card.dataset.title = m.title;
 
     const placeholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'%3E%3Crect width='200' height='280' fill='%23161821'/%3E%3Ctext x='50%25' y='50%25' fill='%23444' font-family='sans-serif' font-size='13' text-anchor='middle'%3ELoading...%3C/text%3E%3C/svg%3E";
     const coverUrl = m.cover ? getProxyUrl(m.cover) : placeholder;
@@ -2539,7 +2626,7 @@ function renderMangaCards() {
       <div class="manga-info">
         <div class="manga-title" title="${m.title}">${m.title}</div>
         <div class="manga-latest">
-          <span>${(/อัปเดต\s*202\d|อัพเดต\s*202\d|\b202\d-\d{2}-\d{2}\b/i.test(m.latestEp || '')) ? 'ตอนล่าสุด' : (m.latestEp || (m.lastChapterTitle ? m.lastChapterTitle : 'อ่านต่อ'))}</span>
+          <span class="manga-latest-ep">${(/อัปเดต\s*202\d|อัพเดต\s*202\d|\b202\d-\d{2}-\d{2}\b/i.test(m.latestEp || '')) ? 'ตอนล่าสุด' : (m.latestEp || (m.lastChapterTitle ? m.lastChapterTitle : 'อ่านต่อ'))}</span>
           <span style="font-size: 0.75rem; color: #888;">อ่าน →</span>
         </div>
         ${historyBadgeHtml}
@@ -3312,6 +3399,10 @@ async function openChapterModal(manga, activeSource = null) {
     chapters = sortChaptersDescending(chapters);
     if (chapters.length > 0) {
       currentSource.latestEp = chapters[0].title;
+      if (currentSource.sourceId === 'ntrnaja' && currentSource.mangaUrl) {
+        saveNtrChapterCache(currentSource.mangaUrl, chapters[0].title);
+        updateCardLatestEpInDom(currentSource.mangaUrl, manga.title, chapters[0].title);
+      }
       if (chapters[0].isLocked) {
         currentSource.isCoin = true;
         currentSource.readable = false;
