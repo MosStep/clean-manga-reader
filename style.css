@@ -86,7 +86,27 @@ body {
 
 .nav-search {
   flex: 1;
-  max-width: 440px;
+  max-width: 380px;
+  transition: max-width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.nav-search:focus-within {
+  max-width: 600px;
+}
+
+@media (max-width: 650px) {
+  .nav-search {
+    max-width: 170px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .nav-search:focus-within {
+    position: absolute;
+    left: 15px;
+    right: 15px;
+    max-width: calc(100% - 30px);
+    z-index: 150;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  }
 }
 
 .search-wrapper {
@@ -2324,6 +2344,115 @@ body {
   border-radius: 4px;
   margin-left: 8px;
   font-weight: 500;
+}
+
+/* Global Live Search Banner */
+.global-search-banner {
+  margin: 12px 0 20px 0;
+  text-align: center;
+}
+
+.btn-global-search {
+  background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12));
+  border: 1px solid rgba(0, 230, 118, 0.45);
+  color: var(--primary);
+  padding: 10px 20px;
+  border-radius: 25px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.25s ease;
+  font-family: inherit;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.btn-global-search:hover {
+  background: linear-gradient(135deg, rgba(0, 230, 118, 0.25), rgba(0, 176, 255, 0.25));
+  border-color: var(--primary);
+  color: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 230, 118, 0.3);
+}
+
+.btn-global-search:disabled {
+  opacity: 0.6;
+  cursor: wait;
+  transform: none;
+}
+
+/* Direct URL Import Box */
+.direct-import-box {
+  background: rgba(18, 20, 29, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 20px;
+  margin: 20px auto 30px auto;
+  max-width: 800px;
+  text-align: left;
+  backdrop-filter: blur(8px);
+}
+
+.direct-import-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.direct-import-icon {
+  font-size: 1.15rem;
+}
+
+.direct-import-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.direct-import-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.direct-import-input {
+  flex: 1;
+  min-width: 240px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.2s ease;
+}
+
+.direct-import-input:focus {
+  border-color: var(--primary);
+}
+
+.btn-direct-import {
+  background: var(--primary);
+  color: #000;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 0.88rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.btn-direct-import:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
 }
 
 

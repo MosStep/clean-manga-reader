@@ -508,10 +508,12 @@ function pushSyncData() {
     try {
       const favorites = getFavorites();
       const history = getReadingHistory();
+      const nickInput = document.getElementById('chatNicknameInput');
+      const nickname = (nickInput ? nickInput.value : (localStorage.getItem(CHAT_STORAGE_NICKNAME) || '')).trim();
       const res = await fetch('/api/sync/data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, favorites, history })
+        body: JSON.stringify({ key, favorites, history, nickname })
       });
       if (res.ok) {
         const result = await res.json();
@@ -521,6 +523,10 @@ function pushSyncData() {
           }
           if (Array.isArray(result.data.history)) {
             localStorage.setItem(STORAGE_HISTORY, JSON.stringify(result.data.history));
+          }
+          if (result.data.nickname) {
+            localStorage.setItem(CHAT_STORAGE_NICKNAME, result.data.nickname);
+            if (nickInput && !nickInput.value) nickInput.value = result.data.nickname;
           }
           updateHistoryAndFavCounts();
         }
@@ -541,6 +547,16 @@ async function pullAndMergeSyncData() {
     if (res.ok) {
       const result = await res.json();
       if (result.success && result.data) {
+        // ผสานชื่อเล่นในห้องแชท
+        if (result.data.nickname) {
+          const cloudNick = result.data.nickname.trim();
+          if (cloudNick) {
+            localStorage.setItem(CHAT_STORAGE_NICKNAME, cloudNick);
+            const nickInput = document.getElementById('chatNicknameInput');
+            if (nickInput) nickInput.value = cloudNick;
+          }
+        }
+
         const cloudFavs = result.data.favorites || [];
         const cloudHist = result.data.history || [];
 
@@ -1413,6 +1429,18 @@ function initChatComponent(currentMangaContext = null) {
     }
   } catch (err) {}
 
+  // เมื่อผู้ใช้เปลี่ยนชื่อเล่น ให้บันทึกและซิงก์ขึ้นคลาวด์ทันที
+  if (nickInput && !nickInput.dataset.syncBound) {
+    nickInput.dataset.syncBound = "1";
+    nickInput.addEventListener('change', () => {
+      const val = nickInput.value.trim();
+      if (val) {
+        localStorage.setItem(CHAT_STORAGE_NICKNAME, val);
+        pushSyncData();
+      }
+    });
+  }
+
   // แสดงแท็กเรื่องปัจจุบัน
   if (badgeEl && currentMangaContext && currentMangaContext.title) {
     badgeEl.style.display = 'inline-block';
@@ -1517,6 +1545,7 @@ function initChatComponent(currentMangaContext = null) {
       // บันทึกชื่อเล่นไว้ใช้ครั้งต่อไป
       try {
         localStorage.setItem(CHAT_STORAGE_NICKNAME, nickname);
+        pushSyncData();
       } catch (err) {}
 
       if (sendBtn) sendBtn.disabled = true;
@@ -1572,6 +1601,172 @@ function initChatComponent(currentMangaContext = null) {
 
   // ดึงข้อความทันที
   fetchChatMessages();
+}
+
+// ==========================================================
+// ค้นหาคลังใหญ่ข้ามเว็บ (Global Live Search)
+// ==========================================================
+async function performGlobalLiveSearch(query) {
+  if (!query || query.trim().length < 2) return;
+  const q = query.trim();
+  const btn = document.getElementById('btnGlobalSearch');
+  const btnText = document.getElementById('globalSearchBtnText');
+  if (btn) btn.disabled = true;
+  if (btnText) btnText.innerHTML = `⏳ กำลังค้นหา "${escapeHtml(q)}" ในคลังใหญ่ของทุกเว็บ...`;
+
+  const sourcesToSearch = CONFIG.SOURCES.filter(s => s.readable !== false);
+  const promises = sourcesToSearch.map(async (source) => {
+    try {
+      let searchUrl = `${source.url}/?s=${encodeURIComponent(q)}`;
+      if (source.type === 'madara') {
+        searchUrl += '&post_type=wp-manga';
+      }
+      const html = await fetchViaProxy(searchUrl, {}, 10000);
+      let items = [];
+      if (source.type === 'madara') {
+        items = parseMadaraHtml(html, source);
+      } else {
+        items = parseMangaReaderHtml(html, source);
+      }
+      return items;
+    } catch (e) {
+      console.warn(`Global search error for ${source.name}:`, e.message);
+      return [];
+    }
+  });
+
+  const results = await Promise.allSettled(promises);
+  let foundItems = [];
+  results.forEach(r => {
+    if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+      foundItems.push(...r.value);
+    }
+  });
+
+  if (btn) btn.disabled = false;
+
+  if (foundItems.length > 0) {
+    // นำรายการที่ค้นพบขึ้นมาอยู่ด้านหน้า เพื่อให้เห็นทันที
+    allMangaList = mergeAndDeduplicate([...foundItems, ...allMangaList]);
+    try {
+      sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+    } catch (e) {}
+    if (btnText) btnText.innerHTML = `✓ พบ ${foundItems.length} เรื่องในคลังใหญ่! แสดงผลเรียบร้อย`;
+    setTimeout(() => {
+      if (btnText && currentSearchQuery) {
+        btnText.textContent = `ค้นหา "${currentSearchQuery}" ในคลังใหญ่ของทุกเว็บ (หาเรื่องเก่า/จบแล้ว) ➔`;
+      }
+    }, 4000);
+    applyFilters();
+  } else {
+    if (btnText) btnText.innerHTML = `ไม่พบเรื่องที่ตรงกับ "${escapeHtml(q)}" เพิ่มเติมในคลังใหญ่`;
+    setTimeout(() => {
+      if (btnText && currentSearchQuery) {
+        btnText.textContent = `ค้นหา "${currentSearchQuery}" ในคลังใหญ่ของทุกเว็บ (หาเรื่องเก่า/จบแล้ว) ➔`;
+      }
+    }, 3500);
+  }
+}
+
+// ==========================================================
+// นำเข้ามังงะโดยตรงจากลิงก์เว็บอื่น (Direct URL Import)
+// ==========================================================
+async function importMangaByDirectUrl(urlStr) {
+  if (!urlStr) return;
+  const rawUrl = urlStr.trim();
+  if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+    alert('กรุณากรอก URL ที่ถูกต้อง (เช่น https://...)');
+    return;
+  }
+
+  const btn = document.getElementById('btnDirectImport');
+  const input = document.getElementById('directImportInput');
+  const origBtnText = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ กำลังเปิดอ่าน...';
+  }
+
+  try {
+    const parsedUrl = new URL(rawUrl);
+    const domain = parsedUrl.hostname.toLowerCase().replace(/^www\./, '');
+    
+    // ค้นหาว่าตรงกับ SOURCES ที่มีอยู่หรือไม่
+    const matchedSource = CONFIG.SOURCES.find(s => {
+      try {
+        const sDomain = new URL(s.url).hostname.toLowerCase().replace(/^www\./, '');
+        return domain.includes(sDomain) || sDomain.includes(domain);
+      } catch (e) {
+        return false;
+      }
+    });
+
+    let sourceId = matchedSource ? matchedSource.id : ('ext-' + domain.replace(/[^a-z0-9]/gi, '-'));
+    let sourceName = matchedSource ? matchedSource.name : domain;
+    let sourceType = matchedSource ? matchedSource.type : 'mangareader';
+    let sourceUrl = matchedSource ? matchedSource.url : parsedUrl.origin;
+
+    let mangaTitle = '';
+    let mangaCover = '';
+    try {
+      const html = await fetchViaProxy(rawUrl, {}, 10000);
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+
+      if (!matchedSource) {
+        if (doc.querySelector('.wp-manga-chapter, .listing-chapters_sub-head') || html.includes('wp-manga')) {
+          sourceType = 'madara';
+        }
+      }
+
+      // ดึงชื่อเรื่อง
+      const titleEl = doc.querySelector('h1.entry-title, h1, .post-title h1, .series-title, title');
+      if (titleEl) {
+        mangaTitle = titleEl.textContent.trim().replace(/\s*-\s*.*$/, '').replace(/\|.*$/, '').trim();
+      }
+
+      // ดึงภาพปก
+      const coverEl = doc.querySelector('.thumb img, .summary_image img, .series-thumb img, img');
+      if (coverEl) {
+        mangaCover = extractCoverUrl(coverEl, sourceUrl);
+      }
+    } catch (e) {
+      console.warn("Could not pre-fetch direct manga page:", e);
+    }
+
+    if (!mangaTitle) {
+      const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
+      mangaTitle = pathParts[pathParts.length - 1] || domain;
+      mangaTitle = decodeURIComponent(mangaTitle).replace(/[-_]/g, ' ');
+    }
+
+    const mangaObj = {
+      title: mangaTitle,
+      mangaUrl: rawUrl,
+      sourceId,
+      sourceName,
+      sourceUrl,
+      sourceType,
+      readable: true,
+      cover: mangaCover || '',
+      type: 'Manga',
+      latestEp: 'เรื่องนำเข้า'
+    };
+
+    if (input) input.value = '';
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origBtnText;
+    }
+
+    openChapterModal(mangaObj);
+  } catch (err) {
+    alert('เกิดข้อผิดพลาดในการเปิดลิงก์: ' + err.message);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origBtnText;
+    }
+  }
 }
 
 // 11. หน้าแรก Aggregator (Progressive Background Streaming)
@@ -1701,11 +1896,28 @@ async function initAggregatorPage() {
   applyFilters();
 
   // Search
+  const globalSearchBanner = document.getElementById('globalSearchBanner');
+  const globalSearchBtnText = document.getElementById('globalSearchBtnText');
+  const btnGlobalSearch = document.getElementById('btnGlobalSearch');
+
   if (searchInput && !searchInput.dataset.bound) {
     searchInput.dataset.bound = "1";
     searchInput.addEventListener('input', (e) => {
       currentSearchQuery = e.target.value.trim();
       if (clearSearchBtn) clearSearchBtn.style.display = currentSearchQuery ? 'block' : 'none';
+
+      // แสดงปุ่มค้นหาคลังใหญ่ข้ามเว็บเมื่อพิมพ์ตั้งแต่ 2 ตัวอักษรขึ้นไป
+      if (globalSearchBanner) {
+        if (currentSearchQuery.length >= 2) {
+          globalSearchBanner.style.display = 'block';
+          if (globalSearchBtnText) {
+            globalSearchBtnText.textContent = `ค้นหา "${currentSearchQuery}" ในคลังใหญ่ของทุกเว็บ (หาเรื่องเก่า/จบแล้ว) ➔`;
+          }
+        } else {
+          globalSearchBanner.style.display = 'none';
+        }
+      }
+
       applyFilters();
     });
   }
@@ -1716,7 +1928,35 @@ async function initAggregatorPage() {
       searchInput.value = '';
       clearSearchBtn.style.display = 'none';
       currentSearchQuery = '';
+      if (globalSearchBanner) globalSearchBanner.style.display = 'none';
       applyFilters();
+    });
+  }
+
+  // ผูกปุ่มค้นหาคลังใหญ่ข้ามเว็บ (Global Live Search)
+  if (btnGlobalSearch && !btnGlobalSearch.dataset.bound) {
+    btnGlobalSearch.dataset.bound = "1";
+    btnGlobalSearch.addEventListener('click', () => {
+      performGlobalLiveSearch(currentSearchQuery);
+    });
+  }
+
+  // ผูกระบบนำเข้าลิงก์ตรงจากเว็บอื่น (Direct URL Import)
+  const btnDirectImport = document.getElementById('btnDirectImport');
+  const directImportInput = document.getElementById('directImportInput');
+  if (btnDirectImport && !btnDirectImport.dataset.bound) {
+    btnDirectImport.dataset.bound = "1";
+    btnDirectImport.addEventListener('click', () => {
+      if (directImportInput) importMangaByDirectUrl(directImportInput.value);
+    });
+  }
+  if (directImportInput && !directImportInput.dataset.bound) {
+    directImportInput.dataset.bound = "1";
+    directImportInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        importMangaByDirectUrl(directImportInput.value);
+      }
     });
   }
 

@@ -331,12 +331,13 @@ export default {
         });
       }
 
-      let cloudData = { favorites: [], history: [] };
+      let cloudData = { nickname: '', favorites: [], history: [] };
       if (env && env.CHAT_KV) {
         try {
           const stored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
           if (stored) {
             cloudData = {
+              nickname: (stored.nickname || '').trim(),
               favorites: Array.isArray(stored.favorites) ? stored.favorites : [],
               history: Array.isArray(stored.history) ? mergeHistoryList(stored.history, []) : []
             };
@@ -361,12 +362,13 @@ export default {
           });
         }
 
-        let existingData = { favorites: [], history: [] };
+        let existingData = { nickname: '', favorites: [], history: [] };
         if (env && env.CHAT_KV) {
           try {
             const stored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
             if (stored) {
               existingData = {
+                nickname: (stored.nickname || '').trim(),
                 favorites: Array.isArray(stored.favorites) ? stored.favorites : [],
                 history: Array.isArray(stored.history) ? stored.history : []
               };
@@ -374,11 +376,13 @@ export default {
           } catch (e) {}
         }
 
-        // รวมข้อมูลแบบ Smart Merge: ผสานประวัติและเรื่องโปรดจากหลายเครื่อง
+        // รวมข้อมูลแบบ Smart Merge: ผสานประวัติ, เรื่องโปรด และชื่อเล่นในแชทจากหลายเครื่อง
+        const nickname = (payload.nickname || existingData.nickname || '').trim().slice(0, 25);
         const mergedFavorites = mergeFavoritesList(existingData.favorites, payload.favorites);
         const mergedHistory = mergeHistoryList(existingData.history, payload.history);
 
         const resultData = {
+          nickname,
           favorites: mergedFavorites,
           history: mergedHistory,
           lastSyncedAt: Date.now()

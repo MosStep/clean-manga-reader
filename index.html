@@ -126,6 +126,14 @@
       กำลังรวบรวมมังงะจากทุกแหล่ง (Go-Manga, Fin-Manga, Dark-Manga, Up-Manga)...
     </div>
 
+    <!-- Global Live Search Banner (ปุ่มค้นหาคลังใหญ่ข้ามเว็บ) -->
+    <div id="globalSearchBanner" class="global-search-banner" style="display: none;">
+      <button type="button" id="btnGlobalSearch" class="btn-global-search">
+        <span class="search-pulse-icon">🔍</span>
+        <span id="globalSearchBtnText">ค้นหาในคลังใหญ่ของทุกเว็บ (หาเรื่องเก่า/จบแล้ว) ➔</span>
+      </button>
+    </div>
+
     <!-- Manga Grid -->
     <div id="mangaGrid" class="manga-grid"></div>
 
@@ -137,6 +145,18 @@
           <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
       </button>
+    </div>
+
+    <!-- Direct URL Import (วางลิงก์เรื่องจากเว็บอื่นเพื่อเปิดอ่านทันที) -->
+    <div class="direct-import-box" id="directImportBox">
+      <div class="direct-import-header">
+        <span class="direct-import-icon">🔗</span>
+        <span class="direct-import-title">วางลิงก์มังงะจากเว็บอื่นเพื่อเปิดอ่าน:</span>
+      </div>
+      <div class="direct-import-row">
+        <input type="text" id="directImportInput" class="direct-import-input" placeholder="วางลิงก์หน้าเรื่อง เช่น https://go-manga.com/manga/... หรือเว็บอื่นๆ" autocomplete="off">
+        <button type="button" id="btnDirectImport" class="btn-direct-import">เปิดอ่านทันที ⚡</button>
+      </div>
     </div>
 
     <!-- Community Chat Section (ห้องคุย & ป้ายยามังงะ) -->
