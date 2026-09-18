@@ -1088,11 +1088,13 @@ async function initAggregatorPage() {
     statusEl.innerHTML = `<div class="spinner"></div>กำลังรวบรวมเรื่องอัปเดตล่าสุดจาก ${CONFIG.SOURCES.length} เว็บชั้นนำ...`;
   }
 
-  // 2. Progressive Streaming: ยิงดึงข้อมูลทุกเว็บพร้อมกันในเบื้องหลัง
-  // ทันทีที่เว็บแรกตอบกลับ (ภายใน 1-2 วินาที) จะแสดงการ์ดบนจอทันที ไม่ต้องรอเว็บที่ช้า
+  // 2. Progressive Streaming + Interleaving: ยิงดึงข้อมูลทุกเว็บพร้อมกันในเบื้องหลัง
+  // ทันทีที่เว็บแรกตอบกลับ (ภายใน 1-2 วินาที) จะแสดงการ์ดบนจอทันที
+  // และเมื่อเว็บอื่นๆ ทยอยตามมา จะนำเรื่องอัปเดตของแต่ละเว็บมาสลับไขว้ (Round-Robin Interleaving) ด้านบนอย่างสมดุล ไม่กระจุกอยู่ที่เว็บเดียว!
   let isUiInitialized = hasRenderedFromCache;
   let completedSources = 0;
   const totalSources = CONFIG.SOURCES.length;
+  const loadedSourceMap = new Map();
   updateBgProgress(completedSources, totalSources);
 
   const fetchPromises = CONFIG.SOURCES.map(async (source) => {
@@ -1101,7 +1103,11 @@ async function initAggregatorPage() {
     updateBgProgress(completedSources, totalSources);
 
     if (items && items.length > 0) {
-      allMangaList = mergeAndDeduplicate([...allMangaList, ...items]);
+      loadedSourceMap.set(source.id, items);
+
+      // นำทุกเว็บที่ดึงเสร็จแล้วมาสลับไขว้แบบ Round-Robin
+      const interleaved = interleaveSources(Array.from(loadedSourceMap.values()));
+      allMangaList = mergeAndDeduplicate(interleaved);
 
       if (!isUiInitialized) {
         // ครั้งแรกที่เว็บใดเว็บหนึ่งโหลดเสร็จ -> แสดงผลขึ้นจอทันที!
@@ -1131,6 +1137,14 @@ async function initAggregatorPage() {
   // รอจนทุกเว็บเสร็จสิ้น (หรือไม่เกิน 15 วินาทีต่อเว็บ)
   await Promise.allSettled(fetchPromises);
   updateBgProgress(totalSources, totalSources);
+
+  if (loadedSourceMap.size > 0) {
+    const finalInterleaved = interleaveSources(Array.from(loadedSourceMap.values()));
+    allMangaList = mergeAndDeduplicate(finalInterleaved);
+    try {
+      sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+    } catch (e) {}
+  }
 
   if (allMangaList.length === 0) {
     if (statusEl) {
