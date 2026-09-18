@@ -1037,7 +1037,189 @@ function updateSourceCounts() {
     }
   });
 
-  updateSourceHealthUi();
+// ==========================================================
+// ระบบแชทส่วนกลาง (Community Chat System)
+// ==========================================================
+const CHAT_STORAGE_NICKNAME = 'clean_manga_chat_nickname';
+
+// ตัวช่วย Escape HTML ป้องกัน XSS
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// เปิดมังงะจากการแตะแท็กในแชท
+function openMangaFromChat(mangaTitle, mangaUrl) {
+  if (!mangaTitle) return;
+
+  // 1. ลองหาใน allMangaList ก่อน
+  let matched = (allMangaList || []).find(m => m.title === mangaTitle || (mangaUrl && m.mangaUrl === mangaUrl));
+  if (!matched) {
+    const keys = getMangaTitleKeys(mangaTitle);
+    matched = (allMangaList || []).find(m => {
+      const mKeys = getMangaTitleKeys(m.title);
+      return keys.some(k => mKeys.includes(k));
+    });
+  }
+
+  if (matched) {
+    openChapterModal(matched);
+  } else {
+    // ถ้าไม่เจอในรายการที่โหลดมา ให้สร้างการ์ดชั่วคราวเปิดขึ้นมาอ่านได้ทันที
+    const tempManga = {
+      title: mangaTitle,
+      mangaUrl: mangaUrl || '',
+      sourceName: 'Online',
+      sourceType: 'mangareader',
+      readable: true
+    };
+    openChapterModal(tempManga);
+  }
+}
+
+// ดึงข้อความแชท
+async function fetchChatMessages() {
+  const container = document.getElementById('chatMessagesList');
+  const countEl = document.getElementById('chatMessageCount');
+  if (!container) return;
+
+  try {
+    const apiUrl = CONFIG.CHAT_API_URL || '/api/chat';
+    const res = await fetch(apiUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const messages = data.messages || [];
+
+    if (countEl) countEl.textContent = `${messages.length} ข้อความล่าสุด`;
+
+    if (messages.length === 0) {
+      container.innerHTML = '<div class="chat-empty-text">ยังไม่มีข้อความ เริ่มพิมพ์พูดคุยหรือป้ายยาเป็นคนแรกได้เลย! ✨</div>';
+      return;
+    }
+
+    container.innerHTML = '';
+    messages.forEach(msg => {
+      const item = document.createElement('div');
+      item.className = 'chat-item';
+
+      let storyTagHtml = '';
+      if (msg.mangaTitle) {
+        storyTagHtml = `
+          <button type="button" class="chat-story-tag" data-title="${encodeURIComponent(msg.mangaTitle)}" data-url="${encodeURIComponent(msg.mangaUrl || '')}" title="แตะเพื่อเปิดอ่านเรื่องนี้">
+            <span>📖</span> ${escapeHtml(msg.mangaTitle)} ↗
+          </button>
+        `;
+      }
+
+      item.innerHTML = `
+        <div class="chat-item-header">
+          <span class="chat-user-name">${escapeHtml(msg.nickname || 'สหายมังงะ')}</span>
+          <span class="chat-time">${formatTimeAgo(msg.time)}</span>
+          ${storyTagHtml}
+        </div>
+        <div class="chat-item-body">${escapeHtml(msg.text)}</div>
+      `;
+
+      const tagBtn = item.querySelector('.chat-story-tag');
+      if (tagBtn) {
+        tagBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const targetTitle = decodeURIComponent(tagBtn.getAttribute('data-title') || '');
+          const targetUrl = decodeURIComponent(tagBtn.getAttribute('data-url') || '');
+          openMangaFromChat(targetTitle, targetUrl);
+        });
+      }
+
+      container.appendChild(item);
+    });
+  } catch (err) {
+    console.warn("Fetch chat error:", err);
+    if (container && container.children.length === 0) {
+      container.innerHTML = '<div class="chat-empty-text" style="color:#ff7777;">ไม่สามารถเชื่อมต่อห้องแชทได้ชั่วคราว</div>';
+    }
+  }
+}
+
+// เริ่มต้นระบบแชท
+function initChatComponent(currentMangaContext = null) {
+  const form = document.getElementById('chatForm');
+  const nickInput = document.getElementById('chatNicknameInput');
+  const textInput = document.getElementById('chatTextInput');
+  const sendBtn = document.getElementById('chatSendBtn');
+  const refreshBtn = document.getElementById('chatRefreshBtn');
+  const badgeEl = document.getElementById('chatCurrentMangaBadge');
+
+  if (!form) return;
+
+  // จำชื่อเล่นเดิม
+  try {
+    const savedNick = localStorage.getItem(CHAT_STORAGE_NICKNAME);
+    if (savedNick && nickInput) {
+      nickInput.value = savedNick;
+    }
+  } catch (err) {}
+
+  // แสดงแท็กเรื่องปัจจุบัน
+  if (badgeEl && currentMangaContext && currentMangaContext.title) {
+    badgeEl.style.display = 'inline-block';
+    badgeEl.textContent = `📖 ตอนนี้: ${currentMangaContext.title}`;
+    badgeEl.title = currentMangaContext.title;
+  }
+
+  // ปุ่มรีเฟรช
+  if (refreshBtn && !refreshBtn.dataset.bound) {
+    refreshBtn.dataset.bound = "1";
+    refreshBtn.onclick = () => fetchChatMessages();
+  }
+
+  // ส่งข้อความ
+  if (!form.dataset.bound) {
+    form.dataset.bound = "1";
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const nickname = (nickInput ? nickInput.value : '').trim() || 'สหายมังงะ';
+      const text = (textInput ? textInput.value : '').trim();
+
+      if (!text) return;
+
+      // บันทึกชื่อเล่นไว้ใช้ครั้งต่อไป
+      try {
+        localStorage.setItem(CHAT_STORAGE_NICKNAME, nickname);
+      } catch (err) {}
+
+      if (sendBtn) sendBtn.disabled = true;
+
+      try {
+        const payload = {
+          nickname,
+          text,
+          mangaTitle: currentMangaContext ? currentMangaContext.title : '',
+          mangaUrl: currentMangaContext ? (currentMangaContext.mangaUrl || '') : ''
+        };
+
+        const apiUrl = CONFIG.CHAT_API_URL || '/api/chat';
+        const res = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (textInput) textInput.value = '';
+        await fetchChatMessages();
+      } catch (err) {
+        alert('ส่งข้อความไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      } finally {
+        if (sendBtn) sendBtn.disabled = false;
+      }
+    };
+  }
+
+  // ดึงข้อความทันที
+  fetchChatMessages();
 }
 
 // 11. หน้าแรก Aggregator (Progressive Background Streaming)
@@ -1237,6 +1419,9 @@ async function initAggregatorPage() {
   // อัปเดตตัวเลขประวัติและเรื่องโปรด
   updateHistoryAndFavCounts();
 
+  // เริ่มต้นระบบแชทส่วนกลางหน้าแรก
+  initChatComponent(null);
+
   // คืนค่าหน้าต่างเลือกตอนเฉพาะเมื่อผู้ใช้กดปุ่มย้อนกลับมาจากหน้าอ่าน (?restore=1) เท่านั้น
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('restore') === '1') {
@@ -1288,12 +1473,20 @@ function setupHeroSpotlight(list) {
 
   const titleEl = document.getElementById('heroTitle');
   const backdropEl = document.getElementById('heroBackdrop');
+  const posterImg = document.getElementById('heroPosterImg');
   const readBtn = document.getElementById('heroReadBtn');
   const chaptersBtn = document.getElementById('heroChaptersBtn');
 
   if (titleEl) titleEl.textContent = spotlight.title;
   if (backdropEl && spotlight.cover) {
     backdropEl.style.backgroundImage = `url('${getProxyUrl(spotlight.cover)}')`;
+  }
+  if (posterImg && spotlight.cover) {
+    posterImg.src = getProxyUrl(spotlight.cover);
+    posterImg.alt = spotlight.title;
+    posterImg.style.display = 'block';
+    posterImg.onclick = () => openChapterModal(spotlight);
+    posterImg.style.cursor = 'pointer';
   }
 
   if (chaptersBtn) chaptersBtn.onclick = () => openChapterModal(spotlight);
@@ -2246,6 +2439,9 @@ async function initReaderPage() {
     footerSourceBtn.innerHTML = `<span class="nav-icon">🌐</span> <span class="nav-label">ต้นทาง (${mangaObj.sourceName}) ↗</span>`;
     footerSourceBtn.title = `เปิดดูที่เว็บต้นทาง (${mangaObj.sourceName}) ↗`;
   }
+
+  // เริ่มต้นระบบแชทส่วนกลางใต้ปุ่มอ่านต่อ (พร้อมแท็กชื่อเรื่องนี้ให้อัตโนมัติ)
+  initChatComponent(mangaObj);
 
   const goBackToChapters = (e) => {
     if (e) e.preventDefault();

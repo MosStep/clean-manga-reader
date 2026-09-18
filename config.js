@@ -5,6 +5,11 @@ const CONFIG = {
     ? '/api/proxy?url='
     : 'https://clean-manga-reader.mosstep.workers.dev/api/proxy?url=',
 
+  // URL ระบบแชทส่วนกลาง
+  CHAT_API_URL: (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1') || window.location.hostname.endsWith('workers.dev') || window.location.hostname.endsWith('pages.dev'))
+    ? '/api/chat'
+    : 'https://clean-manga-reader.mosstep.workers.dev/api/chat',
+
   // รายการเว็บต้นทางทั้งหมด
   // เว็บที่ readable: true สามารถอ่านภาพแนวตั้งได้สมบูรณ์แบบในเว็บนี้ 100%
   // เว็บที่ readable: false เป็นเว็บที่มีระบบเหรียญหรือเข้ารหัสของค่ายต้นทาง (มีปุ่มเปิดอ่านเว็บต้นทางให้)

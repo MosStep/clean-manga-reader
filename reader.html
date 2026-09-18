@@ -66,6 +66,39 @@
     </div>
   </footer>
 
+  <!-- Community Chat Section (ห้องคุย & แลกเปลี่ยนมังงะ อยู่ใต้ปุ่มไปต่อพอดี) -->
+  <section class="manga-chat-section reader-chat-box" id="chatSection">
+    <div class="manga-chat-card">
+      <div class="manga-chat-header">
+        <div class="chat-header-title">
+          <span class="chat-header-icon">💬</span>
+          <span class="chat-title-main">ห้องคุย & ป้ายยามังงะ</span>
+          <span class="chat-tag-pill" id="chatCurrentMangaBadge" style="display: none;"></span>
+        </div>
+        <div class="chat-header-meta">
+          <span class="chat-count" id="chatMessageCount">กำลังโหลดข้อความ...</span>
+          <button id="chatRefreshBtn" class="chat-btn-refresh" title="รีเฟรชข้อความ">↺</button>
+        </div>
+      </div>
+
+      <!-- Chat Messages List (เลื่อนดูภายในกล่อง ไม่ดันความยาวหน้าจอ) -->
+      <div class="manga-chat-messages" id="chatMessagesList">
+        <div class="chat-loading-text">กำลังโหลดข้อความแชท...</div>
+      </div>
+
+      <!-- Chat Input Form -->
+      <form class="manga-chat-form" id="chatForm">
+        <div class="chat-input-row">
+          <input type="text" id="chatNicknameInput" class="chat-input-nickname" placeholder="ชื่อเล่นของคุณ" maxlength="20">
+          <input type="text" id="chatTextInput" class="chat-input-text" placeholder="พิมพ์คุยเกี่ยวกับเรื่องนี้..." maxlength="250" autocomplete="off">
+          <button type="submit" id="chatSendBtn" class="chat-btn-send">
+            <span>ส่ง</span> ✈️
+          </button>
+        </div>
+      </form>
+    </div>
+  </section>
+
   <!-- Chapter Selection Modal inside Reader -->
   <div id="chapterModal" class="modal" onclick="if(event.target === this) closeChapterModal()">
     <div class="modal-content">

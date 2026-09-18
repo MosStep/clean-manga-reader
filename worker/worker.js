@@ -7,6 +7,18 @@
  * 3. ส่งข้อมูลรูปภาพและ HTML กลับไปยังเว็บของเราอย่างปลอดภัย
  */
 
+// หน่วยความจำเก็บข้อความแชทส่วนกลาง (จำกัดสูงสุด 50 ข้อความล่าสุด ไม่เกิน 0.02 MB)
+let chatMessages = [
+  {
+    id: "welcome-1",
+    nickname: "CleanManga Bot ⚡",
+    text: "ยินดีต้อนรับสู่ห้องคุย & แลกเปลี่ยนมังงะ! พิมพ์พูดคุยหรือป้ายยาการ์ตูนเรื่องโปรดได้เลยครับ ✨",
+    mangaTitle: "Clean Manga",
+    mangaUrl: "",
+    time: Date.now() - 600000
+  }
+];
+
 export default {
   async fetch(request, env, ctx) {
     // จัดการ Preflight Request (CORS)
@@ -22,6 +34,66 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // 1. ระบบแชทส่วนกลาง (Community Chat API)
+    if (url.pathname === '/api/chat') {
+      if (request.method === "GET") {
+        return new Response(JSON.stringify({ success: true, messages: chatMessages }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache"
+          }
+        });
+      }
+
+      if (request.method === "POST") {
+        try {
+          const data = await request.json();
+          const nickname = (data.nickname || '').trim().slice(0, 25) || 'สหายมังงะ';
+          const text = (data.text || '').trim().slice(0, 280);
+          const mangaTitle = (data.mangaTitle || '').trim().slice(0, 80);
+          const mangaUrl = (data.mangaUrl || '').trim().slice(0, 300);
+
+          if (!text) {
+            return new Response(JSON.stringify({ success: false, error: "กรุณาใส่ข้อความ" }), {
+              status: 400,
+              headers: { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*" }
+            });
+          }
+
+          const newMsg = {
+            id: 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+            nickname,
+            text,
+            mangaTitle,
+            mangaUrl,
+            time: Date.now()
+          };
+
+          chatMessages.unshift(newMsg);
+          // ตัดทิ้งอัตโนมัติหากเกิน 50 ข้อความ เพื่อไม่ให้เปลืองพื้นที่
+          if (chatMessages.length > 50) {
+            chatMessages = chatMessages.slice(0, 50);
+          }
+
+          return new Response(JSON.stringify({ success: true, messages: chatMessages }), {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json; charset=utf-8",
+              "Access-Control-Allow-Origin": "*"
+            }
+          });
+        } catch (err) {
+          return new Response(JSON.stringify({ success: false, error: err.message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*" }
+          });
+        }
+      }
+    }
+
     const targetUrl = url.searchParams.get("url");
 
     if (!targetUrl) {

@@ -38,13 +38,19 @@
   <!-- Hero Spotlight -->
   <section class="hero-section" id="heroSection">
     <div class="hero-backdrop" id="heroBackdrop"></div>
+    <div class="hero-overlay"></div>
     <div class="hero-content">
-      <div class="hero-badge" id="heroBadge">🔥 แนะนำวันนี้</div>
-      <h1 class="hero-title" id="heroTitle">กำลังโหลดมังงะเด่น...</h1>
-      <p class="hero-desc" id="heroDesc">อ่านการ์ตูนมังงะแปลไทย มังฮวาเกาหลี มังงะจีน ครบทุกเรื่องจากทุกค่าย ไม่มีโฆษณาคั่นแม้แต่ตัวเดียว</p>
-      <div class="hero-actions">
-        <a href="#" id="heroReadBtn" class="btn-primary">อ่านตอนล่าสุด</a>
-        <button id="heroChaptersBtn" class="btn-secondary">เลือกตอน</button>
+      <div class="hero-text-side">
+        <div class="hero-badge" id="heroBadge">🔥 แนะนำวันนี้</div>
+        <h1 class="hero-title" id="heroTitle">กำลังโหลดมังงะเด่น...</h1>
+        <p class="hero-desc" id="heroDesc">อ่านการ์ตูนมังงะแปลไทย มังฮวาเกาหลี มังงะจีน ครบทุกเรื่องจากทุกค่าย ไม่มีโฆษณาคั่นแม้แต่ตัวเดียว</p>
+        <div class="hero-actions">
+          <a href="#" id="heroReadBtn" class="btn-primary">อ่านตอนล่าสุด</a>
+          <button id="heroChaptersBtn" class="btn-secondary">เลือกตอน</button>
+        </div>
+      </div>
+      <div class="hero-poster-side" id="heroPosterSide">
+        <img id="heroPosterImg" class="hero-poster-img" src="" alt="ภาพปกมังงะเด่น" style="display: none;">
       </div>
     </div>
   </section>
@@ -118,6 +124,39 @@
         </svg>
       </button>
     </div>
+
+    <!-- Community Chat Section (ห้องคุย & ป้ายยามังงะ) -->
+    <section class="manga-chat-section" id="chatSection">
+      <div class="manga-chat-card">
+        <div class="manga-chat-header">
+          <div class="chat-header-title">
+            <span class="chat-header-icon">💬</span>
+            <span class="chat-title-main">ห้องคุย & ป้ายยามังงะ</span>
+            <span class="chat-tag-pill" id="chatCurrentMangaBadge" style="display: none;"></span>
+          </div>
+          <div class="chat-header-meta">
+            <span class="chat-count" id="chatMessageCount">กำลังโหลดข้อความ...</span>
+            <button id="chatRefreshBtn" class="chat-btn-refresh" title="รีเฟรชข้อความ">↺</button>
+          </div>
+        </div>
+
+        <!-- Chat Messages List (เลื่อนดูภายในกล่อง ไม่ดันความยาวหน้าจอ) -->
+        <div class="manga-chat-messages" id="chatMessagesList">
+          <div class="chat-loading-text">กำลังโหลดข้อความแชท...</div>
+        </div>
+
+        <!-- Chat Input Form -->
+        <form class="manga-chat-form" id="chatForm">
+          <div class="chat-input-row">
+            <input type="text" id="chatNicknameInput" class="chat-input-nickname" placeholder="ชื่อเล่นของคุณ" maxlength="20">
+            <input type="text" id="chatTextInput" class="chat-input-text" placeholder="พิมพ์คุย หรือแนะนำเรื่อง..." maxlength="250" autocomplete="off">
+            <button type="submit" id="chatSendBtn" class="chat-btn-send">
+              <span>ส่ง</span> ✈️
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
 
   </main>
 
