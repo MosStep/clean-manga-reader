@@ -1105,7 +1105,11 @@ async function fetchChatMessages() {
     container.innerHTML = '';
     messages.forEach(msg => {
       const item = document.createElement('div');
-      item.className = 'chat-item';
+      const isBot = (msg.nickname || '').includes('Bot') || (msg.nickname || '').includes('บอท');
+      item.className = isBot ? 'chat-item chat-item-bot' : 'chat-item';
+
+      const botBadgeHtml = isBot ? '<span class="chat-bot-badge">BOT</span>' : '';
+      const nameClass = isBot ? 'chat-user-name bot-name' : 'chat-user-name';
 
       let storyTagHtml = '';
       if (msg.mangaTitle) {
@@ -1118,7 +1122,8 @@ async function fetchChatMessages() {
 
       item.innerHTML = `
         <div class="chat-item-header">
-          <span class="chat-user-name">${escapeHtml(msg.nickname || 'สหายมังงะ')}</span>
+          <span class="${nameClass}">${escapeHtml(msg.nickname || 'สหายมังงะ')}</span>
+          ${botBadgeHtml}
           <span class="chat-time">${formatTimeAgo(msg.time)}</span>
           ${storyTagHtml}
         </div>
@@ -1153,6 +1158,7 @@ function initChatComponent(currentMangaContext = null) {
   const textInput = document.getElementById('chatTextInput');
   const sendBtn = document.getElementById('chatSendBtn');
   const refreshBtn = document.getElementById('chatRefreshBtn');
+  const randomBtn = document.getElementById('chatRandomBtn');
   const badgeEl = document.getElementById('chatCurrentMangaBadge');
 
   if (!form) return;
@@ -1178,6 +1184,80 @@ function initChatComponent(currentMangaContext = null) {
     refreshBtn.onclick = () => fetchChatMessages();
   }
 
+  // ฟังก์ชันให้บอทสุ่มแนะนำการ์ตูน
+  const triggerBotRandom = async () => {
+    let pool = (typeof allMangaList !== 'undefined' && Array.isArray(allMangaList) && allMangaList.length > 0)
+      ? allMangaList
+      : [];
+
+    if (pool.length === 0) {
+      try {
+        const cached = sessionStorage.getItem('cached_all_manga');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) pool = parsed;
+        }
+      } catch (e) {}
+    }
+
+    const fallbackList = [
+      { title: "Solo Leveling", mangaUrl: "" },
+      { title: "Omniscient Reader's Viewpoint", mangaUrl: "" },
+      { title: "The Beginning After the End", mangaUrl: "" },
+      { title: "Cosmic Heavenly Demon 3077", mangaUrl: "" },
+      { title: "Magic Emperor", mangaUrl: "" },
+      { title: "Nano Machine", mangaUrl: "" },
+      { title: "Return of the Mount Hua Sect", mangaUrl: "" },
+      { title: "Pick Me Up, Infinite Gacha", mangaUrl: "" },
+      { title: "Reincarnation of the Suicidal Battle God", mangaUrl: "" },
+      { title: "Damn Reincarnation", mangaUrl: "" }
+    ];
+
+    const targetList = pool.length > 0 ? pool : fallbackList;
+    const picked = targetList[Math.floor(Math.random() * targetList.length)];
+
+    const botPhrases = [
+      "🎲 สุ่มได้เรื่องนี้เลย! ใครหาเรื่องอ่านอยู่ ลองจัดเรื่องนี้ดูครับ",
+      "⚡ บอทขอป้ายยาเรื่องนี้ เนื้อเรื่องเดือด น่าติดตามมาก!",
+      "📖 หยิบเรื่องนี้มาฝาก ลองแตะแท็กเพื่อเปิดอ่านได้ทันทีนะ",
+      "🔥 สุ่มให้แล้ว! เรื่องนี้อ่านเพลิน ไม่ควรพลาด"
+    ];
+    const phrase = botPhrases[Math.floor(Math.random() * botPhrases.length)];
+
+    try {
+      const apiUrl = CONFIG.CHAT_API_URL || '/api/chat';
+      await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nickname: "CleanManga Bot ⚡",
+          text: phrase,
+          mangaTitle: picked.title || 'มังงะแนะนำ',
+          mangaUrl: picked.mangaUrl || ''
+        })
+      });
+      await fetchChatMessages();
+    } catch (err) {
+      console.warn("Bot random post error:", err);
+    }
+  };
+
+  // ปุ่มให้บอทสุ่มแนะนำการ์ตูน
+  if (randomBtn && !randomBtn.dataset.bound) {
+    randomBtn.dataset.bound = "1";
+    randomBtn.onclick = async () => {
+      randomBtn.disabled = true;
+      const origText = randomBtn.textContent;
+      randomBtn.textContent = '⏳ กำลังสุ่ม...';
+      try {
+        await triggerBotRandom();
+      } finally {
+        randomBtn.disabled = false;
+        randomBtn.textContent = origText;
+      }
+    };
+  }
+
   // ส่งข้อความ
   if (!form.dataset.bound) {
     form.dataset.bound = "1";
@@ -1187,6 +1267,10 @@ function initChatComponent(currentMangaContext = null) {
       const text = (textInput ? textInput.value : '').trim();
 
       if (!text) return;
+
+      // ตรวจสอบคำสั่งบอท
+      const isRandomCommand = /^\/(?:random|สุ่ม|แนะนํา|แนะนำ)/i.test(text);
+      const isHelpCommand = /^\/(?:help|คำสั่ง|วิธีใช้)/i.test(text);
 
       // บันทึกชื่อเล่นไว้ใช้ครั้งต่อไป
       try {
@@ -1213,6 +1297,29 @@ function initChatComponent(currentMangaContext = null) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         if (textInput) textInput.value = '';
         await fetchChatMessages();
+
+        // คำสั่งบอทตอบสนองอัตโนมัติ
+        if (isRandomCommand) {
+          setTimeout(async () => {
+            await triggerBotRandom();
+          }, 400);
+        } else if (isHelpCommand) {
+          setTimeout(async () => {
+            try {
+              await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  nickname: "CleanManga Bot ⚡",
+                  text: "🤖 คำสั่งที่ใช้ได้: กดปุ่ม [🎲 สุ่มการ์ตูน] หรือพิมพ์ /random เพื่อให้บอทสุ่มมังงะน่าอ่าน หรือพิมพ์คุย/ป้ายยาตามสบายได้เลยครับ!",
+                  mangaTitle: '',
+                  mangaUrl: ''
+                })
+              });
+              await fetchChatMessages();
+            } catch (e) {}
+          }, 400);
+        }
       } catch (err) {
         alert('ส่งข้อความไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
       } finally {
