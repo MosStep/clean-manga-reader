@@ -34,17 +34,29 @@ async function fetchViaProxy(targetUrl, options = {}, timeoutMs = 15000) {
   }
 }
 
-// 2. แกะรูปภาพอย่างละเอียดทุก attribute ป้องกันรูปบั๊ก
+// 2. แกะรูปภาพอย่างละเอียดทุก attribute ป้องกันรูปบั๊ก (รองรับ WP Fastest Cache, WP Rocket, LiteSpeed ฯลฯ)
 function extractCoverUrl(imgEl, baseUrl) {
   if (!imgEl) return '';
-  let src = imgEl.getAttribute('data-src') || 
+  let src = imgEl.getAttribute('data-wpfc-original-src') || 
+            imgEl.getAttribute('data-src') || 
             imgEl.getAttribute('data-lazy-src') || 
             imgEl.getAttribute('data-original') || 
+            imgEl.getAttribute('data-orig-file') ||
+            imgEl.getAttribute('data-cfsrc') ||
+            imgEl.getAttribute('data-lazy') ||
+            imgEl.getAttribute('data-url') ||
             imgEl.getAttribute('src') || '';
 
-  if (imgEl.getAttribute('srcset')) {
-    const firstSet = imgEl.getAttribute('srcset').split(',')[0].trim().split(' ')[0];
-    if (firstSet && !firstSet.includes('data:image')) src = firstSet;
+  // หาก src เป็น data:image (base64 ว่าง) หรือ blank.gif ให้ลองดึงจาก srcset
+  if (!src || src.startsWith('data:image') || src.includes('blank.gif')) {
+    const srcset = imgEl.getAttribute('data-wpfc-original-srcset') || 
+                   imgEl.getAttribute('data-lazy-srcset') || 
+                   imgEl.getAttribute('srcset') || '';
+    if (srcset) {
+      const candidates = srcset.split(',').map(s => s.trim().split(' ')[0]).filter(Boolean);
+      const valid = candidates.find(c => !c.startsWith('data:image') && !c.includes('blank.gif'));
+      if (valid) src = valid;
+    }
   }
 
   // ปรับ decode HTML entity เช่น &amp;
@@ -2038,7 +2050,13 @@ function parseReaderData(html, currentUrl = '') {
   const imgEls = doc.querySelectorAll('#readerarea img, .readerarea img, .entry-content img, #ch-images img, .read-container img');
   const imgs = [];
   imgEls.forEach(img => {
-    let src = img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('data-original') || img.getAttribute('src') || '';
+    let src = img.getAttribute('data-wpfc-original-src') || 
+              img.getAttribute('data-src') || 
+              img.getAttribute('data-lazy-src') || 
+              img.getAttribute('data-original') || 
+              img.getAttribute('data-orig-file') ||
+              img.getAttribute('data-cfsrc') ||
+              img.getAttribute('src') || '';
     src = src.replace(/&amp;/g, '&').trim();
     if (src && !src.includes('data:image') && !src.includes('blank.gif')) {
       if (src.startsWith('//')) src = 'https:' + src;
