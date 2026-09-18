@@ -22,6 +22,7 @@ const CONFIG = {
     { id: 'go-manga', name: 'Go-Manga', url: 'https://www.go-manga.com', type: 'mangareader', icon: '⚡', readable: true, isCoin: false },
     { id: 'slow-manga', name: 'Slow-Manga', url: 'https://www.slow-manga.net', type: 'mangareader', icon: '🐢', readable: true, isCoin: false },
     { id: 'ped-manga', name: 'Ped-Manga', url: 'https://ped-manga.com', type: 'mangareader', icon: '🦆', readable: true, isCoin: false },
+    { id: 'manga-step', name: 'MangaStep', url: 'https://mangastep.com', type: 'mangareader', icon: '🐾', readable: true, isCoin: false },
     { id: 'ntr-manga', name: 'NTR-Manga', url: 'https://www.ntr-manga.net', type: 'mangareader', icon: '🔥', readable: true, isCoin: false },
     { id: 'dark-manga', name: 'Dark-Manga', url: 'https://www.dark-manga.com', type: 'mangareader', icon: '🌑', readable: true, isCoin: false },
     { id: 'fin-manga', name: 'Fin-Manga', url: 'https://www.fin-manga.com', type: 'mangareader', icon: '🌸', readable: true, isCoin: false },

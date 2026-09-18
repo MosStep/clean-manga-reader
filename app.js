@@ -85,31 +85,32 @@ function extractCoverUrl(imgEl, baseUrl) {
   return src;
 }
 
-// 3. แกะข้อมูลมังงะจากเว็บตระกูล MangaReader (Go, Fin, Dark, Up, Slow, NTR-Manga, Ecchi-Doujin)
+// 3. แกะข้อมูลมังงะจากเว็บตระกูล MangaReader (Go, Fin, Dark, Up, Slow, NTR-Manga, Ped-Manga, MangaStep, Ecchi-Doujin)
 function parseMangaReaderHtml(html, sourceInfo) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const items = [];
+  const seenUrls = new Set();
 
   const cards = doc.querySelectorAll('.bsx, .animposx, .listupd .uta, .ntr-upd-card, .top10manga li');
   cards.forEach(card => {
-    const linkEl = card.querySelector('a.ntr-upd-title, a.ntr-upd-cover, a');
-    const titleEl = card.querySelector('.ntr-upd-title h3, .tt, h2, h3, .title');
+    const linkEl = card.querySelector('a.ntr-upd-title, a.ntr-upd-cover, a.series, a');
+    const titleEl = card.querySelector('.ntr-upd-title h3, .tt, h2, h3, .title, h4');
     const imgEl = card.querySelector('img');
     const epNumEl = card.querySelector('.ntr-upd-epnum');
-    const epEl = card.querySelector('.epxs, .eggchap, .fivchap, .chfiv li a, .ntr-upd-ep');
+    const epEl = card.querySelector('.epxs, .eggchap, .fivchap, .chfiv li a, .ntr-upd-ep, .luf ul li a, ul li a');
     const typeEl = card.querySelector('.typename, .type');
 
-    if (linkEl && titleEl) {
+    if (linkEl && (titleEl || linkEl.getAttribute('title'))) {
       let mangaUrl = linkEl.getAttribute('href') || '';
-      let title = titleEl.textContent.trim();
+      let title = titleEl ? titleEl.textContent.trim() : (linkEl.getAttribute('title') || '').trim();
       let latestEp = 'ตอนล่าสุด';
 
       if (epNumEl) {
         latestEp = epNumEl.textContent.trim();
       } else if (epEl) {
         const clone = epEl.cloneNode(true);
-        clone.querySelectorAll('.ntr-upd-eptime, .date, .time, time, i').forEach(t => t.remove());
+        clone.querySelectorAll('.ntr-upd-eptime, .date, .time, time, i, span').forEach(t => t.remove());
         latestEp = clone.textContent.trim();
       }
 
@@ -121,7 +122,8 @@ function parseMangaReaderHtml(html, sourceInfo) {
 
       if (mangaUrl.startsWith('/')) mangaUrl = sourceInfo.url + mangaUrl;
 
-      if (title && mangaUrl) {
+      if (title && mangaUrl && !seenUrls.has(mangaUrl)) {
+        seenUrls.add(mangaUrl);
         items.push({
           title,
           mangaUrl,
@@ -2967,6 +2969,14 @@ async function openChapterModal(manga, activeSource = null) {
           srcId = 'ntr-manga';
           srcName = 'NTR-Manga';
           icon = '🔥';
+        } else if (url.includes('ped-manga')) {
+          srcId = 'ped-manga';
+          srcName = 'Ped-Manga';
+          icon = '🦆';
+        } else if (url.includes('mangastep')) {
+          srcId = 'manga-step';
+          srcName = 'MangaStep';
+          icon = '🐾';
         } else if (url.includes('go-manga')) {
           srcId = 'go-manga';
           srcName = 'Go-Manga';
