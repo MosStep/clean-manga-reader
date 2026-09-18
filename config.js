@@ -15,14 +15,14 @@ const CONFIG = {
     { id: 'dark-manga', name: 'Dark-Manga', url: 'https://www.dark-manga.com', type: 'mangareader', icon: '🌑', readable: true, isCoin: false },
     { id: 'fin-manga', name: 'Fin-Manga', url: 'https://www.fin-manga.com', type: 'mangareader', icon: '🌸', readable: true, isCoin: false },
     { id: 'up-manga', name: 'Up-Manga', url: 'https://www.up-manga.com', type: 'mangareader', icon: '🚀', readable: true, isCoin: false },
-    { id: 'whytoon', name: 'WhyToon', url: 'https://whytoon.com', type: 'whytoon', icon: '📱', readable: true, isCoin: false },
     { id: 'speed-manga', name: 'Speed-Manga', url: 'https://speed-manga.net', type: 'mangareader', icon: '⚡', readable: true, isCoin: false },
     { id: 'du-manga', name: 'Du-Manga', url: 'https://www.du-manga.com', type: 'madara', icon: '📖', readable: true, isCoin: false },
     { id: 'manga-lc', name: 'Manga-LC', url: 'https://manga-lc.net', type: 'madara', icon: '📚', readable: true, isCoin: false },
-    { id: 'ecchi-doujin', name: 'Ecchi-Doujin', url: 'https://ecchi-doujin.com', type: 'mangareader', icon: '🔞', readable: true, isCoin: false },
-    { id: 'readtoon', name: 'ReadToon (ติดเหรียญ)', url: 'https://readtoon.com', type: 'readtoon', icon: '🔒', readable: false, isCoin: true },
-    { id: 'ntrnaja', name: 'NTRnaja (ติดเหรียญ)', url: 'https://ntrnaja.com', type: 'ntrnaja', icon: '🔒', readable: false, isCoin: true },
-    { id: 'kairew', name: 'Kairew (เข้ารหัส)', url: 'https://kairew.com', type: 'kairew', icon: '🔒', readable: false, isCoin: true }
+    { id: 'sing-manga', name: 'Sing-Manga', url: 'https://www.sing-manga.com', type: 'mangareader', icon: '🎤', readable: true, isCoin: false },
+    { id: 'flash-manga', name: 'Flash-Manga', url: 'https://www.flash-manga.net', type: 'mangareader', icon: '⚡', readable: true, isCoin: false },
+    { id: 'chibi-manga', name: 'Chibi-Manga', url: 'https://chibi-manga.com', type: 'mangareader', icon: '🧸', readable: true, isCoin: false },
+    { id: 'nano-manga', name: 'Nano-Manga', url: 'https://nano-manga.com', type: 'madara', icon: '🧬', readable: true, isCoin: false },
+    { id: 'ecchi-doujin', name: 'Ecchi-Doujin', url: 'https://ecchi-doujin.com', type: 'mangareader', icon: '🔞', readable: true, isCoin: false }
   ],
 
   DEFAULT_SOURCE_ID: 'all'
