@@ -1496,26 +1496,49 @@ body {
     padding: 1px 4px;
   }
   .continue-reading-box {
-    padding: 6px 10px;
+    padding: 7px 12px;
     margin: 4px 12px 2px 12px;
-    border-radius: 8px;
-    gap: 6px;
+    border-radius: 10px;
+    gap: 8px;
     flex-wrap: nowrap;
+    align-items: center;
   }
   .continue-reading-text {
-    font-size: 0.75rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: 0.78rem;
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    overflow: visible;
+    white-space: normal;
+  }
+  .continue-main-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    flex-wrap: nowrap;
+  }
+  .continue-label {
+    font-size: 0.76rem;
+  }
+  .continue-ep-badge {
+    font-size: 0.82rem;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+  .continue-time-text {
+    font-size: 0.68rem;
+    color: #888;
   }
   .btn-continue-now {
-    padding: 4px 10px;
-    font-size: 0.74rem;
+    padding: 6px 12px;
+    font-size: 0.78rem;
     white-space: nowrap;
     flex-shrink: 0;
-    border-radius: 6px;
+    border-radius: 8px;
   }
   .free-source-banner {
     padding: 6px 10px;
@@ -1748,13 +1771,13 @@ body {
   background: linear-gradient(135deg, rgba(0, 242, 254, 0.12), rgba(79, 172, 254, 0.08));
   border: 1px solid rgba(0, 242, 254, 0.35);
   border-radius: 12px;
-  padding: 12px 18px;
+  padding: 10px 16px;
   margin: 12px 24px 4px 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .continue-reading-text {
@@ -1762,7 +1785,38 @@ body {
   color: #fff;
   display: flex;
   align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.continue-main-row {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+  white-space: nowrap;
+}
+
+.continue-label {
+  color: var(--text-sub);
+  font-size: 0.84rem;
+}
+
+.continue-ep-badge {
+  color: #00f2fe;
+  background: rgba(0, 242, 254, 0.14);
+  border: 1px solid rgba(0, 242, 254, 0.35);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.continue-time-text {
+  font-size: 0.74rem;
+  color: #888;
+  white-space: nowrap;
 }
 
 .btn-continue-now {
@@ -1779,6 +1833,7 @@ body {
   gap: 6px;
   text-decoration: none;
   transition: all 0.2s;
+  flex-shrink: 0;
 }
 
 .btn-continue-now:hover {
