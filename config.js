@@ -34,7 +34,8 @@ const CONFIG = {
     { id: 'flash-manga', name: 'Flash-Manga', url: 'https://www.flash-manga.net', type: 'mangareader', icon: '⚡', readable: true, isCoin: false },
     { id: 'chibi-manga', name: 'Chibi-Manga', url: 'https://chibi-manga.com', type: 'mangareader', icon: '🧸', readable: true, isCoin: false },
     { id: 'nano-manga', name: 'Nano-Manga', url: 'https://nano-manga.com', type: 'madara', icon: '🧬', readable: true, isCoin: false },
-    { id: 'ecchi-doujin', name: 'Ecchi-Doujin', url: 'https://ecchi-doujin.com', type: 'mangareader', icon: '🔞', readable: true, isCoin: false }
+    { id: 'ecchi-doujin', name: 'Ecchi-Doujin', url: 'https://ecchi-doujin.com', type: 'mangareader', icon: '🔞', readable: true, isCoin: false },
+    { id: 'ntrnaja', name: 'NTRnaja', url: 'https://ntrnaja.com', type: 'ntrnaja', icon: '🔥', readable: false, isCoin: true }
   ],
 
   DEFAULT_SOURCE_ID: 'all'

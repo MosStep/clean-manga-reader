@@ -1192,13 +1192,20 @@ function updateModalFavButton(manga) {
   }
 }
 
-// ฟังก์ชันดึงเลขตอนสูงสุดจากข้อความ เช่น "ตอนที่ 177", "Ch. 174"
+// ฟังก์ชันดึงเลขตอนสูงสุดจากข้อความ เช่น "ตอนที่ 177", "Ch. 174" (ตัดวันที่ออกเพื่อป้องกันบั๊กปี ค.ศ.)
 function extractEpNumberFromText(text) {
   if (!text) return 0;
-  const str = String(text);
+  let str = String(text);
+  str = str.replace(/\b\d{4}-\d{2}-\d{2}\b/g, '');
+  str = str.replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, '');
+  str = str.replace(/(?:มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+\d{1,2},?\s+\d{4}/gi, '');
+  str = str.replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}/gi, '');
+  str = str.replace(/อัปเดต\s*/gi, '');
+
   const m = str.match(/ตอนที่\s*(\d+(?:\.\d+)?)/i) ||
             str.match(/ch(?:apter)?\.?\s*(\d+(?:\.\d+)?)/i) ||
             str.match(/ep(?:isode)?\.?\s*(\d+(?:\.\d+)?)/i) ||
+            str.match(/\b(\d+(?:\.\d+)?)\s*ตอน\b/i) ||
             str.match(/\b(\d+(?:\.\d+)?)\b/);
   return m ? parseFloat(m[1]) : 0;
 }
@@ -1331,7 +1338,7 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
     } else if (source.type === 'readtoon') {
       targetUrl = page > 1 ? `${source.url}/discover/manga?page=${page}` : `${source.url}/discover/manga`;
     } else if (source.type === 'ntrnaja') {
-      targetUrl = page > 1 ? `${source.url}/manga/page/${page}/` : `${source.url}/manga/`;
+      targetUrl = page > 1 ? `${source.url}/manga/page/${page}/?sort=update` : `${source.url}/manga/?sort=update`;
     } else if (source.type === 'kairew') {
       targetUrl = `${source.url}/manga`;
     }
@@ -1916,17 +1923,21 @@ async function performGlobalLiveSearch(query) {
   if (btn) btn.disabled = true;
   if (btnText) btnText.innerHTML = `⏳ กำลังค้นหา "${escapeHtml(q)}" ในคลังใหญ่ของทุกเว็บ...`;
 
-  const sourcesToSearch = CONFIG.SOURCES.filter(s => s.readable !== false);
+  const sourcesToSearch = CONFIG.SOURCES;
   const promises = sourcesToSearch.map(async (source) => {
     try {
       let searchUrl = `${source.url}/?s=${encodeURIComponent(q)}`;
       if (source.type === 'madara') {
         searchUrl += '&post_type=wp-manga';
+      } else if (source.type === 'ntrnaja') {
+        searchUrl = `${source.url}/manga/?q=${encodeURIComponent(q)}`;
       }
       const html = await fetchViaProxy(searchUrl, {}, 10000);
       let items = [];
       if (source.type === 'madara') {
         items = parseMadaraHtml(html, source);
+      } else if (source.type === 'ntrnaja') {
+        items = parseNtrNajaHtml(html, source);
       } else {
         items = parseMangaReaderHtml(html, source);
       }
@@ -2688,26 +2699,32 @@ function parseChaptersFromHtml(html, baseUrl, sourceType) {
       }
     });
   } else if (sourceType === 'ntrnaja') {
-    const links = doc.querySelectorAll('a[href*="?chapter="]');
+    const links = doc.querySelectorAll('a[href*="?chapter="], a[href*="/-"]');
     links.forEach(a => {
       let href = (a.getAttribute('href') || '').trim();
-      if (!href) return;
+      if (!href || href.includes('auth-login') || href.includes('/page/')) return;
       if (href.startsWith('/')) href = baseUrl.replace(/\/$/, '') + href;
 
+      const titleEl = a.querySelector('.ss-ch-title');
       const rawText = a.textContent.trim().replace(/\s+/g, ' ');
-      const matchEp = rawText.match(/ตอนที่\s*(\d+(\.\d+)?)/i) || href.match(/chapter=-?(\d+(\.\d+)?)/i);
-      const epTitle = matchEp ? `ตอนที่ ${matchEp[1]}` : (rawText.split('\n')[0] || 'อ่านตอนนี้');
+      const matchEp = (titleEl ? titleEl.textContent : rawText).match(/ตอนที่\s*(\d+(?:\.\d+)?)/i) || 
+                      href.match(/chapter=-?(\d+(?:\.\d+)?)/i) || 
+                      href.match(/-(\d+(?:\.\d+)?)\/?$/);
+      const epTitle = matchEp ? `ตอนที่ ${matchEp[1]}` : (titleEl ? titleEl.textContent.trim() : (rawText.split('\n')[0] || 'อ่านตอนนี้'));
 
-      const pointMatch = rawText.match(/ราคา\s*(\d+)\s*พอยท์/);
-      const isExplicitFree = rawText.includes('ฟรี') && !pointMatch;
+      const coinEl = a.querySelector('.ss-coin');
+      const isCoinText = !!coinEl || rawText.includes('ล็อค') || rawText.includes('แต้ม') || rawText.includes('พอยท์');
+      const isExplicitFree = rawText.includes('ฟรี') && !coinEl;
 
       let badge = '🔒 ติดเหรียญ';
       let isLocked = true;
 
-      if (pointMatch) {
-        badge = `🔒 ${pointMatch[1]} พอยท์`;
-      } else if (isExplicitFree) {
-        badge = '✨ ฟรี (ต้นทาง)';
+      if (coinEl && coinEl.textContent.trim()) {
+        badge = `🔒 ${coinEl.textContent.trim()}`;
+      } else if (rawText.match(/(\d+\s*(?:แต้ม|พอยท์))/)) {
+        badge = `🔒 ${rawText.match(/(\d+\s*(?:แต้ม|พอยท์))/)[1]}`;
+      } else if (isExplicitFree || !isCoinText) {
+        badge = '✨ ฟรี';
         isLocked = false;
       }
 
@@ -3094,13 +3111,35 @@ async function openChapterModal(manga, activeSource = null) {
       pill.innerHTML = `
         <span>${s.icon || (isFree ? '⚡' : '🔒')}</span>
         <span>${s.sourceName}${epLabel}</span>
-        <span class="source-pill-badge ${isFree ? 'free' : 'coin'}">${isFree ? 'ฟรี' : 'ติดเหรียญ'}</span>
+        <span class="source-pill-badge ${isFree ? 'free' : 'coin'}">${isFree ? 'ฟรี' : '🔒 ติดเหรียญ'}</span>
       `;
       pill.addEventListener('click', (e) => {
         e.stopPropagation();
         openChapterModal(manga, s);
       });
       sourcePills.appendChild(pill);
+
+      // ตรวจสอบและดึงข้อมูลเลขตอนล่าสุดสำหรับแหล่งที่ยังไม่มี เช่น NTRnaja
+      if (s.sourceId === 'ntrnaja' && (!s.latestEp || extractEpNumberFromText(s.latestEp) === 0) && s.mangaUrl) {
+        fetchViaProxy(s.mangaUrl, {}, 6000).then(sourceHtml => {
+          const m = sourceHtml.match(/class="ss-ch-title">\s*ตอนที่\s*(\d+(?:\.\d+)?)/i) || sourceHtml.match(/chapter=-?(\d+(?:\.\d+)?)/i);
+          if (m) {
+            s.latestEp = `ตอนที่ ${m[1]}`;
+            const hasCoin = sourceHtml.includes('class="ss-coin"') || sourceHtml.includes('ล็อค');
+            s.isCoin = hasCoin;
+            s.readable = !hasCoin;
+            const updatedEpNum = parseFloat(m[1]);
+            const updatedLabel = ` (${updatedEpNum} ตอน)`;
+            const nameEl = pill.querySelector('span:nth-child(2)');
+            if (nameEl) nameEl.textContent = `${s.sourceName}${updatedLabel}`;
+            const badgeEl = pill.querySelector('.source-pill-badge');
+            if (badgeEl) {
+              badgeEl.className = `source-pill-badge ${s.readable ? 'free' : 'coin'}`;
+              badgeEl.textContent = s.readable ? 'ฟรี' : '🔒 ติดเหรียญ';
+            }
+          }
+        }).catch(() => {});
+      }
     });
 
     // ปุ่มเพิ่มแหล่งเชื่อมโยงด้วยตนเอง (+ วางลิงก์)
@@ -3253,6 +3292,16 @@ async function openChapterModal(manga, activeSource = null) {
     const readUrls = new Set((histItem && Array.isArray(histItem.readChapters)) ? histItem.readChapters : []);
 
     chapters = sortChaptersDescending(chapters);
+    if (chapters.length > 0) {
+      currentSource.latestEp = chapters[0].title;
+      if (chapters[0].isLocked) {
+        currentSource.isCoin = true;
+        currentSource.readable = false;
+      } else {
+        currentSource.isCoin = false;
+        currentSource.readable = true;
+      }
+    }
     try {
       if (currentSource && currentSource.mangaUrl) {
         sessionStorage.setItem('cached_chapters_' + currentSource.mangaUrl, JSON.stringify(chapters));
@@ -3479,6 +3528,23 @@ function parseReaderData(html, currentUrl = '') {
       nextUrl: '',
       images: uniquePaths.map(p => getProxyUrl(`https://w.nobuild.pro/${p}`))
     };
+  }
+
+  // 3.5 ตรวจสอบ chapter_preloaded_images (NTRnaja และ Madara บางเว็บ)
+  const preloadedMatch = html.match(/var\s+chapter_preloaded_images\s*=\s*(\[[^\]]+\])/);
+  if (preloadedMatch) {
+    try {
+      const rawImgs = JSON.parse(preloadedMatch[1]);
+      if (Array.isArray(rawImgs) && rawImgs.length > 0) {
+        return {
+          prevUrl: scriptPrevUrl,
+          nextUrl: scriptNextUrl,
+          images: rawImgs.map(u => getProxyUrl(u.replace(/\\/g, '')))
+        };
+      }
+    } catch (e) {
+      console.warn("Failed to parse chapter_preloaded_images:", e);
+    }
   }
 
   // 4. ตรวจสอบเว็บตระกูล Madara (Du-Manga, Manga-LC)
