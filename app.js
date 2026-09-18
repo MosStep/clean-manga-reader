@@ -530,6 +530,14 @@ function recordHistoryDeletion(itemIdentifier) {
   } catch (e) {}
 }
 
+// ฟังก์ชันหา URL สำหรับเรียก Sync API ข้ามอุปกรณ์ (รองรับ GitHub Pages และ Cloudflare Worker)
+function getSyncApiUrl(endpoint) {
+  const base = (typeof CONFIG !== 'undefined' && CONFIG.SYNC_API_BASE)
+    ? CONFIG.SYNC_API_BASE
+    : 'https://clean-manga-reader.mosstep.workers.dev/api/sync';
+  return `${base}${endpoint}`;
+}
+
 // ดึงรหัสซิงก์ปัจจุบัน
 function getSyncKey() {
   if (!currentSyncKey) {
@@ -543,7 +551,7 @@ async function initSyncEngine() {
   let key = getSyncKey();
   if (!key) {
     try {
-      const res = await fetch('/api/sync/generate-key', { method: 'POST' });
+      const res = await fetch(getSyncApiUrl('/generate-key'), { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.key) {
@@ -584,7 +592,7 @@ function pushSyncData() {
       const nickInput = document.getElementById('chatNicknameInput');
       const nickname = (nickInput ? nickInput.value : (localStorage.getItem(CHAT_STORAGE_NICKNAME) || '')).trim();
 
-      const res = await fetch('/api/sync/data', {
+      const res = await fetch(getSyncApiUrl('/data'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -600,23 +608,37 @@ function pushSyncData() {
       if (res.ok) {
         const result = await res.json();
         if (result.success && result.data) {
+          const curDelFavs = getDeletedFavorites();
+          const curDelHist = getDeletedHistory();
+          const curClearedAt = getHistoryClearedAt();
+
           if (Array.isArray(result.data.favorites)) {
-            localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(result.data.favorites));
+            // กรองรายการที่ถูกลบออก เพื่อไม่ให้เรื่องที่ลบไปแล้วฟื้นคืนชีพกลับมา
+            const cleanFavs = result.data.favorites.filter(f => {
+              if (!f || !f.title) return false;
+              const delTime = Math.max(curDelFavs[f.title.trim()] || 0, curDelFavs[(f.mangaUrl || '').trim()] || 0);
+              return !delTime || (f.savedAt || 0) > delTime;
+            });
+            localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(cleanFavs));
           }
           if (Array.isArray(result.data.history)) {
-            localStorage.setItem(STORAGE_HISTORY, JSON.stringify(result.data.history));
+            // กรองรายการที่ถูกลบออก หรือเวลาเก่ากว่าการสั่งล้างทั้งหมด
+            const cleanHist = result.data.history.filter(h => {
+              if (!h || !h.title) return false;
+              if (curClearedAt && (h.updatedAt || 0) <= curClearedAt) return false;
+              const delTime = Math.max(curDelHist[h.title.trim()] || 0, curDelHist[(h.mangaUrl || '').trim()] || 0);
+              return !delTime || (h.updatedAt || 0) > delTime;
+            });
+            localStorage.setItem(STORAGE_HISTORY, JSON.stringify(cleanHist));
           }
           if (result.data.deletedFavorites) {
-            const curDelFavs = getDeletedFavorites();
             localStorage.setItem(STORAGE_DELETED_FAVORITES, JSON.stringify({ ...curDelFavs, ...result.data.deletedFavorites }));
           }
           if (result.data.deletedHistory) {
-            const curDelHist = getDeletedHistory();
             localStorage.setItem(STORAGE_DELETED_HISTORY, JSON.stringify({ ...curDelHist, ...result.data.deletedHistory }));
           }
           if (result.data.historyClearedAt) {
-            const curCleared = getHistoryClearedAt();
-            localStorage.setItem(STORAGE_HISTORY_CLEARED_AT, String(Math.max(curCleared, result.data.historyClearedAt)));
+            localStorage.setItem(STORAGE_HISTORY_CLEARED_AT, String(Math.max(curClearedAt, result.data.historyClearedAt)));
           }
           if (result.data.nickname) {
             localStorage.setItem(CHAT_STORAGE_NICKNAME, result.data.nickname);
@@ -640,7 +662,7 @@ async function pullAndMergeSyncData() {
   if (!key) return;
 
   try {
-    const res = await fetch(`/api/sync/data?key=${encodeURIComponent(key)}`);
+    const res = await fetch(getSyncApiUrl(`/data?key=${encodeURIComponent(key)}`));
     if (res.ok) {
       const result = await res.json();
       if (result.success && result.data) {
@@ -755,7 +777,7 @@ async function switchSyncKey(newKey) {
     // ถ้ามีรหัสเก่าชั่วคราวและยังไม่มีข้อมูล ให้คืนคีย์เก่าเพื่อไม่ให้เปลืองโควตา
     if (oldKey && oldKey !== cleanKey) {
       try {
-        await fetch('/api/sync/release-key', {
+        await fetch(getSyncApiUrl('/release-key'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key: oldKey })
@@ -1148,8 +1170,10 @@ function mergeAndDeduplicate(list) {
   const keyToManga = new Map();
 
   list.forEach(m => {
-    const keys = getMangaTitleKeys(m.title);
-    if (keys.length === 0) return;
+    let keys = getMangaTitleKeys(m.title);
+    if (!keys || keys.length === 0) {
+      keys = [ (m.title || m.mangaUrl || Math.random().toString()).trim().toLowerCase() ];
+    }
 
     // ตรวจสอบ alias พิเศษ
     const matchedAlias = KNOWN_MANGA_ALIASES.find(a => 
@@ -1181,6 +1205,7 @@ function mergeAndDeduplicate(list) {
       map.set(keys[0], m);
     } else {
       if (!existing.cover && m.cover) existing.cover = m.cover;
+      if (m._searchQuery) existing._searchQuery = m._searchQuery;
 
       const isNewFree = m.readable !== false;
       const isExistingFree = existing.readable !== false;
@@ -1192,6 +1217,9 @@ function mergeAndDeduplicate(list) {
         
         const mergedAlts = [existing, ...oldAlts.filter(a => a.sourceId !== m.sourceId && a.sourceId !== existing.sourceId)];
         m.altSources = mergedAlts;
+        if (existing._searchQuery && !m._searchQuery) {
+          m._searchQuery = existing._searchQuery;
+        }
 
         // เชื่อมคีย์ทั้งหมดไปยังตัวหลักใหม่
         const allKeys = [...getMangaTitleKeys(existing.title), ...keys];
@@ -1359,8 +1387,11 @@ function applyFilters() {
 
     // 3. Search query (ค้นหา)
     if (currentSearchQuery) {
-      const q = currentSearchQuery.toLowerCase();
-      const matchSearch = (m.title && m.title.toLowerCase().includes(q)) || 
+      const q = currentSearchQuery.trim().toLowerCase();
+      const isFromSearch = m._searchQuery && (m._searchQuery === q || q.includes(m._searchQuery) || m._searchQuery.includes(q));
+      const matchSearch = isFromSearch ||
+                          (m.title && m.title.toLowerCase().includes(q)) || 
+                          (m.mangaUrl && m.mangaUrl.toLowerCase().includes(q)) ||
                           (m.type && m.type.toLowerCase().includes(q)) || 
                           (m.latestEp && m.latestEp.toLowerCase().includes(q)) ||
                           (m.lastChapterTitle && m.lastChapterTitle.toLowerCase().includes(q)) ||
@@ -1866,18 +1897,28 @@ async function performGlobalLiveSearch(query) {
   if (btn) btn.disabled = false;
 
   if (foundItems.length > 0) {
+    // กำหนด _searchQuery ให้ทุกรายการที่ค้นพบ เพื่อให้ผ่านการคัดกรองใน applyFilters
+    foundItems.forEach(item => {
+      item._searchQuery = q.toLowerCase();
+    });
+
     // นำรายการที่ค้นพบขึ้นมาอยู่ด้านหน้า เพื่อให้เห็นทันที
     allMangaList = mergeAndDeduplicate([...foundItems, ...allMangaList]);
     try {
       sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
     } catch (e) {}
-    if (btnText) btnText.innerHTML = `✓ พบ ${foundItems.length} เรื่องในคลังใหญ่! แสดงผลเรียบร้อย`;
+
+    // คัดกรองและแสดงผลทันที
+    applyFilters();
+
+    if (btnText) {
+      btnText.innerHTML = `✓ พบ ${filteredList.length} เรื่อง (${foundItems.length} แหล่ง) ในคลังใหญ่! แสดงผลเรียบร้อย`;
+    }
     setTimeout(() => {
       if (btnText && currentSearchQuery) {
         btnText.textContent = `ค้นหา "${currentSearchQuery}" ในคลังใหญ่ของทุกเว็บ (หาเรื่องเก่า/จบแล้ว) ➔`;
       }
     }, 4000);
-    applyFilters();
   } else {
     if (btnText) btnText.innerHTML = `ไม่พบเรื่องที่ตรงกับ "${escapeHtml(q)}" เพิ่มเติมในคลังใหญ่`;
     setTimeout(() => {

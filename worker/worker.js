@@ -162,12 +162,6 @@ export default {
     const TWO_YEARS_SECONDS = 730 * 24 * 60 * 60;   // 63,072,000 วินาที
     const MAX_HISTORY_ITEMS = 500;                  // เพิ่มเป็น 500 เรื่อง
 
-    // รวมประวัติการอ่านอย่างชาญฉลาด ไม่ให้ข้อมูลชนกัน พร้อมจำตอนที่อ่านแล้ว (readChapters)
-    const mergeHistoryList = (listA, listB) => {
-      const map = new Map();
-      const cutoff = Date.now() - TWO_YEARS_MS;
-      const combined = [...(Array.isArray(listA) ? listA : []), ...(Array.isArray(listB) ? listB : [])];
-      
     // รวมประวัติการอ่านอย่างชาญฉลาด (Smart Merge History พร้อมตรวจจับการลบ)
     const mergeHistoryList = (histA, histB, deletedMap = {}, clearedAt = 0) => {
       const map = new Map();
