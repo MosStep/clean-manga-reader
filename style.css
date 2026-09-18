@@ -1620,8 +1620,9 @@ body {
   box-shadow: 0 0 12px rgba(255, 202, 40, 0.4);
 }
 
-/* Remove button on history card */
-.btn-card-remove-hist {
+/* Remove button on history and favorites card */
+.btn-card-remove-hist,
+.btn-card-remove-fav {
   position: absolute;
   top: 10px;
   left: 10px;
@@ -1642,7 +1643,8 @@ body {
   opacity: 0.85;
 }
 
-.btn-card-remove-hist:hover {
+.btn-card-remove-hist:hover,
+.btn-card-remove-fav:hover {
   transform: scale(1.15);
   background: #ff2222;
   opacity: 1;

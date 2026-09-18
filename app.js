@@ -455,10 +455,80 @@ function getMangaTitleKeys(title) {
 // ==========================================================
 const STORAGE_HISTORY = 'clean_manga_reading_history';
 const STORAGE_FAVORITES = 'clean_manga_favorites';
+const STORAGE_DELETED_FAVORITES = 'clean_manga_deleted_favs';
+const STORAGE_DELETED_HISTORY = 'clean_manga_deleted_hist';
+const STORAGE_HISTORY_CLEARED_AT = 'clean_manga_hist_cleared_at';
 const SYNC_STORAGE_KEY = 'clean_manga_sync_key';
 
 let currentSyncKey = localStorage.getItem(SYNC_STORAGE_KEY) || '';
 let syncDebounceTimer = null;
+
+// ดึงรายการที่ถูกลบ (Tombstones) เพื่อป้องกันการฟื้นคืนชีพจากการซิงก์
+function getDeletedFavorites() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_DELETED_FAVORITES) || '{}');
+  } catch (e) {
+    return {};
+  }
+}
+
+function getDeletedHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_DELETED_HISTORY) || '{}');
+  } catch (e) {
+    return {};
+  }
+}
+
+function getHistoryClearedAt() {
+  try {
+    return parseInt(localStorage.getItem(STORAGE_HISTORY_CLEARED_AT) || '0', 10);
+  } catch (e) {
+    return 0;
+  }
+}
+
+// บันทึก Tombstone เมื่อลบเรื่องโปรด
+function recordFavoriteDeletion(manga) {
+  if (!manga) return;
+  const title = (manga.title || '').trim();
+  const url = (manga.mangaUrl || '').trim();
+  const deletedFavs = getDeletedFavorites();
+  const now = Date.now();
+  if (title) deletedFavs[title] = now;
+  if (url) deletedFavs[url] = now;
+
+  const keys = Object.keys(deletedFavs);
+  if (keys.length > 250) {
+    keys.sort((a, b) => deletedFavs[a] - deletedFavs[b]);
+    keys.slice(0, keys.length - 250).forEach(k => delete deletedFavs[k]);
+  }
+  try {
+    localStorage.setItem(STORAGE_DELETED_FAVORITES, JSON.stringify(deletedFavs));
+  } catch (e) {}
+}
+
+// บันทึก Tombstone เมื่อลบประวัติ
+function recordHistoryDeletion(itemIdentifier) {
+  if (!itemIdentifier) return;
+  const deletedHist = getDeletedHistory();
+  const now = Date.now();
+  if (typeof itemIdentifier === 'object') {
+    if (itemIdentifier.title) deletedHist[itemIdentifier.title.trim()] = now;
+    if (itemIdentifier.mangaUrl) deletedHist[itemIdentifier.mangaUrl.trim()] = now;
+  } else {
+    deletedHist[String(itemIdentifier).trim()] = now;
+  }
+
+  const keys = Object.keys(deletedHist);
+  if (keys.length > 250) {
+    keys.sort((a, b) => deletedHist[a] - deletedHist[b]);
+    keys.slice(0, keys.length - 250).forEach(k => delete deletedHist[k]);
+  }
+  try {
+    localStorage.setItem(STORAGE_DELETED_HISTORY, JSON.stringify(deletedHist));
+  } catch (e) {}
+}
 
 // ดึงรหัสซิงก์ปัจจุบัน
 function getSyncKey() {
@@ -498,7 +568,7 @@ async function initSyncEngine() {
   }
 }
 
-// ส่งข้อมูลประวัติและเรื่องโปรดไปซิงก์บนคลาวด์ (Debounced 500ms)
+// ส่งข้อมูลประวัติและเรื่องโปรดไปซิงก์บนคลาวด์ (Debounced 500ms) พร้อมส่ง Tombstones
 function pushSyncData() {
   const key = getSyncKey();
   if (!key) return;
@@ -508,12 +578,24 @@ function pushSyncData() {
     try {
       const favorites = getFavorites();
       const history = getReadingHistory();
+      const deletedFavorites = getDeletedFavorites();
+      const deletedHistory = getDeletedHistory();
+      const historyClearedAt = getHistoryClearedAt();
       const nickInput = document.getElementById('chatNicknameInput');
       const nickname = (nickInput ? nickInput.value : (localStorage.getItem(CHAT_STORAGE_NICKNAME) || '')).trim();
+
       const res = await fetch('/api/sync/data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, favorites, history, nickname })
+        body: JSON.stringify({
+          key,
+          favorites,
+          history,
+          nickname,
+          deletedFavorites,
+          deletedHistory,
+          historyClearedAt
+        })
       });
       if (res.ok) {
         const result = await res.json();
@@ -524,11 +606,26 @@ function pushSyncData() {
           if (Array.isArray(result.data.history)) {
             localStorage.setItem(STORAGE_HISTORY, JSON.stringify(result.data.history));
           }
+          if (result.data.deletedFavorites) {
+            const curDelFavs = getDeletedFavorites();
+            localStorage.setItem(STORAGE_DELETED_FAVORITES, JSON.stringify({ ...curDelFavs, ...result.data.deletedFavorites }));
+          }
+          if (result.data.deletedHistory) {
+            const curDelHist = getDeletedHistory();
+            localStorage.setItem(STORAGE_DELETED_HISTORY, JSON.stringify({ ...curDelHist, ...result.data.deletedHistory }));
+          }
+          if (result.data.historyClearedAt) {
+            const curCleared = getHistoryClearedAt();
+            localStorage.setItem(STORAGE_HISTORY_CLEARED_AT, String(Math.max(curCleared, result.data.historyClearedAt)));
+          }
           if (result.data.nickname) {
             localStorage.setItem(CHAT_STORAGE_NICKNAME, result.data.nickname);
             if (nickInput && !nickInput.value) nickInput.value = result.data.nickname;
           }
           updateHistoryAndFavCounts();
+          if (currentTagFilter === 'favorites' || currentTagFilter === 'history') {
+            applyFilters();
+          }
         }
       }
     } catch (e) {
@@ -537,7 +634,7 @@ function pushSyncData() {
   }, 500);
 }
 
-// ดึงข้อมูลจากคลาวด์และรวมกับข้อมูลในเครื่องอย่างชาญฉลาด (Smart Multi-Device Merge)
+// ดึงข้อมูลจากคลาวด์และรวมกับข้อมูลในเครื่องอย่างชาญฉลาด (Smart Multi-Device Merge พร้อมเคารพการลบ)
 async function pullAndMergeSyncData() {
   const key = getSyncKey();
   if (!key) return;
@@ -557,11 +654,34 @@ async function pullAndMergeSyncData() {
           }
         }
 
-        const cloudFavs = result.data.favorites || [];
-        const cloudHist = result.data.history || [];
+        // ผสาน Tombstones
+        if (result.data.deletedFavorites) {
+          const curDelFavs = getDeletedFavorites();
+          localStorage.setItem(STORAGE_DELETED_FAVORITES, JSON.stringify({ ...curDelFavs, ...result.data.deletedFavorites }));
+        }
+        if (result.data.deletedHistory) {
+          const curDelHist = getDeletedHistory();
+          localStorage.setItem(STORAGE_DELETED_HISTORY, JSON.stringify({ ...curDelHist, ...result.data.deletedHistory }));
+        }
+        if (result.data.historyClearedAt) {
+          const curCleared = getHistoryClearedAt();
+          localStorage.setItem(STORAGE_HISTORY_CLEARED_AT, String(Math.max(curCleared, result.data.historyClearedAt)));
+        }
 
-        // รวมเรื่องโปรด: นำเรื่องที่ไม่ซ้ำมารวมกันทั้งหมด
-        const localFavs = getFavorites();
+        const delFavs = getDeletedFavorites();
+        const delHist = getDeletedHistory();
+        const histClearedAt = getHistoryClearedAt();
+
+        // 1. รวมเรื่องโปรด: กรองรายการที่ถูกลบออก
+        const cloudFavs = (result.data.favorites || []).filter(cf => {
+          const delTime = Math.max(delFavs[cf.title] || 0, delFavs[cf.mangaUrl] || 0);
+          return !delTime || (cf.savedAt || 0) > delTime;
+        });
+        const localFavs = getFavorites().filter(lf => {
+          const delTime = Math.max(delFavs[lf.title] || 0, delFavs[lf.mangaUrl] || 0);
+          return !delTime || (lf.savedAt || 0) > delTime;
+        });
+
         const mergedFavs = [...localFavs];
         cloudFavs.forEach(cf => {
           if (!mergedFavs.some(lf => lf.title === cf.title || (lf.mangaUrl && lf.mangaUrl === cf.mangaUrl))) {
@@ -570,8 +690,18 @@ async function pullAndMergeSyncData() {
         });
         localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(mergedFavs));
 
-        // รวมประวัติการอ่าน: ผสานตอนที่อ่านแล้ว (readChapters) และตอนล่าสุด
-        const localHist = getReadingHistory();
+        // 2. รวมประวัติการอ่าน: กรองรายการที่ถูกลบออก หรือเวลาเก่ากว่าคำสั่งล้างทั้งหมด
+        const cloudHist = (result.data.history || []).filter(ch => {
+          if (histClearedAt && (ch.updatedAt || 0) <= histClearedAt) return false;
+          const delTime = Math.max(delHist[ch.title] || 0, delHist[ch.mangaUrl] || 0);
+          return !delTime || (ch.updatedAt || 0) > delTime;
+        });
+        const localHist = getReadingHistory().filter(lh => {
+          if (histClearedAt && (lh.updatedAt || 0) <= histClearedAt) return false;
+          const delTime = Math.max(delHist[lh.title] || 0, delHist[lh.mangaUrl] || 0);
+          return !delTime || (lh.updatedAt || 0) > delTime;
+        });
+
         const mergedHist = [...localHist];
         cloudHist.forEach(ch => {
           const existIdx = mergedHist.findIndex(lh => lh.title === ch.title || (lh.mangaUrl && lh.mangaUrl === ch.mangaUrl));
@@ -597,7 +727,7 @@ async function pullAndMergeSyncData() {
         localStorage.setItem(STORAGE_HISTORY, JSON.stringify(mergedHist.slice(0, 500)));
 
         updateHistoryAndFavCounts();
-        pushSyncData(); // อัปโหลดข้อมูลในเครื่องขึ้นคลาวด์รับประกันว่าเรื่องโปรดที่มีอยู่ถูกบันทึกแน่นอน 100%
+        pushSyncData(); // อัปโหลดข้อมูลล่าสุดกลับไปยืนยันบน KV
 
         if (currentTagFilter === 'favorites' || currentTagFilter === 'history') {
           applyFilters();
@@ -741,16 +871,26 @@ function toggleFavorite(manga) {
   let favs = getFavorites();
   const keys = getMangaTitleKeys(manga.title);
   const existingIdx = favs.findIndex(f => {
-    if (f.title === manga.title) return true;
+    if (f.title === manga.title || (manga.mangaUrl && f.mangaUrl === manga.mangaUrl)) return true;
     const fKeys = getMangaTitleKeys(f.title);
     return keys.some(k => fKeys.includes(k));
   });
 
   let nowFav = false;
   if (existingIdx >= 0) {
+    // ลบออกจากเรื่องโปรด: บันทึก Tombstone ป้องกันการดึงกลับมาซิงก์
+    recordFavoriteDeletion(manga);
     favs.splice(existingIdx, 1);
     nowFav = false;
   } else {
+    // เพิ่มเข้าเรื่องโปรด: ยกเลิก Tombstone (ถ้ามี)
+    const delFavs = getDeletedFavorites();
+    delete delFavs[manga.title.trim()];
+    if (manga.mangaUrl) delete delFavs[manga.mangaUrl.trim()];
+    try {
+      localStorage.setItem(STORAGE_DELETED_FAVORITES, JSON.stringify(delFavs));
+    } catch (e) {}
+
     favs.unshift({
       title: manga.title,
       cover: manga.cover || '',
@@ -801,12 +941,72 @@ function toggleFavorite(manga) {
   return nowFav;
 }
 
+// ลบเรื่องโปรดโดยตรง (เช่น กดปุ่มกากบาทสีแดงบนการ์ดเรื่องโปรด)
+function deleteFavoriteItem(manga) {
+  if (!manga || !manga.title) return;
+  recordFavoriteDeletion(manga);
+  let favs = getFavorites();
+  const keys = getMangaTitleKeys(manga.title);
+  favs = favs.filter(f => {
+    if (f.title === manga.title || (manga.mangaUrl && f.mangaUrl === manga.mangaUrl)) return false;
+    const fKeys = getMangaTitleKeys(f.title);
+    return !keys.some(k => fKeys.includes(k));
+  });
+
+  try {
+    localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(favs));
+  } catch (e) {}
+
+  updateHistoryAndFavCounts();
+  pushSyncData();
+
+  document.querySelectorAll('.btn-card-fav').forEach(btn => {
+    const title = decodeURIComponent(btn.getAttribute('data-title') || '');
+    if (title === manga.title) {
+      btn.classList.remove('active');
+      btn.textContent = '⭐';
+      btn.title = 'บันทึกเป็นเรื่องโปรด';
+    }
+  });
+
+  updateModalFavButton(manga);
+
+  if (currentTagFilter === 'favorites') {
+    applyFilters();
+  }
+}
+
+// ล้างเรื่องโปรดทั้งหมด
+function clearAllFavorites() {
+  const favs = getFavorites();
+  if (favs.length === 0) return;
+  if (confirm('คุณต้องการล้างรายการเรื่องโปรดทั้งหมดใช่หรือไม่?')) {
+    favs.forEach(f => recordFavoriteDeletion(f));
+    try {
+      localStorage.removeItem(STORAGE_FAVORITES);
+    } catch (e) {}
+    updateHistoryAndFavCounts();
+    pushSyncData();
+    if (currentTagFilter === 'favorites') {
+      applyFilters();
+    }
+  }
+}
+
 // บันทึกประวัติการอ่านอัตโนมัติ (เรียกใช้อัตโนมัติเมื่อกดอ่านตอน)
 function recordReadingHistory(manga, chapterTitle, chapterUrl) {
   if (!manga || !manga.title || !chapterUrl) return;
   try {
     let history = getReadingHistory();
     const keys = getMangaTitleKeys(manga.title);
+
+    // ถ้านำเรื่องนี้กลับมาอ่านใหม่ ให้ยกเลิก Tombstone การลบ
+    const delHist = getDeletedHistory();
+    delete delHist[manga.title.trim()];
+    if (manga.mangaUrl) delete delHist[manga.mangaUrl.trim()];
+    try {
+      localStorage.setItem(STORAGE_DELETED_HISTORY, JSON.stringify(delHist));
+    } catch (e) {}
     
     // หาเรื่องเดิมถ้าเคยอ่าน
     let existing = history.find(h => {
@@ -859,8 +1059,21 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
 
 // ลบประวัติเรื่องใดเรื่องหนึ่ง
 function deleteHistoryItem(itemIdentifier) {
+  recordHistoryDeletion(itemIdentifier);
   let history = getReadingHistory();
-  history = history.filter(h => h.mangaUrl !== itemIdentifier && h.title !== itemIdentifier);
+  const targetKey = typeof itemIdentifier === 'object' ? (itemIdentifier.mangaUrl || itemIdentifier.title) : itemIdentifier;
+  const targetTitle = typeof itemIdentifier === 'object' ? itemIdentifier.title : itemIdentifier;
+  const targetKeys = targetTitle ? getMangaTitleKeys(targetTitle) : [];
+
+  history = history.filter(h => {
+    if (h.mangaUrl === targetKey || h.title === targetTitle) return false;
+    if (targetKeys.length > 0) {
+      const hKeys = getMangaTitleKeys(h.title);
+      if (targetKeys.some(k => hKeys.includes(k))) return false;
+    }
+    return true;
+  });
+
   try {
     localStorage.setItem(STORAGE_HISTORY, JSON.stringify(history));
   } catch (e) {}
@@ -874,8 +1087,10 @@ function deleteHistoryItem(itemIdentifier) {
 // ล้างประวัติทั้งหมด
 function clearAllHistory() {
   if (confirm('คุณต้องการล้างประวัติการอ่านทั้งหมดในเครื่องใช่หรือไม่?')) {
+    const now = Date.now();
     try {
       localStorage.removeItem(STORAGE_HISTORY);
+      localStorage.setItem(STORAGE_HISTORY_CLEARED_AT, String(now));
     } catch (e) {}
     updateHistoryAndFavCounts();
     pushSyncData(); // ซิงก์ขึ้น Cloudflare KV
@@ -1098,6 +1313,11 @@ function applyFilters() {
   const historyToolbar = document.getElementById('historyToolbar');
   if (historyToolbar) {
     historyToolbar.style.display = currentTagFilter === 'history' ? 'flex' : 'none';
+  }
+
+  const favoritesToolbar = document.getElementById('favoritesToolbar');
+  if (favoritesToolbar) {
+    favoritesToolbar.style.display = currentTagFilter === 'favorites' ? 'flex' : 'none';
   }
 
   const cloudSyncBar = document.getElementById('cloudSyncBar');
@@ -2008,6 +2228,13 @@ async function initAggregatorPage() {
     btnClearAllHistory.onclick = clearAllHistory;
   }
 
+  // ผูกปุ่มล้างเรื่องโปรดทั้งหมด
+  const btnClearAllFavorites = document.getElementById('btnClearAllFavorites');
+  if (btnClearAllFavorites && !btnClearAllFavorites.dataset.bound) {
+    btnClearAllFavorites.dataset.bound = "1";
+    btnClearAllFavorites.onclick = clearAllFavorites;
+  }
+
   // อัปเดตตัวเลขประวัติและเรื่องโปรด
   updateHistoryAndFavCounts();
 
@@ -2134,6 +2361,7 @@ function renderMangaCards() {
   }
 
   const isHistoryView = currentTagFilter === 'history';
+  const isFavView = currentTagFilter === 'favorites';
 
   slice.forEach(m => {
     const card = document.createElement('div');
@@ -2162,11 +2390,15 @@ function renderMangaCards() {
           <button class="btn-card-remove-hist" title="ลบเรื่องนี้ออกจากประวัติ" data-target="${encodeURIComponent(m.mangaUrl || m.title)}">
             ✕
           </button>
+        ` : (isFavView ? `
+          <button class="btn-card-remove-fav" title="ลบเรื่องนี้ออกจากเรื่องโปรด" data-target="${encodeURIComponent(m.mangaUrl || m.title)}">
+            ✕
+          </button>
         ` : `
           <a href="${m.mangaUrl}" target="_blank" class="manga-card-ext" title="เปิดดูเรื่องนี้ที่เว็บต้นทาง (${m.sourceName})" onclick="event.stopPropagation();">
             ↗
           </a>
-        `}
+        `)}
         <button class="btn-card-fav ${isFav ? 'active' : ''}" data-title="${encodeURIComponent(m.title)}" title="${isFav ? 'นำออกจากเรื่องโปรด' : 'บันทึกเป็นเรื่องโปรด'}">
           ${isFav ? '★' : '⭐'}
         </button>
@@ -2197,7 +2429,16 @@ function renderMangaCards() {
     if (removeHistBtn) {
       removeHistBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        deleteHistoryItem(m.mangaUrl || m.title);
+        deleteHistoryItem(m);
+      });
+    }
+
+    // คลิกปุ่มลบออกจากเรื่องโปรด
+    const removeFavBtn = card.querySelector('.btn-card-remove-fav');
+    if (removeFavBtn) {
+      removeFavBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteFavoriteItem(m);
       });
     }
 

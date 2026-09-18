@@ -168,15 +168,36 @@ export default {
       const cutoff = Date.now() - TWO_YEARS_MS;
       const combined = [...(Array.isArray(listA) ? listA : []), ...(Array.isArray(listB) ? listB : [])];
       
+    // รวมประวัติการอ่านอย่างชาญฉลาด (Smart Merge History พร้อมตรวจจับการลบ)
+    const mergeHistoryList = (histA, histB, deletedMap = {}, clearedAt = 0) => {
+      const map = new Map();
+      const combined = [...(Array.isArray(histA) ? histA : []), ...(Array.isArray(histB) ? histB : [])];
+      const cutoff = Date.now() - (730 * 24 * 60 * 60 * 1000); // 2 ปี
+
       for (const item of combined) {
         if (!item || !item.title) continue;
-        const itemKey = (item.mangaUrl || item.title).trim();
-        if (item.updatedAt && item.updatedAt < cutoff) continue; // ลบเมื่อเกิน 2 ปี
+        const titleKey = item.title.trim();
+        const urlKey = (item.mangaUrl || '').trim();
+        const itemUpdatedAt = item.updatedAt || 0;
+
+        // ตรวจสอบการล้างประวัติทั้งหมด
+        if (clearedAt > 0 && itemUpdatedAt <= clearedAt) {
+          continue;
+        }
+
+        // ตรวจสอบการลบรายเรื่อง
+        const deletedTime = Math.max(deletedMap[titleKey] || 0, deletedMap[urlKey] || 0);
+        if (deletedTime > 0 && itemUpdatedAt <= deletedTime) {
+          continue;
+        }
+
+        if (itemUpdatedAt && itemUpdatedAt < cutoff) continue; // ลบเมื่อเกิน 2 ปี
 
         const itemReadChapters = Array.isArray(item.readChapters) 
           ? item.readChapters 
           : (typeof item.readChapters === 'string' && item.readChapters ? [item.readChapters] : []);
 
+        const itemKey = urlKey || titleKey;
         if (!map.has(itemKey)) {
           map.set(itemKey, { 
             ...item,
@@ -186,11 +207,11 @@ export default {
           const existing = map.get(itemKey);
           const existRead = Array.isArray(existing.readChapters) ? existing.readChapters : [];
           const combinedRead = Array.from(new Set([...existRead, ...itemReadChapters]));
-          const newer = (item.updatedAt || 0) >= (existing.updatedAt || 0) ? item : existing;
+          const newer = itemUpdatedAt >= (existing.updatedAt || 0) ? item : existing;
           map.set(itemKey, {
             ...newer,
             readChapters: combinedRead,
-            updatedAt: Math.max(existing.updatedAt || 0, item.updatedAt || 0)
+            updatedAt: Math.max(existing.updatedAt || 0, itemUpdatedAt)
           });
         }
       }
@@ -200,18 +221,28 @@ export default {
       return result.slice(0, MAX_HISTORY_ITEMS); // คุมไม่เกิน 500 เรื่อง
     };
 
-    // รวมเรื่องโปรดอย่างชาญฉลาด (Smart Merge Favorites)
-    const mergeFavoritesList = (favA, favB) => {
+    // รวมเรื่องโปรดอย่างชาญฉลาด (Smart Merge Favorites พร้อมตรวจจับการลบ)
+    const mergeFavoritesList = (favA, favB, deletedMap = {}) => {
       const map = new Map();
       const combined = [...(Array.isArray(favA) ? favA : []), ...(Array.isArray(favB) ? favB : [])];
       for (const item of combined) {
         if (!item || !item.title) continue;
-        const itemKey = (item.mangaUrl || item.title).trim();
+        const titleKey = item.title.trim();
+        const urlKey = (item.mangaUrl || '').trim();
+        const itemSavedAt = item.savedAt || 0;
+
+        // ตรวจสอบการลบเรื่องโปรด
+        const deletedTime = Math.max(deletedMap[titleKey] || 0, deletedMap[urlKey] || 0);
+        if (deletedTime > 0 && itemSavedAt <= deletedTime) {
+          continue;
+        }
+
+        const itemKey = urlKey || titleKey;
         if (!map.has(itemKey)) {
           map.set(itemKey, item);
         } else {
           const existing = map.get(itemKey);
-          if ((item.savedAt || 0) >= (existing.savedAt || 0)) {
+          if (itemSavedAt >= (existing.savedAt || 0)) {
             map.set(itemKey, item);
           }
         }
@@ -331,15 +362,30 @@ export default {
         });
       }
 
-      let cloudData = { nickname: '', favorites: [], history: [] };
+      let cloudData = {
+        nickname: '',
+        favorites: [],
+        history: [],
+        deletedFavorites: {},
+        deletedHistory: {},
+        historyClearedAt: 0
+      };
+
       if (env && env.CHAT_KV) {
         try {
           const stored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
           if (stored) {
+            const delFavs = (typeof stored.deletedFavorites === 'object' && stored.deletedFavorites) ? stored.deletedFavorites : {};
+            const delHist = (typeof stored.deletedHistory === 'object' && stored.deletedHistory) ? stored.deletedHistory : {};
+            const clearedAt = Number(stored.historyClearedAt || 0);
+
             cloudData = {
               nickname: (stored.nickname || '').trim(),
-              favorites: Array.isArray(stored.favorites) ? stored.favorites : [],
-              history: Array.isArray(stored.history) ? mergeHistoryList(stored.history, []) : []
+              favorites: Array.isArray(stored.favorites) ? mergeFavoritesList(stored.favorites, [], delFavs) : [],
+              history: Array.isArray(stored.history) ? mergeHistoryList(stored.history, [], delHist, clearedAt) : [],
+              deletedFavorites: delFavs,
+              deletedHistory: delHist,
+              historyClearedAt: clearedAt
             };
           }
         } catch (e) {}
@@ -362,7 +408,15 @@ export default {
           });
         }
 
-        let existingData = { nickname: '', favorites: [], history: [] };
+        let existingData = {
+          nickname: '',
+          favorites: [],
+          history: [],
+          deletedFavorites: {},
+          deletedHistory: {},
+          historyClearedAt: 0
+        };
+
         if (env && env.CHAT_KV) {
           try {
             const stored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
@@ -370,21 +424,32 @@ export default {
               existingData = {
                 nickname: (stored.nickname || '').trim(),
                 favorites: Array.isArray(stored.favorites) ? stored.favorites : [],
-                history: Array.isArray(stored.history) ? stored.history : []
+                history: Array.isArray(stored.history) ? stored.history : [],
+                deletedFavorites: (typeof stored.deletedFavorites === 'object' && stored.deletedFavorites) ? stored.deletedFavorites : {},
+                deletedHistory: (typeof stored.deletedHistory === 'object' && stored.deletedHistory) ? stored.deletedHistory : {},
+                historyClearedAt: Number(stored.historyClearedAt || 0)
               };
             }
           } catch (e) {}
         }
 
-        // รวมข้อมูลแบบ Smart Merge: ผสานประวัติ, เรื่องโปรด และชื่อเล่นในแชทจากหลายเครื่อง
+        // ผสานรายการที่ถูกลบ (Tombstones) และเวลาล้างประวัติ
+        const mergedDeletedFavs = { ...existingData.deletedFavorites, ...(payload.deletedFavorites || {}) };
+        const mergedDeletedHist = { ...existingData.deletedHistory, ...(payload.deletedHistory || {}) };
+        const mergedHistClearedAt = Math.max(existingData.historyClearedAt || 0, Number(payload.historyClearedAt || 0));
+
+        // รวมข้อมูลแบบ Smart Merge: ผสานประวัติ, เรื่องโปรด และชื่อเล่นในแชทจากหลายเครื่อง โดยเคารพการลบ
         const nickname = (payload.nickname || existingData.nickname || '').trim().slice(0, 25);
-        const mergedFavorites = mergeFavoritesList(existingData.favorites, payload.favorites);
-        const mergedHistory = mergeHistoryList(existingData.history, payload.history);
+        const mergedFavorites = mergeFavoritesList(existingData.favorites, payload.favorites, mergedDeletedFavs);
+        const mergedHistory = mergeHistoryList(existingData.history, payload.history, mergedDeletedHist, mergedHistClearedAt);
 
         const resultData = {
           nickname,
           favorites: mergedFavorites,
           history: mergedHistory,
+          deletedFavorites: mergedDeletedFavs,
+          deletedHistory: mergedDeletedHist,
+          historyClearedAt: mergedHistClearedAt,
           lastSyncedAt: Date.now()
         };
 
