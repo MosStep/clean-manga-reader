@@ -25,7 +25,16 @@ export default {
     const targetUrl = url.searchParams.get("url");
 
     if (!targetUrl) {
-      return new Response("Missing 'url' query parameter", { status: 400 });
+      if (env && env.ASSETS) {
+        return env.ASSETS.fetch(request);
+      }
+      return new Response("Clean Manga Reader Proxy is running! Ready to proxy manga requests.", {
+        status: 200,
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
     }
 
     try {
