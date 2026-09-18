@@ -492,6 +492,12 @@ export default {
     }
 
     try {
+      if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+        return new Response("Proxy Error: Invalid target URL protocol", {
+          status: 400,
+          headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "text/plain; charset=utf-8" }
+        });
+      }
       const parsedTarget = new URL(targetUrl);
       const origin = parsedTarget.origin;
 

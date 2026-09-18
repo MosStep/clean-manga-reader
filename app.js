@@ -3250,6 +3250,14 @@ async function openChapterModal(manga, activeSource = null) {
     const readUrls = new Set((histItem && Array.isArray(histItem.readChapters)) ? histItem.readChapters : []);
 
     chapters = sortChaptersDescending(chapters);
+    try {
+      if (currentSource && currentSource.mangaUrl) {
+        sessionStorage.setItem('cached_chapters_' + currentSource.mangaUrl, JSON.stringify(chapters));
+      }
+      if (manga && manga.title) {
+        sessionStorage.setItem('cached_chapters_title_' + manga.title, JSON.stringify(chapters));
+      }
+    } catch (e) {}
     chapterList.innerHTML = '';
     chapters.forEach(c => {
       const isRead = readUrls.has(c.url);
@@ -3331,8 +3339,55 @@ function closeChapterModal() {
   }
 }
 
+// ฟังก์ชันทำความสะอาด URL นำทาง ป้องกันลิงก์พัง เช่น #/next/, #/prev/, javascript:
+function cleanChapterNavUrl(rawUrl, currentUrl = '') {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  const trimmed = rawUrl.trim();
+  if (
+    !trimmed ||
+    trimmed === '#' ||
+    trimmed === '/' ||
+    trimmed.startsWith('#') ||
+    trimmed.startsWith('javascript:') ||
+    trimmed.toLowerCase().includes('void(0)')
+  ) {
+    return '';
+  }
+
+  let finalUrl = trimmed;
+  if (finalUrl.startsWith('//')) {
+    finalUrl = 'https:' + finalUrl;
+  } else if (finalUrl.startsWith('/') && currentUrl) {
+    try {
+      finalUrl = new URL(finalUrl, currentUrl).href;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+    return '';
+  }
+
+  return finalUrl;
+}
+
 // 14. หน้า Reader (อ่านการ์ตูน)
 function parseReaderData(html, currentUrl = '') {
+  // ตรวจจับ Script ที่เซ็ตปุ่ม ตอนก่อนหน้า / ตอนต่อไป ผ่าน jQuery (พบบ่อยในตระกูล MangaReader และ NTR-Manga)
+  let scriptNextUrl = '';
+  let scriptPrevUrl = '';
+
+  const jqNext = html.match(/(?:jQuery|\$)\(["']a\.ch-next-btn["']\)[^;]*?attr\(["']href["'],\s*["']([^"']+)["']\)/i);
+  if (jqNext && jqNext[1]) {
+    scriptNextUrl = cleanChapterNavUrl(jqNext[1], currentUrl);
+  }
+
+  const jqPrev = html.match(/(?:jQuery|\$)\(["']a\.ch-prev-btn["']\)[^;]*?attr\(["']href["'],\s*["']([^"']+)["']\)/i);
+  if (jqPrev && jqPrev[1]) {
+    scriptPrevUrl = cleanChapterNavUrl(jqPrev[1], currentUrl);
+  }
+
   // 1. ลองหา ts_reader.run (Go, Fin, Dark, Up, Slow, NTR-Manga, Ecchi)
   const match = html.match(/ts_reader\.run\((\{[\s\S]*?\})\);/);
   if (match) {
@@ -3340,8 +3395,8 @@ function parseReaderData(html, currentUrl = '') {
       const readerJson = JSON.parse(match[1]);
       const rawImages = readerJson.sources?.[0]?.images || [];
       return {
-        prevUrl: readerJson.prevUrl || '',
-        nextUrl: readerJson.nextUrl || '',
+        prevUrl: cleanChapterNavUrl(readerJson.prevUrl, currentUrl) || scriptPrevUrl,
+        nextUrl: cleanChapterNavUrl(readerJson.nextUrl, currentUrl) || scriptNextUrl,
         images: rawImages.map(imgUrl => getProxyUrl(imgUrl, currentUrl || 'https://ped-manga.com/'))
       };
     } catch (e) {
@@ -3357,8 +3412,8 @@ function parseReaderData(html, currentUrl = '') {
     const nextMatch = html.match(/href="(\/content\/[^/]+\/[^"]+)"[^>]*>[^<]*→/);
     const baseUrl = 'https://whytoon.com';
     return {
-      prevUrl: prevMatch ? `${baseUrl}${prevMatch[1]}` : '',
-      nextUrl: nextMatch ? `${baseUrl}${nextMatch[1]}` : '',
+      prevUrl: prevMatch ? cleanChapterNavUrl(`${baseUrl}${prevMatch[1]}`, currentUrl) : '',
+      nextUrl: nextMatch ? cleanChapterNavUrl(`${baseUrl}${nextMatch[1]}`, currentUrl) : '',
       images: uniquePaths.map(p => getProxyUrl(`https://gd.whytoon.com/${p}`))
     };
   }
@@ -3381,8 +3436,8 @@ function parseReaderData(html, currentUrl = '') {
   const madaraImgs = doc.querySelectorAll('.reading-content img, .page-break img, .wp-manga-chapter-img');
   if (madaraImgs.length > 0) {
     const imgs = [];
-    const prevLink = doc.querySelector('.nav-previous a, a.prev_page, .btn.prev_page');
-    const nextLink = doc.querySelector('.nav-next a, a.next_page, .btn.next_page');
+    const prevLink = doc.querySelector('.nav-previous a:not(.disabled), a.prev_page:not(.disabled), .btn.prev_page:not(.disabled)');
+    const nextLink = doc.querySelector('.nav-next a:not(.disabled), a.next_page:not(.disabled), .btn.next_page:not(.disabled)');
 
     madaraImgs.forEach(img => {
       let src = img.getAttribute('data-src') || 
@@ -3415,16 +3470,16 @@ function parseReaderData(html, currentUrl = '') {
 
     if (imgs.length > 0) {
       return {
-        prevUrl: prevLink ? prevLink.getAttribute('href') : '',
-        nextUrl: nextLink ? nextLink.getAttribute('href') : '',
+        prevUrl: scriptPrevUrl || cleanChapterNavUrl(prevLink ? prevLink.getAttribute('href') : '', currentUrl),
+        nextUrl: scriptNextUrl || cleanChapterNavUrl(nextLink ? nextLink.getAttribute('href') : '', currentUrl),
         images: imgs
       };
     }
   }
 
   // 5. Fallback สำหรับเว็บทั่วไปที่ดึงจากแท็ก img ในเนื้อหา
-  const fallbackPrevLink = doc.querySelector('.nav-previous a, a.prev_page, .ch-prev-btn, .nextprev .prev');
-  const fallbackNextLink = doc.querySelector('.nav-next a, a.next_page, .ch-next-btn, .nextprev .next');
+  const fallbackPrevLink = doc.querySelector('.nav-previous a:not(.disabled), a.prev_page:not(.disabled), .ch-prev-btn:not(.disabled), .nextprev .prev:not(.disabled)');
+  const fallbackNextLink = doc.querySelector('.nav-next a:not(.disabled), a.next_page:not(.disabled), .ch-next-btn:not(.disabled), .nextprev .next:not(.disabled)');
   const imgEls = doc.querySelectorAll('#readerarea img, .readerarea img, .entry-content img, #ch-images img, .read-container img');
   const imgs = [];
   imgEls.forEach(img => {
@@ -3443,8 +3498,8 @@ function parseReaderData(html, currentUrl = '') {
   });
 
   return {
-    prevUrl: fallbackPrevLink ? fallbackPrevLink.getAttribute('href') : '',
-    nextUrl: fallbackNextLink ? fallbackNextLink.getAttribute('href') : '',
+    prevUrl: scriptPrevUrl || cleanChapterNavUrl(fallbackPrevLink ? fallbackPrevLink.getAttribute('href') : '', currentUrl),
+    nextUrl: scriptNextUrl || cleanChapterNavUrl(fallbackNextLink ? fallbackNextLink.getAttribute('href') : '', currentUrl),
     images: imgs
   };
 }
@@ -3569,8 +3624,20 @@ async function initReaderPage() {
   if (readerChaptersBtn) readerChaptersBtn.onclick = openInReaderModal;
   if (footerChaptersBtn) footerChaptersBtn.onclick = openInReaderModal;
 
-  if (!chapterUrl) {
-    statusEl.innerHTML = 'ไม่พบ URL ของตอนนี้ <br><button onclick="window.location.href=\'index.html?restore=1\'" class="btn-nav" style="margin-top:10px;">← กลับหน้ารายการตอน</button>';
+  const cleanCurrentChapterUrl = cleanChapterNavUrl(chapterUrl);
+  if (!cleanCurrentChapterUrl) {
+    statusEl.innerHTML = `
+      <div style="max-width:500px; margin: 40px auto; padding: 28px 20px; background: rgba(255,255,255,0.04); border-radius: 16px; border: 1px solid var(--border); text-align: center; backdrop-filter: blur(10px);">
+        <div style="font-size: 2.5rem; margin-bottom: 12px;">⚠️</div>
+        <h3 style="font-size: 1.15rem; margin-bottom: 8px; color:#fff;">ไม่พบตอนที่ระบุ หรือถึงตอนสุดท้ายแล้ว</h3>
+        <p style="color: var(--text-sub); font-size: 0.9rem; line-height: 1.6; margin-bottom: 20px;">
+          ระบบตรวจพบว่าไม่มีตอนถัดไป หรือเว็บต้นทางยังไม่ได้อัปเดตตอนใหม่
+        </p>
+        <div style="display: flex; gap: 10px; justify-content: center;">
+          <button onclick="window.location.href='index.html?restore=1'" class="btn-primary" style="padding: 10px 22px;">← กลับหน้ารายการตอน</button>
+        </div>
+      </div>
+    `;
     return;
   }
 
@@ -3578,8 +3645,41 @@ async function initReaderPage() {
     statusEl.style.display = 'block';
     statusEl.innerHTML = '<div class="spinner"></div>กำลังโหลดรูปภาพมังงะ...';
 
-    const html = await fetchViaProxy(chapterUrl);
-    const readerData = parseReaderData(html, chapterUrl);
+    const html = await fetchViaProxy(cleanCurrentChapterUrl);
+    const readerData = parseReaderData(html, cleanCurrentChapterUrl);
+
+    // ถ้าระบบยังหา prevUrl หรือ nextUrl ไม่พบ ให้ดึงจาก cached_chapters มาคำนวณตอนถัดไป/ก่อนหน้า
+    if (!readerData.prevUrl || !readerData.nextUrl) {
+      try {
+        let cachedChapters = null;
+        if (mangaObj.mangaUrl) {
+          const rawCached = sessionStorage.getItem('cached_chapters_' + mangaObj.mangaUrl);
+          if (rawCached) cachedChapters = JSON.parse(rawCached);
+        }
+        if (!cachedChapters && mangaObj.title) {
+          const rawCached = sessionStorage.getItem('cached_chapters_title_' + mangaObj.title);
+          if (rawCached) cachedChapters = JSON.parse(rawCached);
+        }
+
+        if (Array.isArray(cachedChapters) && cachedChapters.length > 0) {
+          const normCurrent = cleanCurrentChapterUrl.replace(/\/$/, '');
+          const currentIndex = cachedChapters.findIndex(c => c.url && cleanChapterNavUrl(c.url).replace(/\/$/, '') === normCurrent);
+          if (currentIndex !== -1) {
+            // เนื่องจาก chapters เรียงจาก มากสุด -> น้อยสุด (1 อยู่ล่างสุด)
+            // ตอนต่อไป (Next, เลขตอนมากกว่า) จะอยู่ที่ currentIndex - 1
+            // ตอนก่อนหน้า (Prev, เลขตอนน้อยกว่า) จะอยู่ที่ currentIndex + 1
+            if (!readerData.nextUrl && currentIndex > 0) {
+              readerData.nextUrl = cleanChapterNavUrl(cachedChapters[currentIndex - 1].url);
+            }
+            if (!readerData.prevUrl && currentIndex < cachedChapters.length - 1) {
+              readerData.prevUrl = cleanChapterNavUrl(cachedChapters[currentIndex + 1].url);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Cached chapters lookup error:", e);
+      }
+    }
 
     statusEl.style.display = 'none';
 
@@ -3593,7 +3693,7 @@ async function initReaderPage() {
             เนื่องจากตอนนี้ในเว็บต้นทาง (${mangaObj.sourceName}) มีการใช้ระบบป้องกันเหรียญหรือบอท คุณสามารถกดเปิดอ่านได้โดยตรงที่เว็บต้นทาง
           </p>
           <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-            <a href="${chapterUrl}" target="_blank" class="btn-primary" style="padding: 11px 22px; font-size: 0.9rem;">
+            <a href="${cleanCurrentChapterUrl}" target="_blank" class="btn-primary" style="padding: 11px 22px; font-size: 0.9rem;">
               เปิดอ่านที่เว็บต้นทาง ↗
             </a>
             <button onclick="window.history.back()" class="btn-secondary" style="padding: 11px 22px; font-size: 0.9rem;">
@@ -3624,7 +3724,7 @@ async function initReaderPage() {
     chapterEpTitle = chapterEpTitle.replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}/gi, '').trim();
 
     if (!chapterEpTitle || !/\d/.test(chapterEpTitle)) {
-      const decodedUrl = decodeURIComponent(chapterUrl || '');
+      const decodedUrl = decodeURIComponent(cleanCurrentChapterUrl || '');
       const m = decodedUrl.match(/ตอนที่[-_ ]*(\d+(?:\.\d+)?)/i) ||
                 decodedUrl.match(/ch(?:apter)?[-_ ]*(\d+(?:\.\d+)?)/i) ||
                 decodedUrl.match(/\/(\d+(?:\.\d+)?)\/?$/) ||
@@ -3640,7 +3740,7 @@ async function initReaderPage() {
       titleEl.textContent = `${mangaObj.title} - ${chapterEpTitle}`;
     }
 
-    recordReadingHistory(mangaObj, chapterEpTitle, chapterUrl);
+    recordReadingHistory(mangaObj, chapterEpTitle, cleanCurrentChapterUrl);
 
     const setupNavButtons = (prev, next) => {
       const buildNavUrl = (targetEpUrl) => {
@@ -3664,11 +3764,13 @@ async function initReaderPage() {
 
       const setBtn = (btn, url) => {
         if (!btn) return;
-        if (url) {
-          btn.onclick = () => { window.location.href = buildNavUrl(url); };
+        const validUrl = cleanChapterNavUrl(url);
+        if (validUrl) {
+          btn.onclick = () => { window.location.href = buildNavUrl(validUrl); };
           btn.disabled = false;
         } else {
           btn.disabled = true;
+          btn.onclick = null;
         }
       };
       setBtn(prevBtn, prev);

@@ -1,4 +1,4 @@
-﻿================================================================================
+================================================================================
            CLEAN MANGA READER - AI HANDOVER & PROJECT SPECIFICATION
                      (เอกสารส่งต่องานสำหรับ AI ตัวต่อไป)
 ================================================================================
@@ -42,6 +42,12 @@
 6. การแก้ปัญหารูปภาพติด Hotlink Protection:
    - รูปภาพบนโดเมน server1.webtoon168.com (ของ Ped-Manga และ MangaStep)
      ต้องส่ง Referer เป็น https://ped-manga.com/ ใน Proxy Header เสมอ (ระบบใน app.js และ worker.js ทำไว้แล้ว)
+
+7. กฎการนำทางตอนก่อนหน้า/ตอนต่อไป (CHAPTER NAVIGATION & SAFE URLS):
+   - ห้ามส่งค่า URL ที่เป็น placeholder เช่น `#/next/`, `#/prev/`, `#`, `javascript:...` เข้าสู่ Proxy โดยเด็ดขาด
+   - มีฟังก์ชัน cleanChapterNavUrl เพื่อกรองและตรวจสอบความถูกต้องของ URL
+   - ตรวจจับ script jQuery (พบบ่อยใน NTR-Manga และเว็บตระกูล MangaReader) ที่เซ็ต href ให้กับปุ่ม ch-next-btn / ch-prev-btn ในตอนที่ไม่มี ts_reader.run
+   - มีระบบ Fallback อัจฉริยะ ดึงจาก cached_chapters ใน sessionStorage เพื่อคำนวณตอนก่อนหน้า/ถัดไป (index - 1 / index + 1) ได้อย่างแม่นยำ 100%
 
 --------------------------------------------------------------------------------
 [ 3. แหล่งการ์ตูนทั้งหมด 16 เว็บในระบบ (CONFIG.SOURCES) ]
