@@ -400,7 +400,7 @@ function getMangaTitleKeys(title) {
   const fullNoStop = fullClean.replace(thaiStopwords, '').trim();
   if (fullNoStop && fullNoStop.length >= 3) keys.add(fullNoStop);
 
-  // 3. แยกส่วนชื่อ (กรณีมีทั้งชื่ออังกฤษ - ชื่อไทย เช่น "I married the dragon I killed - ข้าแต่งงานกับมังกรที่ข้าฆ่า")
+  // 3. แยกส่วนชื่อกรณีมีเครื่องหมายคั่น (เช่น "A - B")
   const parts = title.split(/[-–—/|:()[\]~]+/).map(p => p.trim()).filter(Boolean);
   parts.forEach(part => {
     const partClean = cleanStr(part);
@@ -412,6 +412,27 @@ function getMangaTitleKeys(title) {
       keys.add(partNoStop);
     }
   });
+
+  // 4. ตรวจจับและแยกบล็อกภาษาอังกฤษและภาษาไทยที่อยู่ด้วยกัน (เช่น "Reincarnator's Stream การไลฟ์สดของผู้หวนคืน")
+  const enBlocks = title.match(/[a-zA-Z0-9'’]+(?:\s+[a-zA-Z0-9'’]+)*/g);
+  if (enBlocks) {
+    enBlocks.forEach(b => {
+      const bClean = cleanStr(b);
+      if (bClean && bClean.length >= 3) keys.add(bClean);
+    });
+  }
+
+  const thBlocks = title.match(/[\u0E00-\u0E7F]+(?:\s+[\u0E00-\u0E7F]+)*/g);
+  if (thBlocks) {
+    thBlocks.forEach(b => {
+      const bClean = cleanStr(b);
+      if (bClean && bClean.length >= 3) {
+        keys.add(bClean);
+        const bNoStop = bClean.replace(thaiStopwords, '').trim();
+        if (bNoStop && bNoStop.length >= 3) keys.add(bNoStop);
+      }
+    });
+  }
 
   return Array.from(keys);
 }
@@ -549,6 +570,7 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
       sourceUrl: manga.sourceUrl || (existing ? existing.sourceUrl : ''),
       sourceType: manga.sourceType || (existing ? existing.sourceType : 'mangareader'),
       readable: manga.readable !== false,
+      altSources: (manga.altSources && manga.altSources.length > 0) ? manga.altSources : (existing && existing.altSources ? existing.altSources : []),
       lastChapterTitle: chapterTitle || 'ตอนที่อ่านล่าสุด',
       lastChapterUrl: chapterUrl,
       readChapters: readChapters,
@@ -1024,6 +1046,10 @@ async function initAggregatorPage() {
   allMangaList = mergeAndDeduplicate([...batch1, ...batch2]);
   filteredList = [...allMangaList];
 
+  try {
+    sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+  } catch (e) {}
+
   statusEl.style.display = 'none';
 
   if (allMangaList.length === 0) {
@@ -1082,6 +1108,9 @@ async function initAggregatorPage() {
         loadMoreBtn.querySelector('span').textContent = 'กำลังโหลดมังงะเพิ่ม...';
         const newBatch = await fetchMangaBatch(loadedPagesPerSource);
         allMangaList = mergeAndDeduplicate([...allMangaList, ...newBatch]);
+        try {
+          sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+        } catch (e) {}
         applyFilters();
         loadMoreBtn.disabled = false;
         loadMoreBtn.querySelector('span').textContent = 'โหลดเรื่องเพิ่มเติม';
@@ -1495,6 +1524,21 @@ async function openChapterModal(manga, activeSource = null) {
     }
   } catch (e) {}
 
+  // ดึงแหล่งที่เคยค้นพบและบันทึกไว้ใน localStorage ตามคีย์ชื่อเรื่อง
+  try {
+    currentKeys.forEach(k => {
+      const savedSrcs = JSON.parse(localStorage.getItem('manga_alts_' + k) || '[]');
+      if (Array.isArray(savedSrcs)) {
+        if (!manga.altSources) manga.altSources = [];
+        savedSrcs.forEach(s => {
+          if (s && s.sourceId && s.sourceId !== manga.sourceId && !manga.altSources.some(a => a.sourceId === s.sourceId || a.mangaUrl === s.mangaUrl)) {
+            manga.altSources.push(s);
+          }
+        });
+      }
+    });
+  } catch (e) {}
+
   // ตรวจสอบใน allMangaList เผื่อมีเรื่องเดียวกันจากเว็บอื่นที่เพิ่งโหลดมา
   allMangaList.forEach(other => {
     if (other.mangaUrl !== manga.mangaUrl) {
@@ -1638,6 +1682,13 @@ async function openChapterModal(manga, activeSource = null) {
         allSources.push(s);
       }
     });
+
+    // บันทึกแหล่งที่พบทั้งหมดลง localStorage ตามคีย์ชื่อเรื่อง เพื่อให้เปิดจากที่ไหนก็มีเว็บอื่นครบถ้วน
+    try {
+      currentKeys.forEach(k => {
+        localStorage.setItem('manga_alts_' + k, JSON.stringify(allSources));
+      });
+    } catch (e) {}
 
     sourceSelector.style.display = 'flex';
     sourcePills.innerHTML = '';
@@ -2002,20 +2053,32 @@ async function initReaderPage() {
   let sourceUrl = params.get('source');
   let sourceType = params.get('sourceType') || 'mangareader';
 
-  if (!mangaUrl) {
+  // โหลด allMangaList จาก cache ใน sessionStorage เผื่อใช้ค้นหาเว็บอื่นเมื่อเปิดเลือกตอน
+  if (!allMangaList || allMangaList.length === 0) {
     try {
-      const saved = sessionStorage.getItem('currentManga');
-      if (saved) {
-        const m = JSON.parse(saved);
-        mangaUrl = m.mangaUrl;
-        mangaTitle = m.title;
-        sourceId = m.sourceId;
-        sourceName = m.sourceName;
-        sourceUrl = m.sourceUrl;
-        sourceType = m.sourceType;
+      const cached = sessionStorage.getItem('cached_all_manga');
+      if (cached) {
+        allMangaList = JSON.parse(cached);
       }
     } catch (e) {}
   }
+
+  let savedAltSources = [];
+  try {
+    const saved = sessionStorage.getItem('currentManga');
+    if (saved) {
+      const m = JSON.parse(saved);
+      if (!mangaUrl) mangaUrl = m.mangaUrl;
+      if (!mangaTitle) mangaTitle = m.title;
+      if (!sourceId) sourceId = m.sourceId;
+      if (!sourceName) sourceName = m.sourceName;
+      if (!sourceUrl) sourceUrl = m.sourceUrl;
+      if (!sourceType) sourceType = m.sourceType;
+      if (m.altSources && Array.isArray(m.altSources)) {
+        savedAltSources = m.altSources;
+      }
+    }
+  } catch (e) {}
 
   const mangaObj = {
     title: mangaTitle || title.split(' - ')[0] || 'มังงะ',
@@ -2023,7 +2086,8 @@ async function initReaderPage() {
     sourceId: sourceId || '',
     sourceName: sourceName || 'Online',
     sourceUrl: sourceUrl || '',
-    sourceType: sourceType || 'mangareader'
+    sourceType: sourceType || 'mangareader',
+    altSources: savedAltSources
   };
 
   const titleEl = document.getElementById('readerTitle');
