@@ -98,10 +98,25 @@
       </div>
     </div>
 
+    <!-- Cloud Sync Toolbar (แสดงเฉพาะในแท็บเรื่องโปรดและประวัติการอ่าน) -->
+    <div id="cloudSyncBar" class="cloud-sync-bar" style="display: none;">
+      <div class="sync-bar-left">
+        <span class="sync-cloud-icon">☁️</span>
+        <span class="sync-title">รหัสคลาวด์ของคุณ:</span>
+        <span class="sync-code-badge" id="syncCodeBadge" title="แตะเพื่อคัดลอกรหัส">...</span>
+        <button type="button" id="btnCopySyncKey" class="btn-copy-sync" title="คัดลอกรหัส">📋 คัดลอก</button>
+      </div>
+      <div class="sync-bar-right">
+        <input type="text" id="syncKeyInput" class="sync-key-input" placeholder="ใส่รหัสจากเครื่องอื่น" maxlength="8" autocomplete="off">
+        <button type="button" id="btnApplySyncKey" class="btn-apply-sync">เชื่อมต่อ</button>
+        <span id="syncStatusMsg" class="sync-status-msg"></span>
+      </div>
+    </div>
+
     <!-- History Toolbar -->
     <div id="historyToolbar" class="history-toolbar" style="display: none;">
       <div class="history-toolbar-info">
-        <span>🕒 รายการที่คุณเคยเข้าอ่าน (บันทึกอัตโนมัติในเครื่อง ไม่ต้องล็อกอิน)</span>
+        <span>🕒 รายการที่คุณเคยเข้าอ่าน (บันทึกอัตโนมัติ ไม่เกิน 500 เรื่อง)</span>
       </div>
       <button id="btnClearAllHistory" class="btn-clear-history">🗑️ ล้างประวัติทั้งหมด</button>
     </div>

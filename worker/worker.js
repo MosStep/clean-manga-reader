@@ -155,6 +155,251 @@ export default {
       }
     }
 
+    // =========================================================================
+    // 2. ระบบ Private Sync Key (Multi-Device, No Collision, Auto-Expand 60%, Auto-Merge)
+    // =========================================================================
+    const TWO_YEARS_MS = 730 * 24 * 60 * 60 * 1000; // 2 ปี (730 วัน)
+    const TWO_YEARS_SECONDS = 730 * 24 * 60 * 60;   // 63,072,000 วินาที
+    const MAX_HISTORY_ITEMS = 500;                  // เพิ่มเป็น 500 เรื่อง
+
+    // รวมประวัติการอ่านอย่างชาญฉลาด ไม่ให้ข้อมูลชนกัน พร้อมจำตอนที่อ่านแล้ว (readChapters)
+    const mergeHistoryList = (listA, listB) => {
+      const map = new Map();
+      const cutoff = Date.now() - TWO_YEARS_MS;
+      const combined = [...(Array.isArray(listA) ? listA : []), ...(Array.isArray(listB) ? listB : [])];
+      
+      for (const item of combined) {
+        if (!item || !item.title) continue;
+        const itemKey = (item.mangaUrl || item.title).trim();
+        if (item.updatedAt && item.updatedAt < cutoff) continue; // ลบเมื่อเกิน 2 ปี
+
+        if (!map.has(itemKey)) {
+          map.set(itemKey, { 
+            ...item,
+            readChapters: Array.isArray(item.readChapters) ? [...item.readChapters] : []
+          });
+        } else {
+          const existing = map.get(itemKey);
+          const readChapters = Array.from(new Set([
+            ...(Array.isArray(existing.readChapters) ? existing.readChapters : []),
+            ...(Array.isArray(item.readChapters) ? item.readChapters : [])
+          ]));
+          const newer = (item.updatedAt || 0) >= (existing.updatedAt || 0) ? item : existing;
+          map.set(itemKey, {
+            ...newer,
+            readChapters,
+            updatedAt: Math.max(existing.updatedAt || 0, item.updatedAt || 0)
+          });
+        }
+      }
+
+      const result = Array.from(map.values());
+      result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      return result.slice(0, MAX_HISTORY_ITEMS); // คุมไม่เกิน 500 เรื่อง
+    };
+
+    // รวมเรื่องโปรดอย่างชาญฉลาด (Smart Merge Favorites)
+    const mergeFavoritesList = (favA, favB) => {
+      const map = new Map();
+      const combined = [...(Array.isArray(favA) ? favA : []), ...(Array.isArray(favB) ? favB : [])];
+      for (const item of combined) {
+        if (!item || !item.title) continue;
+        const itemKey = (item.mangaUrl || item.title).trim();
+        if (!map.has(itemKey)) {
+          map.set(itemKey, item);
+        } else {
+          const existing = map.get(itemKey);
+          if ((item.savedAt || 0) >= (existing.savedAt || 0)) {
+            map.set(itemKey, item);
+          }
+        }
+      }
+      const result = Array.from(map.values());
+      result.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+      return result;
+    };
+
+    // 2.1 สุ่มรหัสใหม่แท้ 100% ห้ามซ้ำ พร้อมขยายหลักอัตโนมัติเมื่อแตะ 60%
+    if (url.pathname === '/api/sync/generate-key' && request.method === 'POST') {
+      const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      const digits = '0123456789';
+
+      if (!env || !env.CHAT_KV) {
+        let key = '';
+        for (let i = 0; i < 2; i++) key += letters.charAt(Math.floor(Math.random() * letters.length));
+        for (let i = 0; i < 2; i++) key += digits.charAt(Math.floor(Math.random() * digits.length));
+        return new Response(JSON.stringify({ success: true, key }), {
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      try {
+        let meta = await env.CHAT_KV.get('sync_registry_meta', { type: 'json' });
+        if (!meta) {
+          meta = { count: 0, letterCount: 2, digitCount: 2 };
+        }
+
+        // ตรวจสอบเกณฑ์ 60% ของความเป็นไปได้ทั้งหมด (เช่น 2 ตัวอักษร + 2 ตัวเลข = 26*26*100 = 67,600)
+        const totalPossible = Math.pow(26, meta.letterCount) * Math.pow(10, meta.digitCount);
+        if (meta.count >= totalPossible * 0.60) {
+          // ขยายเพิ่มตัวอักษรนำหน้าอีก 1 หลักอัตโนมัติ
+          meta.letterCount += 1;
+        }
+
+        let generatedKey = '';
+        let attempts = 0;
+        while (attempts < 20) {
+          attempts++;
+          let candidate = '';
+          for (let i = 0; i < meta.letterCount; i++) candidate += letters.charAt(Math.floor(Math.random() * letters.length));
+          for (let i = 0; i < meta.digitCount; i++) candidate += digits.charAt(Math.floor(Math.random() * digits.length));
+
+          // ตรวจสอบใน KV ว่าซ้ำหรือไม่
+          const existing = await env.CHAT_KV.get(`sync_key_${candidate}`);
+          if (!existing) {
+            generatedKey = candidate;
+            break;
+          }
+        }
+
+        if (!generatedKey) {
+          meta.letterCount += 1;
+          let candidate = '';
+          for (let i = 0; i < meta.letterCount; i++) candidate += letters.charAt(Math.floor(Math.random() * letters.length));
+          for (let i = 0; i < meta.digitCount; i++) candidate += digits.charAt(Math.floor(Math.random() * digits.length));
+          generatedKey = candidate;
+        }
+
+        await env.CHAT_KV.put(`sync_key_${generatedKey}`, JSON.stringify({ createdAt: Date.now() }));
+        meta.count += 1;
+        await env.CHAT_KV.put('sync_registry_meta', JSON.stringify(meta));
+
+        return new Response(JSON.stringify({ success: true, key: generatedKey }), {
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ success: false, error: err.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+    }
+
+    // 2.2 คืนคีย์ชั่วคราวที่ไม่ได้ใช้งาน เมื่อเปลี่ยนไปใช้รหัสเดิม
+    if (url.pathname === '/api/sync/release-key' && request.method === 'POST') {
+      try {
+        const data = await request.json();
+        const key = (data.key || '').trim().toUpperCase();
+        if (key && env && env.CHAT_KV) {
+          const existingData = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
+          const isEmpty = !existingData || (
+            (!existingData.favorites || existingData.favorites.length === 0) &&
+            (!existingData.history || existingData.history.length === 0)
+          );
+
+          if (isEmpty) {
+            await env.CHAT_KV.delete(`sync_key_${key}`);
+            await env.CHAT_KV.delete(`sync_data_${key}`);
+
+            let meta = await env.CHAT_KV.get('sync_registry_meta', { type: 'json' });
+            if (meta && meta.count > 0) {
+              meta.count -= 1;
+              await env.CHAT_KV.put('sync_registry_meta', JSON.stringify(meta));
+            }
+          }
+        }
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ success: false, error: err.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+    }
+
+    // 2.3 ดึงข้อมูล Sync ของคีย์นั้น
+    if (url.pathname === '/api/sync/data' && request.method === 'GET') {
+      const key = (url.searchParams.get('key') || '').trim().toUpperCase();
+      if (!key) {
+        return new Response(JSON.stringify({ success: false, error: "Missing key" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      let cloudData = { favorites: [], history: [] };
+      if (env && env.CHAT_KV) {
+        try {
+          const stored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
+          if (stored) {
+            cloudData = {
+              favorites: Array.isArray(stored.favorites) ? stored.favorites : [],
+              history: Array.isArray(stored.history) ? mergeHistoryList(stored.history, []) : []
+            };
+          }
+        } catch (e) {}
+      }
+
+      return new Response(JSON.stringify({ success: true, data: cloudData }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
+    // 2.4 บันทึกและ Smart Merge ข้อมูลข้ามอุปกรณ์
+    if (url.pathname === '/api/sync/data' && request.method === 'POST') {
+      try {
+        const payload = await request.json();
+        const key = (payload.key || '').trim().toUpperCase();
+        if (!key) {
+          return new Response(JSON.stringify({ success: false, error: "Missing key" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+          });
+        }
+
+        let existingData = { favorites: [], history: [] };
+        if (env && env.CHAT_KV) {
+          try {
+            const stored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
+            if (stored) {
+              existingData = {
+                favorites: Array.isArray(stored.favorites) ? stored.favorites : [],
+                history: Array.isArray(stored.history) ? stored.history : []
+              };
+            }
+          } catch (e) {}
+        }
+
+        // รวมข้อมูลแบบ Smart Merge: ผสานประวัติและเรื่องโปรดจากหลายเครื่อง
+        const mergedFavorites = mergeFavoritesList(existingData.favorites, payload.favorites);
+        const mergedHistory = mergeHistoryList(existingData.history, payload.history);
+
+        const resultData = {
+          favorites: mergedFavorites,
+          history: mergedHistory,
+          lastSyncedAt: Date.now()
+        };
+
+        if (env && env.CHAT_KV) {
+          await env.CHAT_KV.put(`sync_data_${key}`, JSON.stringify(resultData), {
+            expirationTtl: TWO_YEARS_SECONDS // 730 วัน (2 ปี)
+          });
+          await env.CHAT_KV.put(`sync_key_${key}`, JSON.stringify({ active: true, updatedAt: Date.now() }));
+        }
+
+        return new Response(JSON.stringify({ success: true, data: resultData }), {
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ success: false, error: err.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+    }
+
     const targetUrl = url.searchParams.get("url");
 
     if (!targetUrl) {

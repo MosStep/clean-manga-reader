@@ -451,10 +451,241 @@ function getMangaTitleKeys(title) {
 
 // ==========================================================
 // ระบบประวัติการอ่าน (Reading History) และเรื่องโปรด (Favorites)
-// ทำงานผ่าน localStorage 100% ไม่ต้องมีเซิร์ฟเวอร์ และขึ้น GitHub Pages ได้ทันที
+// รองรับ Local Storage + Cloudflare KV Multi-Device Sync
 // ==========================================================
 const STORAGE_HISTORY = 'clean_manga_reading_history';
 const STORAGE_FAVORITES = 'clean_manga_favorites';
+const SYNC_STORAGE_KEY = 'clean_manga_sync_key';
+
+let currentSyncKey = localStorage.getItem(SYNC_STORAGE_KEY) || '';
+let syncDebounceTimer = null;
+
+// ดึงรหัสซิงก์ปัจจุบัน
+function getSyncKey() {
+  if (!currentSyncKey) {
+    currentSyncKey = localStorage.getItem(SYNC_STORAGE_KEY) || '';
+  }
+  return currentSyncKey;
+}
+
+// เริ่มต้นระบบซิงก์ (สุ่มรหัสให้อัตโนมัติหากยังไม่มี)
+async function initSyncEngine() {
+  let key = getSyncKey();
+  if (!key) {
+    try {
+      const res = await fetch('/api/sync/generate-key', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.key) {
+          key = data.key.toUpperCase();
+          currentSyncKey = key;
+          localStorage.setItem(SYNC_STORAGE_KEY, key);
+          // ส่งข้อมูลเดิมที่มีอยู่ในเครื่องขึ้นคลาวด์ก้อนแรกทันที
+          pushSyncData();
+        }
+      }
+    } catch (e) {
+      console.warn("Generate sync key error:", e);
+    }
+  }
+
+  // อัปเดตรหัสบน UI
+  updateSyncKeyUI();
+
+  // ดึงข้อมูลจากคลาวด์มาซิงก์กับในเครื่อง
+  if (key) {
+    pullAndMergeSyncData();
+  }
+}
+
+// ส่งข้อมูลประวัติและเรื่องโปรดไปซิงก์บนคลาวด์ (Debounced 500ms)
+function pushSyncData() {
+  const key = getSyncKey();
+  if (!key) return;
+
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(async () => {
+    try {
+      const favorites = getFavorites();
+      const history = getReadingHistory();
+      const res = await fetch('/api/sync/data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, favorites, history })
+      });
+      if (res.ok) {
+        const result = await res.json();
+        if (result.success && result.data) {
+          if (Array.isArray(result.data.favorites)) {
+            localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(result.data.favorites));
+          }
+          if (Array.isArray(result.data.history)) {
+            localStorage.setItem(STORAGE_HISTORY, JSON.stringify(result.data.history));
+          }
+          updateHistoryAndFavCounts();
+        }
+      }
+    } catch (e) {
+      console.warn("Push sync data error:", e);
+    }
+  }, 500);
+}
+
+// ดึงข้อมูลจากคลาวด์และรวมกับข้อมูลในเครื่องอย่างชาญฉลาด (Smart Multi-Device Merge)
+async function pullAndMergeSyncData() {
+  const key = getSyncKey();
+  if (!key) return;
+
+  try {
+    const res = await fetch(`/api/sync/data?key=${encodeURIComponent(key)}`);
+    if (res.ok) {
+      const result = await res.json();
+      if (result.success && result.data) {
+        const cloudFavs = result.data.favorites || [];
+        const cloudHist = result.data.history || [];
+
+        // รวมเรื่องโปรด: นำเรื่องที่ไม่ซ้ำมารวมกันทั้งหมด
+        const localFavs = getFavorites();
+        const mergedFavs = [...localFavs];
+        cloudFavs.forEach(cf => {
+          if (!mergedFavs.some(lf => lf.title === cf.title || (lf.mangaUrl && lf.mangaUrl === cf.mangaUrl))) {
+            mergedFavs.push(cf);
+          }
+        });
+        localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(mergedFavs));
+
+        // รวมประวัติการอ่าน: ผสานตอนที่อ่านแล้ว (readChapters) และตอนล่าสุด
+        const localHist = getReadingHistory();
+        const mergedHist = [...localHist];
+        cloudHist.forEach(ch => {
+          const existIdx = mergedHist.findIndex(lh => lh.title === ch.title || (lh.mangaUrl && lh.mangaUrl === ch.mangaUrl));
+          if (existIdx >= 0) {
+            const exist = mergedHist[existIdx];
+            const readChapters = Array.from(new Set([
+              ...(Array.isArray(exist.readChapters) ? exist.readChapters : []),
+              ...(Array.isArray(ch.readChapters) ? ch.readChapters : [])
+            ]));
+            const newer = (ch.updatedAt || 0) >= (exist.updatedAt || 0) ? ch : exist;
+            mergedHist[existIdx] = {
+              ...newer,
+              readChapters,
+              updatedAt: Math.max(exist.updatedAt || 0, ch.updatedAt || 0)
+            };
+          } else {
+            mergedHist.push(ch);
+          }
+        });
+
+        // จำกัด 500 เรื่อง เรียงตามเวลาอ่านล่าสุด
+        mergedHist.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        localStorage.setItem(STORAGE_HISTORY, JSON.stringify(mergedHist.slice(0, 500)));
+
+        updateHistoryAndFavCounts();
+        if (currentTagFilter === 'favorites' || currentTagFilter === 'history') {
+          applyFilters();
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Pull sync data error:", e);
+  }
+}
+
+// สลับไปใช้รหัสเดิมจากเครื่องอื่น (เชื่อมต่อข้ามอุปกรณ์)
+async function switchSyncKey(newKey) {
+  const cleanKey = (newKey || '').trim().toUpperCase();
+  if (!cleanKey || cleanKey.length < 3) {
+    alert('กรุณาใส่รหัสซิงก์ที่ถูกต้อง');
+    return;
+  }
+
+  const oldKey = getSyncKey();
+  const statusMsg = document.getElementById('syncStatusMsg');
+  if (statusMsg) statusMsg.textContent = '⏳ กำลังเชื่อมต่อ...';
+
+  try {
+    // ถ้ามีรหัสเก่าชั่วคราวและยังไม่มีข้อมูล ให้คืนคีย์เก่าเพื่อไม่ให้เปลืองโควตา
+    if (oldKey && oldKey !== cleanKey) {
+      try {
+        await fetch('/api/sync/release-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: oldKey })
+        });
+      } catch (e) {}
+    }
+
+    // บันทึกรหัสใหม่ลงเครื่องนี้ถาวร
+    currentSyncKey = cleanKey;
+    localStorage.setItem(SYNC_STORAGE_KEY, cleanKey);
+    updateSyncKeyUI();
+
+    // ดึงข้อมูลจากรหัสใหม่มาซิงก์ทันที
+    await pullAndMergeSyncData();
+    // ส่งข้อมูลรวมกลับขึ้นคลาวด์
+    pushSyncData();
+
+    if (statusMsg) {
+      statusMsg.textContent = '✓ เชื่อมต่อสำเร็จ!';
+      setTimeout(() => { statusMsg.textContent = ''; }, 3000);
+    }
+  } catch (err) {
+    if (statusMsg) statusMsg.textContent = 'เชื่อมต่อไม่สำเร็จ';
+  }
+}
+
+// อัปเดต UI ของแถบซิงก์
+function updateSyncKeyUI() {
+  const badge = document.getElementById('syncCodeBadge');
+  const copyBtn = document.getElementById('btnCopySyncKey');
+  const applyBtn = document.getElementById('btnApplySyncKey');
+  const keyInput = document.getElementById('syncKeyInput');
+  const key = getSyncKey();
+
+  if (badge) {
+    badge.textContent = key || 'กำลังสุ่ม...';
+    badge.onclick = () => copySyncKey();
+  }
+
+  if (copyBtn && !copyBtn.dataset.bound) {
+    copyBtn.dataset.bound = "1";
+    copyBtn.onclick = () => copySyncKey();
+  }
+
+  if (applyBtn && !applyBtn.dataset.bound) {
+    applyBtn.dataset.bound = "1";
+    applyBtn.onclick = () => {
+      if (keyInput) switchSyncKey(keyInput.value);
+    };
+  }
+
+  if (keyInput && !keyInput.dataset.bound) {
+    keyInput.dataset.bound = "1";
+    keyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        switchSyncKey(keyInput.value);
+      }
+    });
+  }
+}
+
+// คัดลอกรหัสซิงก์
+function copySyncKey() {
+  const key = getSyncKey();
+  if (!key) return;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(key).then(() => {
+      const statusMsg = document.getElementById('syncStatusMsg');
+      if (statusMsg) {
+        statusMsg.textContent = `✓ คัดลอก ${key} แล้ว`;
+        setTimeout(() => { statusMsg.textContent = ''; }, 2500);
+      }
+    });
+  } else {
+    prompt('คัดลอกรหัสของคุณ:', key);
+  }
+}
 
 // ดึงประวัติการอ่าน
 function getReadingHistory() {
@@ -523,6 +754,7 @@ function toggleFavorite(manga) {
   } catch (e) {}
 
   updateHistoryAndFavCounts();
+  pushSyncData(); // ซิงก์ขึ้น Cloudflare KV
 
   // อัปเดตปุ่มดาวบนการ์ดทุกใบ
   document.querySelectorAll('.btn-card-fav').forEach(btn => {
@@ -597,10 +829,11 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
     });
 
     history.unshift(item);
-    if (history.length > 100) history.pop(); // เก็บประวัติสูงสุด 100 เรื่อง
+    if (history.length > 500) history.pop(); // เก็บประวัติสูงสุด 500 เรื่อง
 
     localStorage.setItem(STORAGE_HISTORY, JSON.stringify(history));
     updateHistoryAndFavCounts();
+    pushSyncData(); // ซิงก์ขึ้น Cloudflare KV
   } catch (e) {
     console.warn("Could not save history:", e);
   }
@@ -614,6 +847,7 @@ function deleteHistoryItem(itemIdentifier) {
     localStorage.setItem(STORAGE_HISTORY, JSON.stringify(history));
   } catch (e) {}
   updateHistoryAndFavCounts();
+  pushSyncData(); // ซิงก์ขึ้น Cloudflare KV
   if (currentTagFilter === 'history') {
     applyFilters();
   }
@@ -626,6 +860,7 @@ function clearAllHistory() {
       localStorage.removeItem(STORAGE_HISTORY);
     } catch (e) {}
     updateHistoryAndFavCounts();
+    pushSyncData(); // ซิงก์ขึ้น Cloudflare KV
     if (currentTagFilter === 'history') {
       applyFilters();
     }
@@ -845,6 +1080,11 @@ function applyFilters() {
   const historyToolbar = document.getElementById('historyToolbar');
   if (historyToolbar) {
     historyToolbar.style.display = currentTagFilter === 'history' ? 'flex' : 'none';
+  }
+
+  const cloudSyncBar = document.getElementById('cloudSyncBar');
+  if (cloudSyncBar) {
+    cloudSyncBar.style.display = (currentTagFilter === 'history' || currentTagFilter === 'favorites') ? 'flex' : 'none';
   }
 
   let baseList = allMangaList;
@@ -1528,6 +1768,9 @@ async function initAggregatorPage() {
 
   // อัปเดตตัวเลขประวัติและเรื่องโปรด
   updateHistoryAndFavCounts();
+
+  // เริ่มต้นระบบ Private Sync Key ข้ามอุปกรณ์
+  initSyncEngine();
 
   // เริ่มต้นระบบแชทส่วนกลางหน้าแรก
   initChatComponent(null);
@@ -2552,6 +2795,9 @@ async function initReaderPage() {
 
   // เริ่มต้นระบบแชทส่วนกลางใต้ปุ่มอ่านต่อ (พร้อมแท็กชื่อเรื่องนี้ให้อัตโนมัติ)
   initChatComponent(mangaObj);
+
+  // เริ่มต้นระบบ Private Sync Key
+  initSyncEngine();
 
   const goBackToChapters = (e) => {
     if (e) e.preventDefault();
