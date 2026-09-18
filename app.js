@@ -262,7 +262,14 @@ function parseNtrNajaHtml(html, sourceInfo) {
     if (titleEl && !title) title = titleEl.textContent.trim();
 
     const metaEl = card.querySelector('.ntr-genre-card__meta');
-    let latestEp = metaEl ? metaEl.textContent.trim() : 'ตอนล่าสุด';
+    let latestEp = 'ตอนล่าสุด';
+    if (metaEl) {
+      const metaText = metaEl.textContent.trim();
+      // หากเป็นวันที่ เช่น "อัปเดต 2026-09-18" ห้ามนำมาเป็นชื่อตอน ให้ใช้ "ตอนล่าสุด"
+      if (!/อัปเดต|อัพเดต|\b\d{4}-\d{2}-\d{2}\b/i.test(metaText)) {
+        latestEp = metaText;
+      }
+    }
 
     const imgEl = card.querySelector('img.ntr-genre-thumb__img, img');
     let cover = extractCoverUrl(imgEl, sourceInfo.url);
@@ -1198,9 +1205,10 @@ function extractEpNumberFromText(text) {
   let str = String(text);
   str = str.replace(/\b\d{4}-\d{2}-\d{2}\b/g, '');
   str = str.replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, '');
+  str = str.replace(/\b202\d\b/g, '');
   str = str.replace(/(?:มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+\d{1,2},?\s+\d{4}/gi, '');
   str = str.replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}/gi, '');
-  str = str.replace(/อัปเดต\s*/gi, '');
+  str = str.replace(/อัปเดต|อัพเดต/gi, '');
 
   const m = str.match(/ตอนที่\s*(\d+(?:\.\d+)?)/i) ||
             str.match(/ch(?:apter)?\.?\s*(\d+(?:\.\d+)?)/i) ||
@@ -2531,7 +2539,7 @@ function renderMangaCards() {
       <div class="manga-info">
         <div class="manga-title" title="${m.title}">${m.title}</div>
         <div class="manga-latest">
-          <span>${m.latestEp || (m.lastChapterTitle ? m.lastChapterTitle : 'อ่านต่อ')}</span>
+          <span>${(/อัปเดต\s*202\d|อัพเดต\s*202\d|\b202\d-\d{2}-\d{2}\b/i.test(m.latestEp || '')) ? 'ตอนล่าสุด' : (m.latestEp || (m.lastChapterTitle ? m.lastChapterTitle : 'อ่านต่อ'))}</span>
           <span style="font-size: 0.75rem; color: #888;">อ่าน →</span>
         </div>
         ${historyBadgeHtml}
@@ -2699,28 +2707,38 @@ function parseChaptersFromHtml(html, baseUrl, sourceType) {
       }
     });
   } else if (sourceType === 'ntrnaja') {
-    const links = doc.querySelectorAll('a[href*="?chapter="], a[href*="/-"]');
+    // ดึงเฉพาะลิงก์ตอนใน .ss-chlist หรือ .ss-ch เพื่อไม่ให้ไปโดนปุ่ม header/hero (ss-btn)
+    let links = doc.querySelectorAll('.ss-chlist .ss-ch a, ul.ss-chlist a, .ss-ch a');
+    if (!links || links.length === 0) {
+      links = doc.querySelectorAll('a[href*="?chapter="]:not(.ss-btn):not(.ss-btn--primary), a[href*="/-"]:not(.ss-btn):not(.ss-btn--primary)');
+    }
     links.forEach(a => {
       let href = (a.getAttribute('href') || '').trim();
       if (!href || href.includes('auth-login') || href.includes('/page/')) return;
       if (href.startsWith('/')) href = baseUrl.replace(/\/$/, '') + href;
 
-      const titleEl = a.querySelector('.ss-ch-title');
+      const chItem = a.closest('.ss-ch') || a.parentElement;
+      const titleEl = a.querySelector('.ss-ch-title') || (chItem ? chItem.querySelector('.ss-ch-title') : null);
+      const subEl = a.querySelector('.ss-ch-sub') || (chItem ? chItem.querySelector('.ss-ch-sub') : null);
+      const subText = subEl ? subEl.textContent.trim() : '';
       const rawText = a.textContent.trim().replace(/\s+/g, ' ');
+
       const matchEp = (titleEl ? titleEl.textContent : rawText).match(/ตอนที่\s*(\d+(?:\.\d+)?)/i) || 
                       href.match(/chapter=-?(\d+(?:\.\d+)?)/i) || 
                       href.match(/-(\d+(?:\.\d+)?)\/?$/);
       const epTitle = matchEp ? `ตอนที่ ${matchEp[1]}` : (titleEl ? titleEl.textContent.trim() : (rawText.split('\n')[0] || 'อ่านตอนนี้'));
 
-      const coinEl = a.querySelector('.ss-coin');
-      const isCoinText = !!coinEl || rawText.includes('ล็อค') || rawText.includes('แต้ม') || rawText.includes('พอยท์');
-      const isExplicitFree = rawText.includes('ฟรี') && !coinEl;
+      const coinEl = a.querySelector('.ss-coin') || (chItem ? chItem.querySelector('.ss-coin') : null);
+      const isCoinText = !!coinEl || rawText.includes('ล็อค') || rawText.includes('แต้ม') || rawText.includes('พอยท์') || subText.includes('ล็อค') || subText.includes('แต้ม') || subText.includes('พอยท์');
+      const isExplicitFree = (rawText.includes('ฟรี') || subText.includes('ฟรี')) && !coinEl && !subText.includes('แต้ม') && !subText.includes('ล็อค');
 
       let badge = '🔒 ติดเหรียญ';
       let isLocked = true;
 
       if (coinEl && coinEl.textContent.trim()) {
         badge = `🔒 ${coinEl.textContent.trim()}`;
+      } else if (subText.match(/(\d+\s*(?:แต้ม|พอยท์))/)) {
+        badge = `🔒 ${subText.match(/(\d+\s*(?:แต้ม|พอยท์))/)[1]}`;
       } else if (rawText.match(/(\d+\s*(?:แต้ม|พอยท์))/)) {
         badge = `🔒 ${rawText.match(/(\d+\s*(?:แต้ม|พอยท์))/)[1]}`;
       } else if (isExplicitFree || !isCoinText) {
