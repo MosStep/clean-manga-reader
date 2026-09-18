@@ -1127,8 +1127,14 @@ async function initAggregatorPage() {
   // อัปเดตตัวเลขประวัติและเรื่องโปรด
   updateHistoryAndFavCounts();
 
-  // คืนค่าหน้าต่างเลือกตอนทันทีหากเพิ่งกด Back กลับมาจากหน้าอ่านการ์ตูน
-  restoreActiveModal();
+  // คืนค่าหน้าต่างเลือกตอนเฉพาะเมื่อผู้ใช้กดปุ่มย้อนกลับมาจากหน้าอ่าน (?restore=1) เท่านั้น
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('restore') === '1') {
+    restoreActiveModal();
+    try {
+      window.history.replaceState({}, '', window.location.pathname);
+    } catch (e) {}
+  }
 }
 
 // ฟังก์ชันคืนค่าหน้าต่างเลือกตอน (Restore Chapter Modal) เมื่อกลับมาจากหน้า Reader
@@ -1152,10 +1158,16 @@ function restoreActiveModal() {
   }
 }
 
-window.addEventListener('pageshow', () => {
-  const grid = document.getElementById('mangaGrid');
-  if (grid && grid.children.length > 0) {
-    restoreActiveModal();
+window.addEventListener('pageshow', (e) => {
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('restore') === '1') {
+    const grid = document.getElementById('mangaGrid');
+    if (grid && grid.children.length > 0) {
+      restoreActiveModal();
+      try {
+        window.history.replaceState({}, '', window.location.pathname);
+      } catch (err) {}
+    }
   }
 });
 
@@ -2121,11 +2133,13 @@ async function initReaderPage() {
 
   const goBackToChapters = (e) => {
     if (e) e.preventDefault();
-    if (window.history.length > 1) {
-      window.history.back();
-    } else {
-      window.location.href = 'index.html?restore=1';
-    }
+    try {
+      if (mangaObj && mangaObj.title) {
+        sessionStorage.setItem('currentManga', JSON.stringify(mangaObj));
+        sessionStorage.setItem('currentSource', JSON.stringify(mangaObj));
+      }
+    } catch (err) {}
+    window.location.href = 'index.html?restore=1';
   };
 
   if (backBtn) backBtn.onclick = goBackToChapters;

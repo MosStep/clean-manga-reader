@@ -41,13 +41,27 @@
 
   <main id="readerImages" class="reader-container"></main>
 
-  <!-- Reader Footer Navigation -->
+  <!-- Reader Footer Navigation (2 บรรทัด: ปุ่มตอนก่อนหน้า/ต่อไปเด่นชัด + ปุ่มรายการตอน/เลือกตอน/ต้นทาง) -->
   <footer class="reader-footer">
-    <button id="footerPrevBtn" class="btn-nav" style="flex: 1; justify-content: center; padding: 12px;" disabled>◀ ตอนก่อนหน้า</button>
-    <button id="footerChaptersBtn" class="btn-nav" style="padding: 12px 16px; justify-content: center;">📋 เลือกตอน</button>
-    <a id="footerSourceBtn" href="#" target="_blank" class="btn-nav btn-source-link" style="padding: 12px 16px; justify-content: center;" title="เปิดที่เว็บต้นทาง">🌐 ต้นทาง ↗</a>
-    <button id="footerBackBtn" class="btn-nav" style="justify-content: center; padding: 12px;">← รายการตอน</button>
-    <button id="footerNextBtn" class="btn-nav" style="flex: 1; justify-content: center; padding: 12px;" disabled>ตอนต่อไป ▶</button>
+    <div class="reader-footer-nav-row">
+      <button id="footerPrevBtn" class="btn-footer-nav btn-footer-prev" disabled>
+        <span class="btn-footer-icon">◀</span> ตอนก่อนหน้า
+      </button>
+      <button id="footerNextBtn" class="btn-footer-nav btn-footer-next" disabled>
+        ตอนต่อไป <span class="btn-footer-icon">▶</span>
+      </button>
+    </div>
+    <div class="reader-footer-action-row">
+      <button id="footerBackBtn" class="btn-footer-action" title="กลับไปหน้ารวมตอนที่หน้าหลัก">
+        <span>← รายการตอน</span>
+      </button>
+      <button id="footerChaptersBtn" class="btn-footer-action" title="เปิดหน้าต่างเลือกตอน">
+        <span>📋 เลือกตอน</span>
+      </button>
+      <a id="footerSourceBtn" href="#" target="_blank" class="btn-footer-action btn-source-link" title="เปิดที่เว็บต้นทาง">
+        <span>🌐 ต้นทาง ↗</span>
+      </a>
+    </div>
   </footer>
 
   <!-- Chapter Selection Modal inside Reader -->
