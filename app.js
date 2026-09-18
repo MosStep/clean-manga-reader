@@ -1560,6 +1560,13 @@ async function openChapterModal(manga, activeSource = null) {
     };
   }
 
+  // ตรวจสอบ URL ตอนปัจจุบันหากเปิด Modal จาก reader.html
+  let currentReadingChapterUrl = null;
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    currentReadingChapterUrl = sp.get('url');
+  } catch (e) {}
+
   // ตรวจสอบประวัติการอ่านค้างไว้สำหรับเรื่องนี้ (Continue Reading)
   const historyList = getReadingHistory();
   const histItem = historyList.find(h => {
@@ -1570,7 +1577,8 @@ async function openChapterModal(manga, activeSource = null) {
 
   const continueBox = document.getElementById('continueReadingBox');
   if (continueBox) {
-    if (histItem && histItem.lastChapterUrl && histItem.lastChapterTitle) {
+    const isAlreadyOnThisChapter = currentReadingChapterUrl && histItem && (histItem.lastChapterUrl === currentReadingChapterUrl);
+    if (histItem && histItem.lastChapterUrl && histItem.lastChapterTitle && !isAlreadyOnThisChapter) {
       continueBox.style.display = 'flex';
       const q = new URLSearchParams();
       q.set('url', histItem.lastChapterUrl);
@@ -1792,10 +1800,12 @@ async function openChapterModal(manga, activeSource = null) {
     chapterList.innerHTML = '';
     chapters.forEach(c => {
       const isRead = readUrls.has(c.url);
+      const isCurrent = currentReadingChapterUrl && (c.url === currentReadingChapterUrl);
       const a = document.createElement('a');
-      a.className = `chapter-item ${c.isLocked ? 'locked' : ''} ${isRead ? 'is-read' : ''}`;
+      a.className = `chapter-item ${c.isLocked ? 'locked' : ''} ${isRead ? 'is-read' : ''} ${isCurrent ? 'current-chapter' : ''}`;
 
-      const readBadgeHtml = isRead ? '<span class="chapter-read-badge">✓ อ่านแล้ว</span>' : '';
+      const currentBadgeHtml = isCurrent ? '<span class="chapter-current-badge">กำลังอ่าน 📍</span>' : '';
+      const readBadgeHtml = (!isCurrent && isRead) ? '<span class="chapter-read-badge">✓ อ่านแล้ว</span>' : '';
 
       if (c.isLocked) {
         // ตอนติดเหรียญ: เปิดอ่านที่เว็บต้นทางโดยตรง
@@ -1805,6 +1815,7 @@ async function openChapterModal(manga, activeSource = null) {
           <div class="chapter-title-group">
             <span class="chapter-badge-coin">${c.badge || '🔒 ติดเหรียญ'}</span>
             <span class="chapter-title-text">${c.title}</span>
+            ${currentBadgeHtml}
             ${readBadgeHtml}
           </div>
           <span class="chapter-action-link">เปิดต้นทาง ↗</span>
@@ -1826,14 +1837,24 @@ async function openChapterModal(manga, activeSource = null) {
           <div class="chapter-title-group">
             <span class="chapter-badge-free">${c.badge || '✨ ฟรี'}</span>
             <span class="chapter-title-text">${c.title}</span>
+            ${currentBadgeHtml}
             ${readBadgeHtml}
           </div>
-          <span class="chapter-action-link">${isRead ? 'อ่านซ้ำ ↺' : 'อ่านเลย →'}</span>
+          <span class="chapter-action-link">${isCurrent ? 'ตอนนี้' : (isRead ? 'อ่านซ้ำ ↺' : 'อ่านเลย →')}</span>
         `;
       }
 
       chapterList.appendChild(a);
     });
+
+    if (currentReadingChapterUrl) {
+      setTimeout(() => {
+        const cur = chapterList.querySelector('.chapter-item.current-chapter');
+        if (cur) {
+          cur.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      }, 100);
+    }
   } catch (err) {
     if (chapterList) {
       chapterList.innerHTML = `
