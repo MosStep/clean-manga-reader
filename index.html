@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clean Manga - ศูนย์รวมมังงะแปลไทย ไร้โฆษณา</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- Navbar -->
+  <header class="navbar">
+    <div class="nav-container">
+      <a href="index.html" class="brand">
+        <span class="brand-icon">⚡</span>
+        <span class="brand-name">Clean<span class="brand-highlight">Manga</span></span>
+        <span class="brand-badge">NO ADS</span>
+      </a>
+
+      <div class="nav-search">
+        <div class="search-wrapper">
+          <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="searchInput" placeholder="ค้นหามังงะจากทุกเว็บ...">
+          <button id="clearSearchBtn" class="clear-search" style="display: none;">&times;</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Spotlight -->
+  <section class="hero-section" id="heroSection">
+    <div class="hero-backdrop" id="heroBackdrop"></div>
+    <div class="hero-content">
+      <div class="hero-badge" id="heroBadge">🔥 แนะนำวันนี้</div>
+      <h1 class="hero-title" id="heroTitle">กำลังโหลดมังงะเด่น...</h1>
+      <p class="hero-desc" id="heroDesc">อ่านการ์ตูนมังงะแปลไทย มังฮวาเกาหลี มังงะจีน ครบทุกเรื่องจากทุกค่าย ไม่มีโฆษณาคั่นแม้แต่ตัวเดียว</p>
+      <div class="hero-actions">
+        <a href="#" id="heroReadBtn" class="btn-primary">อ่านตอนล่าสุด</a>
+        <button id="heroChaptersBtn" class="btn-secondary">เลือกตอน</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Main Container -->
+  <main class="container">
+    
+    <!-- ระบบแยกเว็บต้นทาง (Website Source Selector) -->
+    <div class="source-bar-wrapper">
+      <div class="source-bar-header">
+        <div class="source-bar-title">
+          <span class="source-pulse-dot"></span>
+          <span>แยกตามเว็บต้นทาง:</span>
+        </div>
+        <div class="stats-counter" id="mangaCount">กำลังรวบรวมเรื่อง...</div>
+      <div id="sourceAlertBar" style="display: none;"></div>
+      <div class="source-tags" id="sourceTabs">
+        <!-- จะถูกสร้างอัตโนมัติโดย app.js พร้อมจำนวนเรื่องของแต่ละเว็บ -->
+      </div>
+    </div>
+
+    <!-- Filter & Sort Bar (หมวดหมู่) -->
+    <div class="filter-bar">
+      <div class="filter-tags">
+        <button class="tag active" data-filter="all">ทุกหมวดหมู่</button>
+        <button class="tag" data-filter="history" id="tagHistory">🕒 ประวัติอ่านล่าสุด (0)</button>
+        <button class="tag" data-filter="favorites" id="tagFavorites">⭐ เรื่องโปรด (0)</button>
+        <button class="tag" data-filter="manhwa">มังฮวา (เกาหลี)</button>
+        <button class="tag" data-filter="manhua">มังงะจีน</button>
+        <button class="tag" data-filter="manga">มังงะญี่ปุ่น</button>
+        <button class="tag" data-filter="action">แอคชั่น/พระเอกเทพ</button>
+        <button class="tag" data-filter="romance">โรแมนติก</button>
+        <button class="tag" data-filter="doujin">โดจิน/18+</button>
+      </div>
+    </div>
+
+    <!-- History Toolbar -->
+    <div id="historyToolbar" class="history-toolbar" style="display: none;">
+      <div class="history-toolbar-info">
+        <span>🕒 รายการที่คุณเคยเข้าอ่าน (บันทึกอัตโนมัติในเครื่อง ไม่ต้องล็อกอิน)</span>
+      </div>
+      <button id="btnClearAllHistory" class="btn-clear-history">🗑️ ล้างประวัติทั้งหมด</button>
+    </div>
+
+    <!-- Status Message -->
+    <div id="statusMsg" class="state-message">
+      <div class="spinner"></div>
+      กำลังรวบรวมมังงะจากทุกแหล่ง (Go-Manga, Fin-Manga, Dark-Manga, Up-Manga)...
+    </div>
+
+    <!-- Manga Grid -->
+    <div id="mangaGrid" class="manga-grid"></div>
+
+    <!-- Load More Button -->
+    <div class="load-more-wrapper">
+      <button id="loadMoreBtn" class="btn-load-more" style="display: none;">
+        <span>โหลดเรื่องเพิ่มเติม</span>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </button>
+    </div>
+
+  </main>
+
+  <!-- Chapter Selection Modal -->
+  <div id="chapterModal" class="modal" onclick="if(event.target === this) closeChapterModal()">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-manga-info">
+          <h3 id="modalTitle">รายชื่อตอน</h3>
+          <div class="modal-meta-row">
+            <button id="btnModalFav" class="btn-modal-fav" title="บันทึกเป็นเรื่องโปรด">
+              <span class="fav-icon">⭐</span> <span class="fav-text">เรื่องโปรด</span>
+            </button>
+            <span class="modal-source-tag" id="modalSource">รวมทุกตอน</span>
+            <a id="modalSourceBtn" href="#" target="_blank" class="btn-modal-source" title="เปิดหน้าเรื่องนี้ในเว็บต้นทาง">
+              🌐 เปิดดูที่เว็บต้นทาง ↗
+            </a>
+          </div>
+        </div>
+        <button class="close-btn" onclick="closeChapterModal()">&times;</button>
+      </div>
+      <!-- ตัวเลือกสลับเว็บสำหรับเรื่องนี้ -->
+      <div class="modal-source-selector" id="modalSourceSelector" style="display: none;">
+        <div class="selector-header">
+          <span class="selector-icon">🔄</span>
+          <span class="selector-label">เลือกอ่านจากเว็บ (มีให้อ่านหลายเว็บ):</span>
+        </div>
+        <div class="source-pills" id="modalSourcePills"></div>
+      </div>
+      <!-- กล่องอ่านต่อตอนที่อ่านค้างไว้ -->
+      <div id="continueReadingBox" class="continue-reading-box" style="display: none;"></div>
+      <!-- แถบแนะนำแหล่งอ่านฟรีเมื่อต้นทางติดเหรียญ -->
+      <div id="freeSourceBanner" class="free-source-banner" style="display: none;"></div>
+      <!-- กล่องวางลิงก์เชื่อมโยงเว็บอื่น -->
+      <div id="customLinkBox" class="custom-link-box" style="display: none;">
+        <input type="text" id="customLinkInput" class="custom-link-input" placeholder="วางลิงก์เรื่องนี้จากเว็บอื่น เช่น https://whytoon.com/content/...">
+        <button id="btnApplyCustomLink" class="btn-custom-link">เชื่อมโยง</button>
+      </div>
+      <div class="modal-body">
+        <div id="chapterList" class="chapter-list"></div>
+      </div>
+      <div class="modal-footer-tip">
+        <span>💡 หากตอนไหนรูปไม่โหลดหรือมีปัญหา สามารถกดปุ่ม <strong>"เปิดดูที่เว็บต้นทาง ↗"</strong> ด้านบนได้ตลอดเวลา</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', initAggregatorPage);
+  </script>
+</body>
+</html>

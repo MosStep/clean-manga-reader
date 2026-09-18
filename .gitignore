@@ -1,0 +1,18 @@
+﻿# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.BIN/
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary / test files
+scratch/
+test_*.ps1
+find_*.ps1
+inspect_*.ps1
+dump_*.ps1
+check_*.ps1

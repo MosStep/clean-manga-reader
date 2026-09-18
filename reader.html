@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="th" class="reader-page">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>อ่านมังงะ | Clean Manga</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="reader-page">
+
+  <!-- Reader Top Bar -->
+  <header class="reader-navbar">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <button id="backBtn" class="btn-nav" title="กลับไปหน้ารายการตอน">← รายการตอน</button>
+      <button id="readerChaptersBtn" class="btn-nav" title="เปิดรายการตอนทั้งหมด">📋 เลือกตอน</button>
+      <div id="readerTitle" class="reader-nav-title">กำลังโหลด...</div>
+    </div>
+    <div class="reader-controls">
+      <a id="readerSourceBtn" href="#" target="_blank" class="btn-nav btn-source-link" title="เปิดอ่านที่หน้าเว็บต้นทาง">🌐 เว็บต้นทาง ↗</a>
+      <button id="prevBtn" class="btn-nav" disabled>◀ ตอนก่อน</button>
+      <button id="nextBtn" class="btn-nav" disabled>ตอนต่อไป ▶</button>
+    </div>
+  </header>
+
+  <!-- Reader Container -->
+  <div id="statusMsg" class="state-message" style="margin-top: 100px;">
+    <div class="spinner"></div>
+    กำลังโหลดรูปภาพมังงะ...
+  </div>
+
+  <main id="readerImages" class="reader-container"></main>
+
+  <!-- Reader Footer Navigation -->
+  <footer class="reader-footer">
+    <button id="footerPrevBtn" class="btn-nav" style="flex: 1; justify-content: center; padding: 12px;" disabled>◀ ตอนก่อนหน้า</button>
+    <button id="footerChaptersBtn" class="btn-nav" style="padding: 12px 16px; justify-content: center;">📋 เลือกตอน</button>
+    <a id="footerSourceBtn" href="#" target="_blank" class="btn-nav btn-source-link" style="padding: 12px 16px; justify-content: center;" title="เปิดที่เว็บต้นทาง">🌐 ต้นทาง ↗</a>
+    <button id="footerBackBtn" class="btn-nav" style="justify-content: center; padding: 12px;">← รายการตอน</button>
+    <button id="footerNextBtn" class="btn-nav" style="flex: 1; justify-content: center; padding: 12px;" disabled>ตอนต่อไป ▶</button>
+  </footer>
+
+  <!-- Chapter Selection Modal inside Reader -->
+  <div id="chapterModal" class="modal" onclick="if(event.target === this) closeChapterModal()">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-manga-info">
+          <h3 id="modalTitle">รายชื่อตอน</h3>
+          <div class="modal-meta-row">
+            <button id="btnModalFav" class="btn-modal-fav" title="บันทึกเป็นเรื่องโปรด">
+              <span class="fav-icon">⭐</span> <span class="fav-text">เรื่องโปรด</span>
+            </button>
+            <span class="modal-source-tag" id="modalSource">รวมทุกตอน</span>
+            <a id="modalSourceBtn" href="#" target="_blank" class="btn-modal-source" title="เปิดหน้าเรื่องนี้ในเว็บต้นทาง">
+              🌐 เปิดดูที่เว็บต้นทาง ↗
+            </a>
+          </div>
+        </div>
+        <button class="close-btn" onclick="closeChapterModal()">&times;</button>
+      </div>
+      <!-- ตัวเลือกสลับเว็บสำหรับเรื่องนี้ -->
+      <div class="modal-source-selector" id="modalSourceSelector" style="display: none;">
+        <div class="selector-header">
+          <span class="selector-icon">🔄</span>
+          <span class="selector-label">เลือกอ่านจากเว็บ (มีให้อ่านหลายเว็บ):</span>
+        </div>
+        <div class="source-pills" id="modalSourcePills"></div>
+      </div>
+      <!-- กล่องอ่านต่อตอนที่อ่านค้างไว้ -->
+      <div id="continueReadingBox" class="continue-reading-box" style="display: none;"></div>
+      <!-- แถบแนะนำแหล่งอ่านฟรีเมื่อต้นทางติดเหรียญ -->
+      <div id="freeSourceBanner" class="free-source-banner" style="display: none;"></div>
+      <!-- กล่องวางลิงก์เชื่อมโยงเว็บอื่น -->
+      <div id="customLinkBox" class="custom-link-box" style="display: none;">
+        <input type="text" id="customLinkInput" class="custom-link-input" placeholder="วางลิงก์เรื่องนี้จากเว็บอื่น เช่น https://whytoon.com/content/...">
+        <button id="btnApplyCustomLink" class="btn-custom-link">เชื่อมโยง</button>
+      </div>
+      <div class="modal-body">
+        <div id="chapterList" class="chapter-list"></div>
+      </div>
+      <div class="modal-footer-tip">
+        <span>💡 หากตอนไหนรูปไม่โหลดหรือมีปัญหา สามารถกดปุ่ม <strong>"เปิดดูที่เว็บต้นทาง ↗"</strong> ด้านบนได้ตลอดเวลา</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', initReaderPage);
+  </script>
+</body>
+</html>
