@@ -117,7 +117,7 @@ function parseMangaReaderHtml(html, sourceInfo) {
       // กรองคำระบุเวลาออก เช่น "2 ชั่วโมงที่แล้ว", "3 วันที่แล้ว" เพื่อไม่ให้เลขเวลามาซ้อนทับกับเลขตอน
       latestEp = latestEp.replace(/\s*\d+\s*(?:ชั่วโมง|นาที|วัน|วินาที|ชม\.|วัน|เดือน|ปี|hours?|mins?|days?|ago)\s*(?:ที่แล้ว|ago)?/gi, '').trim() || latestEp;
 
-      let type = typeEl ? typeEl.textContent.trim() : (sourceInfo.name.includes('Doujin') || sourceInfo.name.includes('NTR') ? '18+ / Doujin' : 'Manga');
+      let type = typeEl ? typeEl.textContent.trim() : (sourceInfo.name.includes('Doujin') || sourceInfo.name.includes('Ecchi') ? '18+ / Doujin' : 'Manga');
       let cover = extractCoverUrl(imgEl, sourceInfo.url);
 
       if (mangaUrl.startsWith('/')) mangaUrl = sourceInfo.url + mangaUrl;
@@ -275,7 +275,7 @@ function parseNtrNajaHtml(html, sourceInfo) {
         mangaUrl,
         cover,
         latestEp,
-        type: '18+ / NTR',
+        type: 'Manhwa',
         sourceId: sourceInfo.id,
         sourceName: sourceInfo.name,
         sourceUrl: sourceInfo.url,
@@ -1439,7 +1439,7 @@ function applyFilters() {
       } else if (currentTagFilter === 'action') {
         if (!m.title.includes('เทพ') && !m.title.includes('จุติ') && !m.title.includes('เลเวล') && !m.title.includes('ดาบ') && !m.title.includes('ราชา') && !m.title.includes('ยุทธ')) return false;
       } else if (currentTagFilter === 'doujin') {
-        if (!m.sourceName.includes('Ecchi') && !m.sourceName.includes('NTR') && !m.type.toLowerCase().includes('doujin') && !m.type.toLowerCase().includes('18+')) return false;
+        if (!m.sourceName.includes('Ecchi') && !m.sourceName.includes('Doujin') && !m.type.toLowerCase().includes('doujin') && !m.type.toLowerCase().includes('18+')) return false;
       }
     }
 
