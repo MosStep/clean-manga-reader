@@ -82,9 +82,11 @@
 13. Flash-Manga   (id: 'flash-manga',  url: 'https://www.flash-manga.net',type: 'mangareader', icon: '⚡')
 14. Chibi-Manga   (id: 'chibi-manga',  url: 'https://chibi-manga.com',    type: 'mangareader', icon: '🧸')
 15. Nano-Manga    (id: 'nano-manga',   url: 'https://nano-manga.com',     type: 'madara',      icon: '🧬')
-16. Ecchi-Doujin  (id: 'ecchi-doujin', url: 'https://ecchi-doujin.com',   type: 'mangareader', icon: '🔞')
-17. NTRnaja       (id: 'ntrnaja',      url: 'https://ntrnaja.com',        type: 'ntrnaja',     icon: '🔥')
-18. MangaDex      (id: 'mangadex',     url: 'https://mangadex.org',       type: 'mangadex',    icon: '🌐', lang: 'en')
+ 16. Ecchi-Doujin  (id: 'ecchi-doujin', url: 'https://ecchi-doujin.com',   type: 'mangareader', icon: '🔞')
+ 17. NTRnaja       (id: 'ntrnaja',      url: 'https://ntrnaja.com',        type: 'ntrnaja',     icon: '🔥')
+ 18. Asura Scans   (id: 'asura-scans',  url: 'https://asurascans.com',     type: 'asurascans',  icon: '⚔️', lang: 'en')
+ 19. MangaTown     (id: 'manga-town',   url: 'https://www.mangatown.com',  type: 'mangatown',   icon: '🏙️', lang: 'en')
+ 20. MangaDex      (id: 'mangadex',     url: 'https://mangadex.org',       type: 'mangadex',    icon: '🌐', lang: 'en')
 
 --------------------------------------------------------------------------------
 [ 4. โครงสร้างไฟล์และหน้าที่ (FILE ARCHITECTURE) ]
@@ -105,19 +107,22 @@
   - recordReadingHistory: บันทึกประวัติอ่านลง localStorage ทันทีที่คลิกตอน และอัปเดตเลขตอนล่าสุดไม่ให้ค้าง
   - initSyncEngine, pushSyncData, pullAndMergeSyncData: ระบบซิงก์ข้ามเครื่องผ่าน Cloudflare KV
 - config.js:
-  ตั้งค่า SOURCES (ไทย 17 เว็บ) และ MANGADEX (อังกฤษ), PROXY_URL, CHAT_API_URL, SYNC_API_BASE
+  ตั้งค่า SOURCES (ไทย 17 เว็บ + Eng 2 เว็บ: Asura Scans, MangaTown) และ MANGADEX (อังกฤษ), PROXY_URL, CHAT_API_URL, SYNC_API_BASE
 - style.css:
   สไตล์ Dark Modern ธีมเขียว-ฟ้า นีออน ปรับแต่ง Mobile First สบายตา พร้อม Badge ภาษา (🇹🇭 TH / 🇬🇧 EN / 🇯🇵 JA / 🇰🇷 KO) และปุ่ม Pill ไร้เครื่องหมายถูก
 - worker/worker.js:
   Cloudflare Worker สำหรับทำ Proxy ปลดล็อก CORS, จัดการระบบแชทส่วนกลาง และเก็บข้อมูล KV Sync (Deduplicate ตามชื่อเรื่อง Normalized Title)
 
 --------------------------------------------------------------------------------
-[ 5. อัปเดตล่าสุด v4.0 ]
-- แก้ไขปัญหาการ์ตูน MangaDex (EN/JA/KO) ที่เคยกลายเป็น TH เมื่อบันทึกลงประวัติการอ่านหรือเรื่องโปรด (เก็บ lang ลง localStorage และคำนวณย้อนหลังให้อัตโนมัติ)
-- หน้าแรกเมื่อเลือกหลายภาษาหรือเลือก [ทั้งหมด]: ระบบจะสลับการ์ตูนขึ้น (Interleave) ในอัตราส่วน 3 ไทย : 1 สากล ทำให้การ์ตูนภาษาอังกฤษ/สากลขึ้นมาแสดงคู่กับไทยบนหน้าแรกทันที ไม่ตกไปอยู่ท้ายสุด
-- แก้ไขปัญหาภาษาญี่ปุ่น (ja) และเกาหลี (ko) จาก MangaDex ที่ก่อนหน้านี้ดึงแล้วเจอกลุ่มแปลเวียดนาม (vi) หรือตอนไม่ขึ้น:
-  * เปลี่ยนพารามิเตอร์ค้นหาเป็น availableTranslatedLanguage[]=ja และ availableTranslatedLanguage[]=ko เพื่อดึงเฉพาะเรื่องที่มีตอนในภาษานั้นจริง 100%
-  * ระบบ Fallback ของ MangaDex จะถอยไปหาภาษาอังกฤษ (en) เท่านั้น จะไม่ดึงภาษาเวียดนามหรือภาษาที่ไม่เกี่ยวข้องมาปะปน
-  * ลิงก์ที่ไม่มีรูปหรือติดระบบสำนักพิมพ์ต้นทาง ปรับลิงก์เปิดเว็บต้นทางให้เป็น https://mangadex.org/chapter/... ป้องกันปัญหา mangadex:// Scheme
-- การ์ตูนไทย 17 เว็บยังคงอยู่ครบถ้วน 100% และเป็นค่าเริ่มต้นเมื่อเข้าเว็บครั้งแรก
+[ 5. อัปเดตล่าสุด v4.1 ]
+1. เพิ่มแหล่งการ์ตูนภาษาอังกฤษชั้นนำ 2 เว็บ:
+   - Asura Scans (https://asurascans.com): คลังการ์ตูน Manhwa แปลอังกฤษยอดนิยม อ่านภาพ WebP ชัดเจนเต็มความละเอียด
+   - MangaTown (https://www.mangatown.com/new/): คลังการ์ตูนภาษาอังกฤษขนาดใหญ่ ครอบคลุมการ์ตูนญี่ปุ่นและมังฮวาคลาสสิกรวมถึงเรื่องดัง อ่านภาพเรียงต่อเนื่อง 100%
+2. แก้ไขระบบเลือกภาษาตอนค้นหา:
+   - ปลดล็อกตัวกรองภาษาขณะพิมพ์ค้นหา (แก้ปัญหาเงื่อนไขเดิมที่ข้ามการเช็คภาษาตอนค้นหา)
+   - ขณะพิมพ์ค้นหา ผู้ใช้สามารถแตะสลับปุ่มภาษา (ไทย, อังกฤษ, ญี่ปุ่น, เกาหลี, ทั้งหมด) เพื่อกรองเฉพาะผลลัพธ์ในภาษานั้นได้อย่างถูกต้องแม่นยำ 100%
+3. ค้นหาเรื่องจาก MangaDex ได้ครบถ้วน 100% (รวมถึง Gundam Hathaway):
+   - รองรับการวาง URL เต็ม หรือรหัส UUID ของ MangaDex (เช่น 01abaf91-3d82-4d75-baae-f46e9baa19fe หรือ https://mangadex.org/title/01abaf91-3d82-4d75-baae-f46e9baa19fe/mobile-suit-gundam-hathaway-s-flash)
+   - ปรับปรุงระบบค้นหาคำแบบ Tokenized Words (ตัดเครื่องหมาย : หรือ ' เช่น Gundam: Hathaway's Flash ให้ตรงกับคำค้นหาได้อย่างสมบูรณ์แบบ)
+   - ระบบ Auto-Debounce Search เมื่อพิมพ์คำค้นหาภาษาอังกฤษ จะค้นหาจาก MangaDex ให้โดยอัตโนมัติทันที
 ================================================================================

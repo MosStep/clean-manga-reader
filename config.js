@@ -35,7 +35,9 @@ const CONFIG = {
     { id: 'chibi-manga', name: 'Chibi-Manga', url: 'https://chibi-manga.com', type: 'mangareader', icon: '🧸', readable: true, isCoin: false, lang: 'th' },
     { id: 'nano-manga', name: 'Nano-Manga', url: 'https://nano-manga.com', type: 'madara', icon: '🧬', readable: true, isCoin: false, lang: 'th' },
     { id: 'ecchi-doujin', name: 'Ecchi-Doujin', url: 'https://ecchi-doujin.com', type: 'mangareader', icon: '🔞', readable: true, isCoin: false, lang: 'th' },
-    { id: 'ntrnaja', name: 'NTRnaja', url: 'https://ntrnaja.com', type: 'ntrnaja', icon: '🔥', readable: false, isCoin: true, lang: 'th' }
+    { id: 'ntrnaja', name: 'NTRnaja', url: 'https://ntrnaja.com', type: 'ntrnaja', icon: '🔥', readable: false, isCoin: true, lang: 'th' },
+    { id: 'asura-scans', name: 'Asura Scans', url: 'https://asurascans.com', type: 'asurascans', icon: '⚔️', readable: true, isCoin: false, lang: 'en' },
+    { id: 'manga-town', name: 'MangaTown', url: 'https://www.mangatown.com', type: 'mangatown', icon: '🏙️', readable: true, isCoin: false, lang: 'en' }
   ],
 
   // แหล่งข้อมูลการ์ตูนภาษาอังกฤษระดับโลก (MangaDex)
