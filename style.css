@@ -592,37 +592,49 @@ body {
 .lang-filter-bar {
   display: flex;
   align-items: center;
-  margin-top: -14px;
-  margin-bottom: 22px;
-  padding: 10px 16px;
+  margin-top: -12px;
+  margin-bottom: 20px;
+  padding: 8px 14px;
   background: rgba(22, 24, 33, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
-  backdrop-filter: blur(10px);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .lang-filter-inner {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 10px;
   width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px 0;
+}
+
+.lang-filter-inner::-webkit-scrollbar {
+  display: none;
 }
 
 .lang-filter-label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.82rem;
+  gap: 5px;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-sub);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .lang-chips {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 7px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .lang-chip {
@@ -630,45 +642,50 @@ body {
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  border-radius: 20px;
+  border-radius: 9999px;
   font-size: 0.82rem;
   font-weight: 500;
   cursor: pointer;
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-sub);
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   user-select: none;
   font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .lang-chip:hover {
-  border-color: var(--primary);
+  border-color: rgba(0, 230, 118, 0.4);
   color: var(--text-main);
-  background: rgba(0, 230, 118, 0.06);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .lang-chip.active {
-  background: rgba(0, 230, 118, 0.15);
-  border-color: var(--primary);
-  color: #fff;
+  background: linear-gradient(135deg, rgba(0, 230, 118, 0.22), rgba(0, 176, 255, 0.18));
+  border-color: #00e676;
+  color: #ffffff;
   font-weight: 600;
-  box-shadow: 0 0 12px rgba(0, 230, 118, 0.2);
+  box-shadow: 0 0 14px rgba(0, 230, 118, 0.28), inset 0 0 8px rgba(0, 230, 118, 0.1);
+  transform: translateY(-1px);
 }
 
 .lang-chip-all {
   display: inline-flex;
   align-items: center;
-  padding: 5px 12px;
-  border-radius: 16px;
+  padding: 6px 13px;
+  border-radius: 9999px;
   font-size: 0.78rem;
   font-weight: 500;
   cursor: pointer;
   background: transparent;
-  border: 1px dashed var(--border);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
   color: var(--text-sub);
   transition: all 0.2s ease;
   font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .lang-chip-all:hover {
@@ -676,10 +693,14 @@ body {
   color: var(--primary);
 }
 
-.lang-badge-check {
-  font-size: 0.75rem;
-  font-weight: bold;
-  color: var(--primary);
+.lang-chip-all.active {
+  background: rgba(0, 176, 255, 0.18);
+  border-color: #00b0ff;
+  border-style: solid;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 0 12px rgba(0, 176, 255, 0.25);
+  transform: translateY(-1px);
 }
 
 /* Badge on Manga Card */
@@ -700,6 +721,16 @@ body {
   background: rgba(255, 64, 129, 0.2);
   color: #ff4081;
   border: 1px solid rgba(255, 64, 129, 0.4);
+}
+.manga-lang-badge.lang-ja {
+  background: rgba(255, 171, 0, 0.2);
+  color: #ffab00;
+  border: 1px solid rgba(255, 171, 0, 0.4);
+}
+.manga-lang-badge.lang-ko {
+  background: rgba(179, 136, 255, 0.2);
+  color: #b388ff;
+  border: 1px solid rgba(179, 136, 255, 0.4);
 }
 
 /* Manga Grid */

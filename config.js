@@ -41,7 +41,7 @@ const CONFIG = {
   // แหล่งข้อมูลการ์ตูนภาษาอังกฤษระดับโลก (MangaDex)
   MANGADEX: {
     id: 'mangadex',
-    name: 'MangaDex (EN)',
+    name: 'MangaDex',
     url: 'https://mangadex.org',
     apiUrl: 'https://api.mangadex.org',
     coverUrl: 'https://uploads.mangadex.org/covers',
