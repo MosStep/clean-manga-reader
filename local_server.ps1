@@ -53,10 +53,12 @@ while ($listener.IsListening) {
 
         # 2. API Proxy
         if ($localPath -eq "/api/proxy") {
-            $rawQuery = $req.Url.Query
-            $targetUrl = $null
-            if ($rawQuery -match "url=(.+)$") {
-                $targetUrl = [System.Uri]::UnescapeDataString($matches[1])
+            $targetUrl = $req.QueryString["url"]
+            if (-not $targetUrl) {
+                $rawQuery = $req.Url.Query
+                if ($rawQuery -match "(?:^\?|&)url=([^&]+)") {
+                    $targetUrl = [System.Uri]::UnescapeDataString($matches[1])
+                }
             }
 
             if (-not $targetUrl -or -not ($targetUrl -match "^https?://")) {
@@ -79,8 +81,8 @@ while ($listener.IsListening) {
 
             $safeTargetUrl = $uriObj.AbsoluteUri
             $origin = "$($uriObj.Scheme)://$($uriObj.Host)/"
-            $customReferer = $query["referer"]
-            $referer = if ($customReferer) { $customReferer } elseif ($safeTargetUrl -match "webtoon168") { "https://ped-manga.com/" } else { $origin }
+            $customReferer = $req.QueryString["referer"]
+            $referer = if ($customReferer) { $customReferer } elseif ($safeTargetUrl -match "webtoon168") { "https://ped-manga.com/" } elseif ($safeTargetUrl -match "chibi-manga") { "https://chibi-manga.com/" } else { $origin }
 
             $bytes = $null
             $contentType = $null

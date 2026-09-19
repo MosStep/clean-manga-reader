@@ -494,6 +494,232 @@ const KNOWN_MANGA_ALIASES = [
   }
 ];
 
+// ==========================================================
+// ระบบเชื่อมต่อ MangaDex API (การ์ตูนภาษาอังกฤษระดับโลก)
+// รองรับการดึงรายการมังงะ, รายชื่อตอน, รูปภาพตอนอ่าน และการค้นหา
+// ==========================================================
+let mangadexLoaded = false;
+let mangadexLoading = false;
+let mangadexMangaList = [];
+
+// 1. ดึงรายการมังงะยอดนิยม/อัปเดตล่าสุดจาก MangaDex (ภาษาอังกฤษ)
+async function fetchMangaDexBatch(limit = 40, page = 1) {
+  try {
+    const offset = (page - 1) * limit;
+    const url = `https://api.mangadex.org/manga?limit=${limit}&offset=${offset}&availableTranslatedLanguage[]=en&order[latestUploadedChapter]=desc&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive`;
+    
+    let json = null;
+    try {
+      const res = await fetch(url);
+      if (res.ok) json = await res.json();
+    } catch (e) {}
+
+    if (!json) {
+      try {
+        const proxyRes = await fetchViaProxy(url, {}, 8000);
+        json = JSON.parse(proxyRes);
+      } catch (e) {}
+    }
+
+    if (!json || !Array.isArray(json.data)) return [];
+
+    const items = json.data.map(item => {
+      const coverRel = (item.relationships || []).find(r => r.type === 'cover_art');
+      const coverFile = coverRel?.attributes?.fileName;
+      const coverUrl = coverFile 
+        ? `https://uploads.mangadex.org/covers/${item.id}/${coverFile}.256.jpg`
+        : '';
+      
+      const title = item.attributes?.title?.en || 
+                    (item.attributes?.title ? Object.values(item.attributes.title)[0] : '') || 
+                    (item.attributes?.altTitles && item.attributes.altTitles.find(t => t.en)?.en) || 
+                    'Untitled Manga';
+      
+      const tags = (item.attributes?.tags || []).map(t => t.attributes?.name?.en || '').filter(Boolean);
+      let type = 'Manga';
+      if (item.attributes?.originalLanguage === 'ko' || tags.some(t => t.toLowerCase().includes('manhwa'))) {
+        type = 'Manhwa';
+      } else if (item.attributes?.originalLanguage === 'zh' || tags.some(t => t.toLowerCase().includes('manhua'))) {
+        type = 'Manhua';
+      }
+
+      return {
+        title,
+        mangaUrl: `https://mangadex.org/title/${item.id}`,
+        mangaId: item.id,
+        cover: coverUrl,
+        latestEp: item.attributes?.lastChapter ? `ตอนที่ ${item.attributes.lastChapter}` : 'ตอนล่าสุด (EN)',
+        type,
+        tags,
+        sourceId: 'mangadex',
+        sourceName: 'MangaDex',
+        sourceUrl: 'https://mangadex.org',
+        sourceType: 'mangadex',
+        readable: true,
+        isCoin: false,
+        icon: '🌐',
+        lang: 'en'
+      };
+    });
+
+    return items;
+  } catch (err) {
+    console.warn("MangaDex fetch error:", err);
+    return [];
+  }
+}
+
+// 2. ดึงรายชื่อตอนของเรื่องจาก MangaDex
+async function fetchMangaDexChapters(mangaId) {
+  try {
+    const url = `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=300&contentRating[]=safe&contentRating[]=suggestive`;
+    let json = null;
+    try {
+      const res = await fetch(url);
+      if (res.ok) json = await res.json();
+    } catch (e) {}
+
+    if (!json) {
+      try {
+        const proxyRes = await fetchViaProxy(url, {}, 8000);
+        json = JSON.parse(proxyRes);
+      } catch (e) {}
+    }
+
+    if (!json || !Array.isArray(json.data)) return [];
+
+    const rawChapters = json.data.map(ch => {
+      const chNum = ch.attributes?.chapter || '';
+      const chTitle = ch.attributes?.title ? ` - ${ch.attributes.title}` : '';
+      const displayTitle = chNum ? `ตอนที่ ${chNum}${chTitle}` : (ch.attributes?.title || 'ตอนพิเศษ');
+      const isExternal = !!ch.attributes?.externalUrl;
+      const chapterUrl = isExternal ? ch.attributes.externalUrl : `mangadex://${ch.id}`;
+      return {
+        title: displayTitle,
+        url: chapterUrl,
+        badge: isExternal ? '↗ เว็บนอก' : '✨ ฟรี (EN)',
+        isExternal: isExternal,
+        externalUrl: ch.attributes?.externalUrl,
+        chapterNum: chNum || '0'
+      };
+    });
+
+    // กรองตอนซ้ำจากกลุ่มแปลซ้ำซ้อน
+    const seen = new Set();
+    const cleanChapters = [];
+    rawChapters.forEach(c => {
+      const key = c.chapterNum && c.chapterNum !== '0' ? c.chapterNum : c.url;
+      if (!seen.has(key)) {
+        seen.add(key);
+        cleanChapters.push(c);
+      }
+    });
+
+    return cleanChapters;
+  } catch (err) {
+    console.warn("fetchMangaDexChapters error:", err);
+    return [];
+  }
+}
+
+// 3. ดึงรูปภาพสำหรับ Vertical Reader จาก MangaDex@Home
+async function fetchMangaDexReaderImages(chapterId) {
+  try {
+    const url = `https://api.mangadex.org/at-home/server/${chapterId}`;
+    let json = null;
+    try {
+      const res = await fetch(url);
+      if (res.ok) json = await res.json();
+    } catch (e) {}
+
+    if (!json) {
+      try {
+        const proxyRes = await fetchViaProxy(url, {}, 8000);
+        json = JSON.parse(proxyRes);
+      } catch (e) {}
+    }
+
+    if (json && json.result === 'ok') {
+      const baseUrl = json.baseUrl;
+      const hash = json.chapter.hash;
+      const fileNames = (json.chapter.data && json.chapter.data.length > 0) ? json.chapter.data : (json.chapter.dataSaver || []);
+      const images = fileNames.map(fn => `${baseUrl}/data/${hash}/${fn}`);
+      return {
+        prevUrl: '',
+        nextUrl: '',
+        images
+      };
+    }
+  } catch (err) {
+    console.warn("fetchMangaDexReaderImages error:", err);
+  }
+  return { prevUrl: '', nextUrl: '', images: [] };
+}
+
+// 4. ค้นหามังงะจาก MangaDex API
+async function searchMangaDex(query, limit = 20) {
+  if (!query || !query.trim()) return [];
+  try {
+    const url = `https://api.mangadex.org/manga?title=${encodeURIComponent(query.trim())}&limit=${limit}&availableTranslatedLanguage[]=en&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive`;
+    let json = null;
+    try {
+      const res = await fetch(url);
+      if (res.ok) json = await res.json();
+    } catch (e) {}
+
+    if (!json) {
+      try {
+        const proxyRes = await fetchViaProxy(url, {}, 8000);
+        json = JSON.parse(proxyRes);
+      } catch (e) {}
+    }
+
+    if (!json || !Array.isArray(json.data)) return [];
+
+    return json.data.map(item => {
+      const coverRel = (item.relationships || []).find(r => r.type === 'cover_art');
+      const coverFile = coverRel?.attributes?.fileName;
+      const coverUrl = coverFile 
+        ? `https://uploads.mangadex.org/covers/${item.id}/${coverFile}.256.jpg`
+        : '';
+      
+      const title = item.attributes?.title?.en || 
+                    (item.attributes?.title ? Object.values(item.attributes.title)[0] : '') || 
+                    (item.attributes?.altTitles && item.attributes.altTitles.find(t => t.en)?.en) || 
+                    'Untitled Manga';
+      
+      const tags = (item.attributes?.tags || []).map(t => t.attributes?.name?.en || '').filter(Boolean);
+      let type = 'Manga';
+      if (item.attributes?.originalLanguage === 'ko' || tags.some(t => t.toLowerCase().includes('manhwa'))) {
+        type = 'Manhwa';
+      } else if (item.attributes?.originalLanguage === 'zh' || tags.some(t => t.toLowerCase().includes('manhua'))) {
+        type = 'Manhua';
+      }
+
+      return {
+        title,
+        mangaUrl: `https://mangadex.org/title/${item.id}`,
+        mangaId: item.id,
+        cover: coverUrl,
+        latestEp: item.attributes?.lastChapter ? `ตอนที่ ${item.attributes.lastChapter}` : 'ตอนล่าสุด (EN)',
+        type,
+        tags,
+        sourceId: 'mangadex',
+        sourceName: 'MangaDex',
+        sourceUrl: 'https://mangadex.org',
+        sourceType: 'mangadex',
+        readable: true,
+        isCoin: false,
+        icon: '🌐',
+        lang: 'en'
+      };
+    });
+  } catch (e) {
+    console.warn("searchMangaDex error:", e);
+    return [];
+  }
+}
+
 // ดึงคีย์สำหรับจับคู่มังงะเรื่องเดียวกันข้ามเว็บไซต์ (รองรับชื่อไทยต่างสำนวน, ชื่ออังกฤษ + ชื่อไทย, คำสรรพนาม ฯลฯ)
 function getMangaTitleKeys(title) {
   if (!title) return [];
@@ -1599,6 +1825,130 @@ async function fetchMangaBatch(page = 1) {
   return interleaveSources(sourceArrays);
 }
 
+// ==========================================================
+// ระบบตัวกรองภาษาย่อย (Language Sub-Filter Controller)
+// ค่าเริ่มต้น: ไทยเป็นหลัก ('th')
+// กฎ: เลือกได้ทั้งสอง หรืออย่างใดอย่างหนึ่ง ถ้าไม่เลือกเลยจะถือว่าเลือกทั้งหมด
+// ==========================================================
+let selectedLanguages = new Set(['th']);
+
+function getSelectedLanguages() {
+  if (!selectedLanguages || selectedLanguages.size === 0) {
+    return new Set(['th', 'en']);
+  }
+  return selectedLanguages;
+}
+
+function updateLanguageFilterUI() {
+  const btnTh = document.getElementById('btnLangTh');
+  const btnEn = document.getElementById('btnLangEn');
+  const btnAll = document.getElementById('btnLangAll');
+
+  const hasTh = selectedLanguages.has('th');
+  const hasEn = selectedLanguages.has('en');
+
+  if (btnTh) {
+    btnTh.classList.toggle('active', hasTh);
+    const checkTh = btnTh.querySelector('.lang-badge-check');
+    if (checkTh) checkTh.style.display = hasTh ? 'inline' : 'none';
+  }
+
+  if (btnEn) {
+    btnEn.classList.toggle('active', hasEn);
+    const checkEn = btnEn.querySelector('.lang-badge-check');
+    if (checkEn) checkEn.style.display = hasEn ? 'inline' : 'none';
+  }
+
+  if (btnAll) {
+    btnAll.classList.toggle('active', hasTh && hasEn);
+  }
+}
+
+async function ensureMangaDexLoaded() {
+  if (mangadexLoaded || mangadexLoading) return;
+  mangadexLoading = true;
+  try {
+    const mdItems = await fetchMangaDexBatch(40, 1);
+    if (Array.isArray(mdItems) && mdItems.length > 0) {
+      mangadexMangaList = mdItems;
+      const existingUrls = new Set(allMangaList.map(m => m.mangaUrl));
+      const newItems = mdItems.filter(m => !existingUrls.has(m.mangaUrl));
+      allMangaList = [...allMangaList, ...newItems];
+      mangadexLoaded = true;
+      try {
+        sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+      } catch (e) {}
+    }
+  } catch (err) {
+    console.warn("Error loading MangaDex items:", err);
+  } finally {
+    mangadexLoading = false;
+  }
+}
+
+function setupLanguageFilter() {
+  const btnTh = document.getElementById('btnLangTh');
+  const btnEn = document.getElementById('btnLangEn');
+  const btnAll = document.getElementById('btnLangAll');
+
+  const onLangChange = async () => {
+    updateLanguageFilterUI();
+    if (selectedLanguages.has('en') && !mangadexLoaded) {
+      const bgBadge = document.getElementById('bgLoadingBadge');
+      const bgText = document.getElementById('bgLoadingText');
+      if (bgBadge && bgText) {
+        bgBadge.style.display = 'inline-flex';
+        bgText.textContent = 'กำลังดึงการ์ตูน MangaDex...';
+      }
+      await ensureMangaDexLoaded();
+      if (bgBadge) bgBadge.style.display = 'none';
+    }
+    applyFilters();
+  };
+
+  if (btnTh && !btnTh.dataset.bound) {
+    btnTh.dataset.bound = "1";
+    btnTh.addEventListener('click', () => {
+      if (selectedLanguages.has('th')) {
+        selectedLanguages.delete('th');
+        if (selectedLanguages.size === 0) {
+          selectedLanguages.add('th');
+          selectedLanguages.add('en');
+        }
+      } else {
+        selectedLanguages.add('th');
+      }
+      onLangChange();
+    });
+  }
+
+  if (btnEn && !btnEn.dataset.bound) {
+    btnEn.dataset.bound = "1";
+    btnEn.addEventListener('click', () => {
+      if (selectedLanguages.has('en')) {
+        selectedLanguages.delete('en');
+        if (selectedLanguages.size === 0) {
+          selectedLanguages.add('th');
+          selectedLanguages.add('en');
+        }
+      } else {
+        selectedLanguages.add('en');
+      }
+      onLangChange();
+    });
+  }
+
+  if (btnAll && !btnAll.dataset.bound) {
+    btnAll.dataset.bound = "1";
+    btnAll.addEventListener('click', () => {
+      selectedLanguages = new Set(['th', 'en']);
+      onLangChange();
+    });
+  }
+
+  updateLanguageFilterUI();
+}
+
 // 10. ระบบกรองข้อมูล (Filter Engine)
 function applyFilters() {
   const historyToolbar = document.getElementById('historyToolbar');
@@ -1623,7 +1973,13 @@ function applyFilters() {
     baseList = getFavorites();
   }
 
+  const allowedLangs = getSelectedLanguages();
+
   filteredList = baseList.filter(m => {
+    // 0. Language filter (กรองภาษาไทย / อังกฤษ)
+    const mangaLang = m.lang || 'th';
+    if (!allowedLangs.has(mangaLang)) return false;
+
     // 1. Source filter (แยกตามเว็บต้นทาง)
     if (currentSourceFilter !== 'all') {
       const matchSource = m.sourceId === currentSourceFilter || 
@@ -1633,18 +1989,20 @@ function applyFilters() {
 
     // 2. Tag filter (หมวดหมู่ทั่วไป)
     if (currentTagFilter !== 'all' && currentTagFilter !== 'history' && currentTagFilter !== 'favorites') {
+      const typeLower = (m.type || '').toLowerCase();
+      const tagsLower = Array.isArray(m.tags) ? m.tags.map(t => t.toLowerCase()) : [];
       if (currentTagFilter === 'manhwa') {
-        if (!m.type.toLowerCase().includes('manhwa') && !m.title.includes('เกาหลี')) return false;
+        if (!typeLower.includes('manhwa') && !m.title.includes('เกาหลี') && !tagsLower.includes('manhwa')) return false;
       } else if (currentTagFilter === 'manhua') {
-        if (!m.type.toLowerCase().includes('manhua') && !m.title.includes('จีน')) return false;
+        if (!typeLower.includes('manhua') && !m.title.includes('จีน') && !tagsLower.includes('manhua')) return false;
       } else if (currentTagFilter === 'manga') {
-        if (!m.type.toLowerCase().includes('manga')) return false;
+        if (!typeLower.includes('manga') && !tagsLower.includes('manga')) return false;
       } else if (currentTagFilter === 'romance') {
-        if (!m.sourceName.includes('Fin') && !m.title.includes('รัก') && !m.title.includes('สาว') && !m.title.includes('ภรรยา')) return false;
+        if (!m.sourceName.includes('Fin') && !m.title.includes('รัก') && !m.title.includes('สาว') && !m.title.includes('ภรรยา') && !tagsLower.includes('romance')) return false;
       } else if (currentTagFilter === 'action') {
-        if (!m.title.includes('เทพ') && !m.title.includes('จุติ') && !m.title.includes('เลเวล') && !m.title.includes('ดาบ') && !m.title.includes('ราชา') && !m.title.includes('ยุทธ')) return false;
+        if (!m.title.includes('เทพ') && !m.title.includes('จุติ') && !m.title.includes('เลเวล') && !m.title.includes('ดาบ') && !m.title.includes('ราชา') && !m.title.includes('ยุทธ') && !tagsLower.includes('action')) return false;
       } else if (currentTagFilter === 'doujin') {
-        if (!m.sourceName.includes('Ecchi') && !m.sourceName.includes('Doujin') && !m.type.toLowerCase().includes('doujin') && !m.type.toLowerCase().includes('18+')) return false;
+        if (!m.sourceName.includes('Ecchi') && !m.sourceName.includes('Doujin') && !typeLower.includes('doujin') && !typeLower.includes('18+') && !tagsLower.includes('doujinshi')) return false;
       }
     }
 
@@ -1664,6 +2022,17 @@ function applyFilters() {
 
     return true;
   });
+
+  // ถ้าเลือกทั้งสองภาษา ให้การ์ตูนไทยเป็นหลักอยู่ด้านบน แล้วตามด้วยการ์ตูนอังกฤษ
+  if (allowedLangs.has('th') && allowedLangs.has('en')) {
+    filteredList.sort((a, b) => {
+      const aTh = (a.lang || 'th') === 'th';
+      const bTh = (b.lang || 'th') === 'th';
+      if (aTh && !bTh) return -1;
+      if (!aTh && bTh) return 1;
+      return 0;
+    });
+  }
 
   currentDisplayCount = 40;
   renderMangaCards();
@@ -2152,10 +2521,18 @@ async function performGlobalLiveSearch(query) {
       console.warn(`Global search error for ${source.name}:`, e.message);
       return [];
     }
-  });
-
   const results = await Promise.allSettled(promises);
   let foundItems = [];
+  
+  // ค้นหาใน MangaDex เพิ่มเติมถ้าเปิดภาษาอังกฤษหรือคำค้นหามีภาษาอังกฤษ
+  if (selectedLanguages.has('en') || /[a-zA-Z]/.test(q)) {
+    try {
+      const mdSearchResults = await searchMangaDex(q, 25);
+      if (Array.isArray(mdSearchResults) && mdSearchResults.length > 0) {
+        foundItems.push(...mdSearchResults);
+      }
+    } catch (e) {}
+  }
   results.forEach(r => {
     if (r.status === 'fulfilled' && Array.isArray(r.value)) {
       foundItems.push(...r.value);
@@ -2403,6 +2780,9 @@ async function initAggregatorPage() {
     }
   });
 
+  // ผูกตัวกรองภาษาย่อย (Language Sub-Filter: ไทย / อังกฤษ)
+  setupLanguageFilter();
+
   // ผูกปุ่มโหลดเรื่องเพิ่มเติม
   if (loadMoreBtn && !loadMoreBtn.dataset.bound) {
     loadMoreBtn.dataset.bound = "1";
@@ -2619,7 +2999,9 @@ window.addEventListener('pageshow', (e) => {
 
 // Hero Spotlight
 function setupHeroSpotlight(list) {
-  const spotlight = list.find(m => m.cover && (m.title.includes('Solo') || m.title.includes('Nano') || m.title.includes('Magic') || m.title.includes('Lookism') || m.title.includes('Demon') || m.title.includes('Knight'))) || list[0];
+  const thaiList = list.filter(m => (m.lang || 'th') === 'th');
+  const pool = thaiList.length > 0 ? thaiList : list;
+  const spotlight = pool.find(m => m.cover && (m.title.includes('Solo') || m.title.includes('Nano') || m.title.includes('Magic') || m.title.includes('Lookism') || m.title.includes('Demon') || m.title.includes('Knight'))) || pool[0];
   if (!spotlight) return;
 
   const titleEl = document.getElementById('heroTitle');
@@ -2711,7 +3093,7 @@ function renderMangaCards() {
     }
 
     const placeholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23161821'/%3E%3Cstop offset='100%25' stop-color='%231f2330'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='200' height='280' rx='8' fill='url(%23bg)'/%3E%3Ctext x='50%25' y='46%25' fill='%23555b70' font-size='36' text-anchor='middle' dominant-baseline='middle'%3E📖%3C/text%3E%3Ctext x='50%25' y='64%25' fill='%23666d85' font-family='sans-serif' font-size='12' font-weight='bold' text-anchor='middle'%3ECleanManga%3C/text%3E%3C/svg%3E";
-    const coverUrl = m.cover ? getProxyUrl(m.cover) : placeholder;
+    const coverUrl = m.cover ? (m.lang === 'en' ? m.cover : getProxyUrl(m.cover)) : placeholder;
     const isFav = isFavorite(m.title);
 
     let historyBadgeHtml = '';
@@ -2738,6 +3120,7 @@ function renderMangaCards() {
       <div class="manga-cover">
         <div class="manga-badge-group">
           <span class="manga-badge">${m.type || 'Manga'}</span>
+          ${m.lang === 'en' ? '<span class="manga-lang-badge lang-en">🇬🇧 EN</span>' : '<span class="manga-lang-badge lang-th">🇹🇭 TH</span>'}
         </div>
         ${isHistoryView ? `
           <button class="btn-card-remove-hist" title="ลบเรื่องนี้ออกจากประวัติ" data-target="${encodeURIComponent(m.mangaUrl || m.title)}">
@@ -3353,8 +3736,12 @@ async function openChapterModal(manga, activeSource = null) {
     sourceSelector.style.display = 'flex';
     sourcePills.innerHTML = '';
 
-    // เรียงลำดับแถบปุ่ม: เว็บฟรีก่อน + เว็บที่มีจำนวนตอนมากที่สุดอยู่หน้าสุด!
+    // เรียงลำดับแถบปุ่ม: เว็บภาษาไทยก่อนเสมอ + เว็บฟรีก่อน + เว็บที่มีจำนวนตอนมากที่สุดอยู่หน้าสุด!
     allSources.sort((a, b) => {
+      const aTh = (a.lang || 'th') === 'th' ? 1 : 0;
+      const bTh = (b.lang || 'th') === 'th' ? 1 : 0;
+      if (bTh !== aTh) return bTh - aTh;
+
       const aFree = a.readable !== false ? 1 : 0;
       const bFree = b.readable !== false ? 1 : 0;
       if (bFree !== aFree) return bFree - aFree;
@@ -3508,26 +3895,32 @@ async function openChapterModal(manga, activeSource = null) {
   if (modal) modal.style.display = 'flex';
 
   try {
-    let html = await fetchViaProxy(currentSource.mangaUrl);
-    let chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType);
+    let chapters = [];
+    if (currentSource.sourceType === 'mangadex') {
+      const mangaId = currentSource.mangaId || (currentSource.mangaUrl.match(/title\/([a-f0-9-]+)/i) || [])[1];
+      chapters = await fetchMangaDexChapters(mangaId);
+    } else {
+      let html = await fetchViaProxy(currentSource.mangaUrl);
+      chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType);
 
-    // สำหรับเว็บตระกูล Madara (เช่น Du-Manga) หากหน้าแรกไม่ได้ใส่รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที
-    if (currentSource.sourceType === 'madara' && chapters.length === 0) {
-      try {
-        const ajaxUrl = currentSource.mangaUrl.replace(/\/$/, '') + '/ajax/chapters/';
-        const ajaxHtml = await fetchViaProxy(ajaxUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'action=manga_get_chapters'
-        });
-        if (ajaxHtml) {
-          const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, currentSource.sourceType);
-          if (ajaxChapters.length > 0) {
-            chapters = ajaxChapters;
+      // สำหรับเว็บตระกูล Madara (เช่น Du-Manga) หากหน้าแรกไม่ได้ใส่รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที
+      if (currentSource.sourceType === 'madara' && chapters.length === 0) {
+        try {
+          const ajaxUrl = currentSource.mangaUrl.replace(/\/$/, '') + '/ajax/chapters/';
+          const ajaxHtml = await fetchViaProxy(ajaxUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=manga_get_chapters'
+          });
+          if (ajaxHtml) {
+            const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, currentSource.sourceType);
+            if (ajaxChapters.length > 0) {
+              chapters = ajaxChapters;
+            }
           }
+        } catch (errAjax) {
+          console.warn("Madara ajax chapters fetch:", errAjax);
         }
-      } catch (errAjax) {
-        console.warn("Madara ajax chapters fetch:", errAjax);
       }
     }
 
@@ -3589,13 +3982,13 @@ async function openChapterModal(manga, activeSource = null) {
       const currentBadgeHtml = isCurrent ? '<span class="chapter-current-badge">กำลังอ่าน 📍</span>' : '';
       const readBadgeHtml = (!isCurrent && isRead) ? '<span class="chapter-read-badge">✓ อ่านแล้ว</span>' : '';
 
-      if (c.isLocked) {
-        // ตอนติดเหรียญ: เปิดอ่านที่เว็บต้นทางโดยตรง
+      if (c.isLocked || (c.isExternal && c.url.startsWith('http'))) {
+        // ตอนติดเหรียญหรือตอนเว็บภายนอก: เปิดอ่านที่เว็บต้นทางโดยตรง
         a.href = c.url;
         a.target = '_blank';
         a.innerHTML = `
           <div class="chapter-title-group">
-            <span class="chapter-badge-coin">${c.badge || '🔒 ติดเหรียญ'}</span>
+            <span class="chapter-badge-coin">${c.badge || (c.isExternal ? '↗ เว็บนอก' : '🔒 ติดเหรียญ')}</span>
             <span class="chapter-title-text">${c.title}</span>
             ${currentBadgeHtml}
             ${readBadgeHtml}
@@ -4069,8 +4462,14 @@ async function initReaderPage() {
     statusEl.style.display = 'block';
     statusEl.innerHTML = '<div class="spinner"></div>กำลังโหลดรูปภาพมังงะ...';
 
-    const html = await fetchViaProxy(cleanCurrentChapterUrl);
-    const readerData = parseReaderData(html, cleanCurrentChapterUrl);
+    let readerData;
+    if (cleanCurrentChapterUrl.startsWith('mangadex://') || mangaObj.sourceType === 'mangadex') {
+      const chId = cleanCurrentChapterUrl.replace('mangadex://', '').split('?')[0];
+      readerData = await fetchMangaDexReaderImages(chId);
+    } else {
+      const html = await fetchViaProxy(cleanCurrentChapterUrl);
+      readerData = parseReaderData(html, cleanCurrentChapterUrl);
+    }
 
     // ถ้าระบบยังหา prevUrl หรือ nextUrl ไม่พบ ให้ดึงจาก cached_chapters มาคำนวณตอนถัดไป/ก่อนหน้า
     if (!readerData.prevUrl || !readerData.nextUrl) {

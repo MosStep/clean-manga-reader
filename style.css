@@ -588,6 +588,120 @@ body {
   color: var(--text-sub);
 }
 
+/* Language Sub-Filter Bar */
+.lang-filter-bar {
+  display: flex;
+  align-items: center;
+  margin-top: -14px;
+  margin-bottom: 22px;
+  padding: 10px 16px;
+  background: rgba(22, 24, 33, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+}
+
+.lang-filter-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.lang-filter-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-sub);
+}
+
+.lang-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lang-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  color: var(--text-sub);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+  font-family: inherit;
+}
+
+.lang-chip:hover {
+  border-color: var(--primary);
+  color: var(--text-main);
+  background: rgba(0, 230, 118, 0.06);
+}
+
+.lang-chip.active {
+  background: rgba(0, 230, 118, 0.15);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 0 12px rgba(0, 230, 118, 0.2);
+}
+
+.lang-chip-all {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: 16px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-sub);
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.lang-chip-all:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.lang-badge-check {
+  font-size: 0.75rem;
+  font-weight: bold;
+  color: var(--primary);
+}
+
+/* Badge on Manga Card */
+.manga-lang-badge {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.manga-lang-badge.lang-th {
+  background: rgba(0, 176, 255, 0.2);
+  color: #00b0ff;
+  border: 1px solid rgba(0, 176, 255, 0.4);
+}
+.manga-lang-badge.lang-en {
+  background: rgba(255, 64, 129, 0.2);
+  color: #ff4081;
+  border: 1px solid rgba(255, 64, 129, 0.4);
+}
+
 /* Manga Grid */
 .manga-grid {
   display: grid;

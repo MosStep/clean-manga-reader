@@ -15,28 +15,42 @@ const CONFIG = {
     ? '/api/sync'
     : 'https://clean-manga-reader.mosstep.workers.dev/api/sync',
 
-  // รายการเว็บต้นทางทั้งหมด
+  // รายการเว็บต้นทางทั้งหมด (ภาษาไทย)
   // เว็บที่ readable: true สามารถอ่านภาพแนวตั้งได้สมบูรณ์แบบในเว็บนี้ 100%
   // เว็บที่ readable: false เป็นเว็บที่มีระบบเหรียญหรือเข้ารหัสของค่ายต้นทาง (มีปุ่มเปิดอ่านเว็บต้นทางให้)
   SOURCES: [
-    { id: 'go-manga', name: 'Go-Manga', url: 'https://www.go-manga.com', type: 'mangareader', icon: '⚡', readable: true, isCoin: false },
-    { id: 'slow-manga', name: 'Slow-Manga', url: 'https://www.slow-manga.net', type: 'mangareader', icon: '🐢', readable: true, isCoin: false },
-    { id: 'ped-manga', name: 'Ped-Manga', url: 'https://ped-manga.com', type: 'mangareader', icon: '🦆', readable: true, isCoin: false },
-    { id: 'manga-step', name: 'MangaStep', url: 'https://mangastep.com', type: 'mangareader', icon: '🐾', readable: true, isCoin: false },
-    { id: 'ntr-manga', name: 'NTR-Manga', url: 'https://www.ntr-manga.net', type: 'mangareader', icon: '🔥', readable: true, isCoin: false },
-    { id: 'dark-manga', name: 'Dark-Manga', url: 'https://www.dark-manga.com', type: 'mangareader', icon: '🌑', readable: true, isCoin: false },
-    { id: 'fin-manga', name: 'Fin-Manga', url: 'https://www.fin-manga.com', type: 'mangareader', icon: '🌸', readable: true, isCoin: false },
-    { id: 'up-manga', name: 'Up-Manga', url: 'https://www.up-manga.com', type: 'mangareader', icon: '🚀', readable: true, isCoin: false },
-    { id: 'speed-manga', name: 'Speed-Manga', url: 'https://speed-manga.net', type: 'mangareader', icon: '⚡', readable: true, isCoin: false },
-    { id: 'du-manga', name: 'Du-Manga', url: 'https://www.du-manga.com', type: 'madara', icon: '📖', readable: true, isCoin: false },
-    { id: 'manga-lc', name: 'Manga-LC', url: 'https://manga-lc.net', type: 'madara', icon: '📚', readable: true, isCoin: false },
-    { id: 'sing-manga', name: 'Sing-Manga', url: 'https://www.sing-manga.com', type: 'mangareader', icon: '🎤', readable: true, isCoin: false },
-    { id: 'flash-manga', name: 'Flash-Manga', url: 'https://www.flash-manga.net', type: 'mangareader', icon: '⚡', readable: true, isCoin: false },
-    { id: 'chibi-manga', name: 'Chibi-Manga', url: 'https://chibi-manga.com', type: 'mangareader', icon: '🧸', readable: true, isCoin: false },
-    { id: 'nano-manga', name: 'Nano-Manga', url: 'https://nano-manga.com', type: 'madara', icon: '🧬', readable: true, isCoin: false },
-    { id: 'ecchi-doujin', name: 'Ecchi-Doujin', url: 'https://ecchi-doujin.com', type: 'mangareader', icon: '🔞', readable: true, isCoin: false },
-    { id: 'ntrnaja', name: 'NTRnaja', url: 'https://ntrnaja.com', type: 'ntrnaja', icon: '🔥', readable: false, isCoin: true }
+    { id: 'go-manga', name: 'Go-Manga', url: 'https://www.go-manga.com', type: 'mangareader', icon: '⚡', readable: true, isCoin: false, lang: 'th' },
+    { id: 'slow-manga', name: 'Slow-Manga', url: 'https://www.slow-manga.net', type: 'mangareader', icon: '🐢', readable: true, isCoin: false, lang: 'th' },
+    { id: 'ped-manga', name: 'Ped-Manga', url: 'https://ped-manga.com', type: 'mangareader', icon: '🦆', readable: true, isCoin: false, lang: 'th' },
+    { id: 'manga-step', name: 'MangaStep', url: 'https://mangastep.com', type: 'mangareader', icon: '🐾', readable: true, isCoin: false, lang: 'th' },
+    { id: 'ntr-manga', name: 'NTR-Manga', url: 'https://www.ntr-manga.net', type: 'mangareader', icon: '🔥', readable: true, isCoin: false, lang: 'th' },
+    { id: 'dark-manga', name: 'Dark-Manga', url: 'https://www.dark-manga.com', type: 'mangareader', icon: '🌑', readable: true, isCoin: false, lang: 'th' },
+    { id: 'fin-manga', name: 'Fin-Manga', url: 'https://www.fin-manga.com', type: 'mangareader', icon: '🌸', readable: true, isCoin: false, lang: 'th' },
+    { id: 'up-manga', name: 'Up-Manga', url: 'https://www.up-manga.com', type: 'mangareader', icon: '🚀', readable: true, isCoin: false, lang: 'th' },
+    { id: 'speed-manga', name: 'Speed-Manga', url: 'https://speed-manga.net', type: 'mangareader', icon: '⚡', readable: true, isCoin: false, lang: 'th' },
+    { id: 'du-manga', name: 'Du-Manga', url: 'https://www.du-manga.com', type: 'madara', icon: '📖', readable: true, isCoin: false, lang: 'th' },
+    { id: 'manga-lc', name: 'Manga-LC', url: 'https://manga-lc.net', type: 'madara', icon: '📚', readable: true, isCoin: false, lang: 'th' },
+    { id: 'sing-manga', name: 'Sing-Manga', url: 'https://www.sing-manga.com', type: 'mangareader', icon: '🎤', readable: true, isCoin: false, lang: 'th' },
+    { id: 'flash-manga', name: 'Flash-Manga', url: 'https://www.flash-manga.net', type: 'mangareader', icon: '⚡', readable: true, isCoin: false, lang: 'th' },
+    { id: 'chibi-manga', name: 'Chibi-Manga', url: 'https://chibi-manga.com', type: 'mangareader', icon: '🧸', readable: true, isCoin: false, lang: 'th' },
+    { id: 'nano-manga', name: 'Nano-Manga', url: 'https://nano-manga.com', type: 'madara', icon: '🧬', readable: true, isCoin: false, lang: 'th' },
+    { id: 'ecchi-doujin', name: 'Ecchi-Doujin', url: 'https://ecchi-doujin.com', type: 'mangareader', icon: '🔞', readable: true, isCoin: false, lang: 'th' },
+    { id: 'ntrnaja', name: 'NTRnaja', url: 'https://ntrnaja.com', type: 'ntrnaja', icon: '🔥', readable: false, isCoin: true, lang: 'th' }
   ],
+
+  // แหล่งข้อมูลการ์ตูนภาษาอังกฤษระดับโลก (MangaDex)
+  MANGADEX: {
+    id: 'mangadex',
+    name: 'MangaDex (EN)',
+    url: 'https://mangadex.org',
+    apiUrl: 'https://api.mangadex.org',
+    coverUrl: 'https://uploads.mangadex.org/covers',
+    type: 'mangadex',
+    icon: '🌐',
+    readable: true,
+    isCoin: false,
+    lang: 'en'
+  },
 
   DEFAULT_SOURCE_ID: 'all'
 };
