@@ -509,9 +509,9 @@ async function fetchMangaDexBatch(limit = 40, page = 1, lang = 'en') {
     const offset = (page - 1) * limit;
     let url = '';
     if (lang === 'ja') {
-      url = `https://api.mangadex.org/manga?limit=${limit}&offset=${offset}&originalLanguage[]=ja&order[latestUploadedChapter]=desc&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
+      url = `https://api.mangadex.org/manga?limit=${limit}&offset=${offset}&availableTranslatedLanguage[]=ja&order[latestUploadedChapter]=desc&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
     } else if (lang === 'ko') {
-      url = `https://api.mangadex.org/manga?limit=${limit}&offset=${offset}&originalLanguage[]=ko&order[latestUploadedChapter]=desc&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
+      url = `https://api.mangadex.org/manga?limit=${limit}&offset=${offset}&availableTranslatedLanguage[]=ko&order[latestUploadedChapter]=desc&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
     } else {
       url = `https://api.mangadex.org/manga?limit=${limit}&offset=${offset}&availableTranslatedLanguage[]=en&order[latestUploadedChapter]=desc&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
     }
@@ -617,13 +617,19 @@ async function fetchMangaDexChapters(mangaId, targetLang = '') {
       } catch (e) {}
     }
 
-    // หากไม่พบตอนในภาษานั้น ให้ดึงแบบไม่จำกัดภาษา (Fallback)
+    // หากไม่พบตอนในภาษานั้น ให้ลองดึงเฉพาะภาษาอังกฤษ (en) เป็น Fallback ถ้ามี (ไม่ดึงภาษาอื่นที่ไม่เกี่ยวข้อง เช่น เวียดนาม vi หรือ รัสเซีย ru)
     if (!json || !Array.isArray(json.data) || json.data.length === 0) {
-      try {
-        const fallbackUrl = `https://api.mangadex.org/manga/${mangaId}/feed?order[chapter]=desc&limit=300&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
-        const res2 = await fetch(fallbackUrl);
-        if (res2.ok) json = await res2.json();
-      } catch (e) {}
+      if (langFilter && langFilter !== 'en') {
+        try {
+          const enFallbackUrl = `https://api.mangadex.org/manga/${mangaId}/feed?order[chapter]=desc&limit=300&translatedLanguage[]=en&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
+          const res2 = await fetch(enFallbackUrl);
+          if (res2.ok) json = await res2.json();
+          if (!json) {
+            const proxyRes2 = await fetchViaProxy(enFallbackUrl, {}, 8000);
+            json = JSON.parse(proxyRes2);
+          }
+        } catch (e) {}
+      }
     }
 
     if (!json || !Array.isArray(json.data)) return [];
@@ -1343,6 +1349,15 @@ function getReadingHistory() {
         localStorage.setItem(STORAGE_HISTORY, JSON.stringify(result.slice(0, 500)));
       } catch (e) {}
     }
+    result.forEach(item => {
+      if (!item.lang) {
+        if (item.sourceId === 'mangadex' || (item.mangaUrl && item.mangaUrl.includes('mangadex.org')) || (item.lastChapterUrl && item.lastChapterUrl.includes('mangadex'))) {
+          item.lang = 'en';
+        } else {
+          item.lang = 'th';
+        }
+      }
+    });
     return result;
   } catch (e) {
     return [];
@@ -1352,7 +1367,18 @@ function getReadingHistory() {
 // ดึงรายการโปรด
 function getFavorites() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_FAVORITES) || '[]');
+    const list = JSON.parse(localStorage.getItem(STORAGE_FAVORITES) || '[]');
+    if (!Array.isArray(list)) return [];
+    return list.map(item => {
+      if (!item.lang) {
+        if (item.sourceId === 'mangadex' || (item.mangaUrl && item.mangaUrl.includes('mangadex.org'))) {
+          item.lang = 'en';
+        } else {
+          item.lang = 'th';
+        }
+      }
+      return item;
+    });
   } catch (e) {
     return [];
   }
@@ -1396,6 +1422,7 @@ function toggleFavorite(manga) {
       localStorage.setItem(STORAGE_DELETED_FAVORITES, JSON.stringify(delFavs));
     } catch (e) {}
 
+    const mangaLang = manga.lang || (manga.sourceId === 'mangadex' ? 'en' : 'th');
     favs.unshift({
       title: manga.title,
       cover: manga.cover || '',
@@ -1407,6 +1434,7 @@ function toggleFavorite(manga) {
       sourceUrl: manga.sourceUrl || '',
       sourceType: manga.sourceType || 'mangareader',
       readable: manga.readable !== false,
+      lang: mangaLang,
       savedAt: Date.now()
     });
     nowFav = true;
@@ -1560,6 +1588,7 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
       sourceUrl: manga.sourceUrl || (existing ? existing.sourceUrl : ''),
       sourceType: manga.sourceType || (existing ? existing.sourceType : 'mangareader'),
       readable: manga.readable !== false,
+      lang: manga.lang || (existing ? existing.lang : (manga.sourceId === 'mangadex' ? 'en' : 'th')),
       altSources: (manga.altSources && manga.altSources.length > 0) ? manga.altSources : (existing && existing.altSources ? existing.altSources : []),
       lastChapterTitle: cleanChapterTitle,
       lastChapterUrl: chapterUrl,
@@ -2063,8 +2092,39 @@ function applyFilters() {
     return true;
   });
 
-  // ถ้าเลือกหลายภาษา ให้การ์ตูนไทยเป็นหลักอยู่ด้านบนเสมอ แล้วตามด้วยภาษาอื่นๆ
-  if (allowedLangs.has('th') && (allowedLangs.size > 1 || currentSearchQuery)) {
+  // จัดการลำดับการแสดงผล:
+  if (currentSearchQuery) {
+    // กรณีพิมพ์ค้นหา: ให้การ์ตูนไทยขึ้นนำก่อนเสมอ
+    if (allowedLangs.has('th')) {
+      filteredList.sort((a, b) => {
+        const aTh = (a.lang || 'th') === 'th';
+        const bTh = (b.lang || 'th') === 'th';
+        if (aTh && !bTh) return -1;
+        if (!aTh && bTh) return 1;
+        return 0;
+      });
+    }
+  } else if (allowedLangs.size > 1 && currentTagFilter === 'all' && currentSourceFilter === 'all') {
+    // กรณีเลือกหลายภาษาหรือทั้งหมดในหน้าแรก: สลับกันขึ้น (Interleave) เพื่อให้มังงะสากล (EN/JA/KO) ปรากฏร่วมกับมังงะไทยในหน้าแรก
+    const thList = filteredList.filter(m => (m.lang || 'th') === 'th');
+    const foreignList = filteredList.filter(m => (m.lang || 'th') !== 'th');
+    if (thList.length > 0 && foreignList.length > 0) {
+      const interleaved = [];
+      let thIdx = 0;
+      let fIdx = 0;
+      // สลับอัตราส่วน: การ์ตูนไทย 2-3 เรื่อง ต่อ การ์ตูนสากล 1 เรื่อง
+      while (thIdx < thList.length || fIdx < foreignList.length) {
+        for (let i = 0; i < 3 && thIdx < thList.length; i++) {
+          interleaved.push(thList[thIdx++]);
+        }
+        if (fIdx < foreignList.length) {
+          interleaved.push(foreignList[fIdx++]);
+        }
+      }
+      filteredList = interleaved;
+    }
+  } else if (allowedLangs.has('th') && allowedLangs.size > 1) {
+    // ในหมวดอื่นๆ ที่ไม่ใช่หน้าแรก ให้การ์ตูนไทยนำหน้า
     filteredList.sort((a, b) => {
       const aTh = (a.lang || 'th') === 'th';
       const bTh = (b.lang || 'th') === 'th';
@@ -3074,11 +3134,13 @@ function setupHeroSpotlight(list) {
   const chaptersBtn = document.getElementById('heroChaptersBtn');
 
   if (titleEl) titleEl.textContent = spotlight.title;
-  if (backdropEl && spotlight.cover) {
-    backdropEl.style.backgroundImage = `url('${getProxyUrl(spotlight.cover)}')`;
+  const isMangaDex = spotlight.sourceId === 'mangadex' || (spotlight.lang && spotlight.lang !== 'th');
+  const heroCover = spotlight.cover ? (isMangaDex ? spotlight.cover : getProxyUrl(spotlight.cover)) : '';
+  if (backdropEl && heroCover) {
+    backdropEl.style.backgroundImage = `url('${heroCover}')`;
   }
-  if (posterImg && spotlight.cover) {
-    posterImg.src = getProxyUrl(spotlight.cover);
+  if (posterImg && heroCover) {
+    posterImg.src = heroCover;
     posterImg.alt = spotlight.title;
     posterImg.style.display = 'block';
     posterImg.onclick = () => openChapterModal(spotlight);
@@ -4093,6 +4155,8 @@ async function openChapterModal(manga, activeSource = null) {
         q.set('sourceId', currentSource.sourceId || '');
         q.set('sourceName', currentSource.sourceName);
         q.set('sourceType', currentSource.sourceType);
+        const resolvedLang = c.lang || currentSource.lang || manga.lang || (currentSource.sourceId === 'mangadex' ? 'en' : 'th');
+        q.set('lang', resolvedLang);
 
         a.href = `reader.html?${q.toString()}`;
         a.innerHTML = `
@@ -4116,7 +4180,8 @@ async function openChapterModal(manga, activeSource = null) {
           sourceId: currentSource.sourceId || manga.sourceId,
           sourceName: currentSource.sourceName || manga.sourceName,
           sourceUrl: currentSource.sourceUrl || manga.sourceUrl,
-          sourceType: currentSource.sourceType || manga.sourceType
+          sourceType: currentSource.sourceType || manga.sourceType,
+          lang: c.lang || currentSource.lang || manga.lang || (currentSource.sourceId === 'mangadex' ? 'en' : 'th')
         };
         recordReadingHistory(mangaForHist, c.title, c.url);
       });
@@ -4431,6 +4496,16 @@ async function initReaderPage() {
     }
   } catch (e) {}
 
+  const lang = params.get('lang');
+  let savedLang = '';
+  try {
+    const saved = sessionStorage.getItem('currentManga');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.lang) savedLang = parsed.lang;
+    }
+  } catch (e) {}
+
   const mangaObj = {
     title: mangaTitle || title.split(' - ')[0] || 'มังงะ',
     cover: mangaCover || '',
@@ -4439,6 +4514,7 @@ async function initReaderPage() {
     sourceName: sourceName || 'Online',
     sourceUrl: sourceUrl || '',
     sourceType: sourceType || 'mangareader',
+    lang: lang || savedLang || (sourceId === 'mangadex' ? 'en' : 'th'),
     altSources: savedAltSources
   };
 
@@ -4599,6 +4675,11 @@ async function initReaderPage() {
     statusEl.style.display = 'none';
 
     if (readerData.images.length === 0) {
+      let directUrl = cleanCurrentChapterUrl;
+      if (directUrl.startsWith('mangadex://')) {
+        const chId = directUrl.replace('mangadex://', '').split('?')[0];
+        directUrl = `https://mangadex.org/chapter/${chId}`;
+      }
       statusEl.style.display = 'block';
       statusEl.innerHTML = `
         <div style="max-width:520px; margin: 40px auto; padding: 32px 24px; background: rgba(255,255,255,0.04); border-radius: 18px; border: 1px solid var(--border); text-align: center; backdrop-filter: blur(10px);">
@@ -4608,7 +4689,7 @@ async function initReaderPage() {
             เนื่องจากตอนนี้ในเว็บต้นทาง (${mangaObj.sourceName}) มีการใช้ระบบป้องกันเหรียญหรือบอท คุณสามารถกดเปิดอ่านได้โดยตรงที่เว็บต้นทาง
           </p>
           <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-            <a href="${cleanCurrentChapterUrl}" target="_blank" class="btn-primary" style="padding: 11px 22px; font-size: 0.9rem;">
+            <a href="${directUrl}" target="_blank" class="btn-primary" style="padding: 11px 22px; font-size: 0.9rem;">
               เปิดอ่านที่เว็บต้นทาง ↗
             </a>
             <button onclick="window.history.back()" class="btn-secondary" style="padding: 11px 22px; font-size: 0.9rem;">
