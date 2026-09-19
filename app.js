@@ -530,7 +530,47 @@ function parseAsuraScansHtml(html, sourceInfo) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const items = [];
-  const seenUrls = new Set();
+  const itemMap = new Map();
+
+  // รวบรวมข้อมูลตอนล่าสุดจาก URL /comics/.../chapter/... และ Astro JSON payloads ใน HTML
+  const comicChapterMap = new Map();
+
+  const registerChapter = (rawSlug, epNum) => {
+    if (!rawSlug || isNaN(epNum)) return;
+    const s1 = rawSlug.trim();
+    const s2 = s1.replace(/-[a-f0-9]{8}$/i, '');
+    const cur1 = comicChapterMap.get(s1) || 0;
+    if (epNum > cur1) comicChapterMap.set(s1, epNum);
+    const cur2 = comicChapterMap.get(s2) || 0;
+    if (epNum > cur2) comicChapterMap.set(s2, epNum);
+  };
+
+  // 1. ดึงจากลิงก์ chapter ใน HTML: /comics/<slug>/chapter/<num>
+  const chRegex = /\/comics\/([a-zA-Z0-9_\-]+)\/chapter\/([0-9]+(?:\.[0-9]+)?)/g;
+  let chMatch;
+  while ((chMatch = chRegex.exec(html)) !== null) {
+    registerChapter(chMatch[1], parseFloat(chMatch[2]));
+  }
+
+  // 2. ดึงจาก Astro Island JSON payloads: chapter_count หรือ latest_chapter_number
+  try {
+    const astroRegex1 = /&quot;chapter_count&quot;:\[0,(\d+(?:\.\d+)?)\].*?&quot;public_url&quot;:\[0,&quot;(\/comics\/[^&"]+)&quot;\]/g;
+    let aMatch;
+    while ((aMatch = astroRegex1.exec(html)) !== null) {
+      const epNum = parseFloat(aMatch[1]);
+      const pUrl = aMatch[2];
+      const slug = pUrl.split('/comics/')[1]?.split(/[?#]/)[0];
+      registerChapter(slug, epNum);
+    }
+
+    const astroRegex2 = /&quot;public_url&quot;:\[0,&quot;(\/comics\/[^&"]+)&quot;\].*?&quot;latest_chapter_number&quot;:\[0,(\d+(?:\.\d+)?)\]/g;
+    while ((aMatch = astroRegex2.exec(html)) !== null) {
+      const pUrl = aMatch[1];
+      const epNum = parseFloat(aMatch[2]);
+      const slug = pUrl.split('/comics/')[1]?.split(/[?#]/)[0];
+      registerChapter(slug, epNum);
+    }
+  } catch (e) {}
 
   const comicLinks = doc.querySelectorAll('a[href*="/comics/"]');
   comicLinks.forEach(a => {
@@ -539,7 +579,39 @@ function parseAsuraScansHtml(html, sourceInfo) {
       if (!href || href === '/comics' || href.includes('/browse/') || href.includes('/bookmarks/')) return;
       if (href.startsWith('/')) href = 'https://asurascans.com' + href;
 
-      if (seenUrls.has(href)) return;
+      const slug = href.split('/comics/')[1]?.split(/[?#]/)[0] || '';
+
+      // หาเลขตอนจาก comicChapterMap หรือจาก container ใน DOM
+      let detectedEp = '';
+      const mappedEp = comicChapterMap.get(slug) || comicChapterMap.get(slug.replace(/-[a-f0-9]{8}$/i, ''));
+      if (mappedEp !== undefined && mappedEp !== null) {
+        detectedEp = `Chapter ${mappedEp}`;
+      }
+
+      if (!detectedEp) {
+        const container = a.closest('.grid, .group, .embla-trending__slide, .embla-hero__slide, article') || a.parentElement;
+        if (container) {
+          const epLink = container.querySelector('a[href*="/chapter/"]');
+          if (epLink) {
+            const epNumM = (epLink.getAttribute('href') || '').match(/\/chapter\/(\d+(?:\.\d+)?)/i) ||
+                           (epLink.textContent || '').match(/(\d+(?:\.\d+)?)/);
+            if (epNumM) detectedEp = `Chapter ${epNumM[1]}`;
+          }
+          if (!detectedEp) {
+            const textMatch = (container.textContent || '').match(/Chapter\s*(\d+(?:\.\d+)?)/i);
+            if (textMatch) detectedEp = `Chapter ${textMatch[1]}`;
+          }
+        }
+      }
+
+      // ถ้าเคยมี URL นี้แล้ว ให้เช็คว่าข้อมูลที่เจอใหม่มีเลขตอนที่ดีกว่าหรือไม่
+      if (itemMap.has(href)) {
+        const existing = itemMap.get(href);
+        if (detectedEp && (!existing.latestEp || existing.latestEp.includes('ตอนล่าสุด') || existing.latestEp === 'Chapter 0')) {
+          existing.latestEp = detectedEp;
+        }
+        return;
+      }
 
       const img = a.querySelector('img');
       const cover = img ? (img.getAttribute('src') || '') : '';
@@ -549,21 +621,17 @@ function parseAsuraScansHtml(html, sourceInfo) {
         title = titleEl ? titleEl.textContent.trim() : '';
       }
       if (!title) {
-        const slug = href.split('/comics/')[1] || '';
         title = decodeURIComponent(slug.replace(/-[a-f0-9]{8}$/i, '').replace(/[-_]/g, ' ')).trim();
       }
 
       if (!title || title.length < 2) return;
-      seenUrls.add(href);
 
-      // ตรวจสอบตอนล่าสุดถ้ามีระบุใน card
-      const epEl = a.parentElement ? a.parentElement.querySelector('a[href*="/chapter/"]') : null;
-      let latestEp = epEl ? epEl.textContent.trim() : 'ตอนล่าสุด (EN)';
+      let latestEp = detectedEp || 'ตอนล่าสุด (EN)';
 
       let type = 'Manhwa';
       if (/manga/i.test(title)) type = 'Manga';
 
-      items.push({
+      const item = {
         title,
         mangaUrl: href,
         cover,
@@ -577,7 +645,10 @@ function parseAsuraScansHtml(html, sourceInfo) {
         isCoin: false,
         icon: sourceInfo.icon || '⚔️',
         lang: 'en'
-      });
+      };
+
+      itemMap.set(href, item);
+      items.push(item);
     } catch (e) {}
   });
 
@@ -3665,7 +3736,6 @@ function renderMangaCards() {
         <div class="manga-badge-group">
           <span class="manga-badge">${m.type || 'Manga'}</span>
           ${renderLangBadge(m.lang)}
-          ${maxEpNum > 0 ? `<span class="manga-ep-badge">${(m.lang === 'en') ? 'Ch.' + maxEpNum : 'ตอนที่ ' + maxEpNum}</span>` : ''}
         </div>
         ${isHistoryView ? `
           <button class="btn-card-remove-hist" title="ลบเรื่องนี้ออกจากประวัติ" data-target="${encodeURIComponent(m.mangaUrl || m.title)}">

@@ -739,21 +739,6 @@ body {
   border: 1px solid rgba(179, 136, 255, 0.4);
 }
 
-.manga-ep-badge {
-  background: rgba(0, 230, 118, 0.22);
-  color: #00e676;
-  border: 1px solid rgba(0, 230, 118, 0.45);
-  backdrop-filter: blur(6px);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 0.68rem;
-  font-weight: 700;
-  white-space: nowrap;
-  width: fit-content;
-  max-width: max-content;
-  display: inline-flex;
-  align-items: center;
-}
 
 /* Manga Grid */
 .manga-grid {
