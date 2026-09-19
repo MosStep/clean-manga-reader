@@ -24,8 +24,6 @@ function getProxyUrl(targetUrl, referer = '') {
     url += `&referer=${encodeURIComponent('https://bully-manga.com/')}`;
   } else if (targetUrl.includes('sixmanga')) {
     url += `&referer=${encodeURIComponent('https://www.sixmanga.com/')}`;
-  } else if (targetUrl.includes('shonenmagazine')) {
-    url += `&referer=${encodeURIComponent('https://pocket.shonenmagazine.com/')}`;
   }
   return url;
 }
@@ -661,80 +659,6 @@ function parseBullyMangaHtml(html, sourceInfo) {
       icon: sourceInfo.icon || '🐂'
     });
   });
-
-  return items;
-}
-
-// 10. แกะข้อมูลจาก Magazine Pocket (pocket.shonenmagazine.com - ภาษาญี่ปุ่น JP)
-function parsePocketShonenHtml(html, sourceInfo) {
-  const items = [];
-  const seenIds = new Set();
-  const baseUrl = 'https://pocket.shonenmagazine.com';
-
-  // 1. ดึงจาก Nuxt SSR Payload หรือ JSON ในสคริปต์
-  try {
-    const titleRegex = /"title_id":(\d+),"title_name":"([^"]+)".*?"thumbnail_image_url":"([^"]+)"/g;
-    let match;
-    while ((match = titleRegex.exec(html)) !== null) {
-      const id = match[1];
-      const title = match[2].replace(/\\u([0-9a-fA-F]{4})/g, (_, c) => String.fromCharCode(parseInt(c, 16)));
-      let cover = match[3].replace(/\\u002F/g, '/');
-      if (!seenIds.has(id)) {
-        seenIds.add(id);
-        items.push({
-          title,
-          mangaUrl: `${baseUrl}/title/${id}`,
-          cover,
-          latestEp: '最新話',
-          type: 'Manga',
-          sourceId: sourceInfo.id,
-          sourceName: sourceInfo.name,
-          sourceUrl: sourceInfo.url,
-          sourceType: 'pocketshonen',
-          readable: false,
-          isCoin: true,
-          lang: 'ja',
-          icon: sourceInfo.icon || '🇯🇵'
-        });
-      }
-    }
-  } catch (e) {
-    console.warn("Pocket Shonen regex parse error:", e);
-  }
-
-  // 2. DOM fallback
-  if (items.length === 0) {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    doc.querySelectorAll('a[href*="/title/"]').forEach(a => {
-      let href = (a.getAttribute('href') || '').trim();
-      if (!href || href === '#' || seenIds.has(href)) return;
-      seenIds.add(href);
-
-      const titleEl = a.querySelector('.title, h2, h3, h4, p');
-      const title = titleEl ? titleEl.textContent.trim() : (a.getAttribute('title') || '');
-      if (!title) return;
-
-      const imgEl = a.querySelector('img');
-      const cover = imgEl ? (imgEl.getAttribute('src') || '') : '';
-
-      items.push({
-        title,
-        mangaUrl: href.startsWith('http') ? href : `${baseUrl}${href}`,
-        cover,
-        latestEp: '最新話',
-        type: 'Manga',
-        sourceId: sourceInfo.id,
-        sourceName: sourceInfo.name,
-        sourceUrl: sourceInfo.url,
-        sourceType: 'pocketshonen',
-        readable: false,
-        isCoin: true,
-        lang: 'ja',
-        icon: sourceInfo.icon || '🇯🇵'
-      });
-    });
-  }
 
   return items;
 }
@@ -2232,8 +2156,6 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
       targetUrl = page > 1 ? `${source.url}/comics?page=${page}` : `${source.url}/`;
     } else if (source.type === 'bullymanga') {
       targetUrl = page > 1 ? `${source.url}/page/${page}` : `${source.url}/`;
-    } else if (source.type === 'pocketshonen') {
-      targetUrl = page > 1 ? `${source.url}/ranking` : `${source.url}/`;
     }
 
     const html = await fetchViaProxy(targetUrl, {}, timeoutMs);
@@ -2255,8 +2177,6 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
       items = parseAsuraScansHtml(html, source);
     } else if (source.type === 'bullymanga') {
       items = parseBullyMangaHtml(html, source);
-    } else if (source.type === 'pocketshonen') {
-      items = parsePocketShonenHtml(html, source);
     } else {
       items = parseMangaReaderHtml(html, source);
     }
@@ -3060,8 +2980,6 @@ async function performGlobalLiveSearch(query) {
         searchUrl = `${source.url}/comics?search=${encodeURIComponent(q)}`;
       } else if (source.type === 'bullymanga') {
         searchUrl = `${source.url}/search?keyword=${encodeURIComponent(q)}`;
-      } else if (source.type === 'pocketshonen') {
-        return [];
       }
       const html = await fetchViaProxy(searchUrl, {}, 10000);
       let items = [];
@@ -3625,7 +3543,7 @@ function setupHeroSpotlight(list) {
   const chaptersBtn = document.getElementById('heroChaptersBtn');
 
   if (titleEl) titleEl.textContent = spotlight.title;
-  const isMangaDex = spotlight.sourceId === 'mangadex' || (spotlight.lang && spotlight.lang !== 'th');
+  const isMangaDex = spotlight.sourceId === 'mangadex';
   const heroCover = spotlight.cover ? (isMangaDex ? spotlight.cover : getProxyUrl(spotlight.cover)) : '';
   if (backdropEl && heroCover) {
     backdropEl.style.backgroundImage = `url('${heroCover}')`;
@@ -3645,10 +3563,10 @@ function setupHeroSpotlight(list) {
 // Helper แสดง Badge ภาษา
 function renderLangBadge(lang) {
   switch (lang) {
-    case 'en': return '<span class="manga-lang-badge lang-en">🇬🇧 EN</span>';
-    case 'ja': return '<span class="manga-lang-badge lang-ja">🇯🇵 JA</span>';
-    case 'ko': return '<span class="manga-lang-badge lang-ko">🇰🇷 KO</span>';
-    default: return '<span class="manga-lang-badge lang-th">🇹🇭 TH</span>';
+    case 'en': return '<span class="manga-lang-badge lang-en">EN</span>';
+    case 'ja': return '<span class="manga-lang-badge lang-ja">JA</span>';
+    case 'ko': return '<span class="manga-lang-badge lang-ko">KO</span>';
+    default: return '<span class="manga-lang-badge lang-th">TH</span>';
   }
 }
 
@@ -3720,7 +3638,7 @@ function renderMangaCards() {
     }
 
     const placeholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23161821'/%3E%3Cstop offset='100%25' stop-color='%231f2330'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='200' height='280' rx='8' fill='url(%23bg)'/%3E%3Ctext x='50%25' y='46%25' fill='%23555b70' font-size='36' text-anchor='middle' dominant-baseline='middle'%3E📖%3C/text%3E%3Ctext x='50%25' y='64%25' fill='%23666d85' font-family='sans-serif' font-size='12' font-weight='bold' text-anchor='middle'%3ECleanManga%3C/text%3E%3C/svg%3E";
-    const isMangaDex = m.sourceId === 'mangadex' || (m.lang && m.lang !== 'th');
+    const isMangaDex = m.sourceId === 'mangadex';
     const coverUrl = m.cover ? (isMangaDex ? m.cover : getProxyUrl(m.cover)) : placeholder;
     const isFav = isFavorite(m.title);
 
@@ -3734,14 +3652,12 @@ function renderMangaCards() {
       `;
     }
 
+    const maxEpNum = Math.max(extractEpNumberFromText(m.latestEp) || 0, extractEpNumberFromText(m.lastChapterTitle) || 0);
     let displayEp = (m.latestEp || '').trim();
-    if (!displayEp || displayEp === 'ตอนที่' || /อัปเดต\s*202\d|อัพเดต\s*202\d|\b202\d-\d{2}-\d{2}\b/i.test(displayEp)) {
+    if (maxEpNum > 0) {
+      displayEp = (m.lang === 'en') ? `Ch. ${maxEpNum}` : `ตอนที่ ${maxEpNum}`;
+    } else if (!displayEp || displayEp === 'ตอนที่' || /อัปเดต\s*202\d|อัพเดต\s*202\d|\b202\d-\d{2}-\d{2}\b/i.test(displayEp)) {
       displayEp = m.lastChapterTitle || 'ตอนล่าสุด';
-    }
-    const epNumLatest = extractEpNumberFromText(displayEp);
-    const epNumRead = extractEpNumberFromText(m.lastChapterTitle);
-    if (epNumRead > epNumLatest && epNumRead > 0) {
-      displayEp = `ตอนที่ ${epNumRead}`;
     }
 
     card.innerHTML = `
@@ -3749,6 +3665,7 @@ function renderMangaCards() {
         <div class="manga-badge-group">
           <span class="manga-badge">${m.type || 'Manga'}</span>
           ${renderLangBadge(m.lang)}
+          ${maxEpNum > 0 ? `<span class="manga-ep-badge">${(m.lang === 'en') ? 'Ch.' + maxEpNum : 'ตอนที่ ' + maxEpNum}</span>` : ''}
         </div>
         ${isHistoryView ? `
           <button class="btn-card-remove-hist" title="ลบเรื่องนี้ออกจากประวัติ" data-target="${encodeURIComponent(m.mangaUrl || m.title)}">
@@ -4121,24 +4038,6 @@ function parseChaptersFromHtml(html, baseUrl, sourceType) {
           isLocked: false,
           badge: '✨ ฟรี',
           sourceType: 'bullymanga'
-        });
-      }
-    });
-  } else if (sourceType === 'pocketshonen') {
-    const links = doc.querySelectorAll('a[href*="/episode/"], a[href*="/title/"]');
-    links.forEach(a => {
-      let url = (a.getAttribute('href') || '').trim();
-      if (!url) return;
-      if (url.startsWith('/')) url = 'https://pocket.shonenmagazine.com' + url;
-      let title = a.textContent.trim().replace(/\s+/g, ' ') || 'エピソードを読む';
-      if (!seenUrls.has(url)) {
-        seenUrls.add(url);
-        chapters.push({
-          title,
-          url,
-          isLocked: true,
-          badge: '🔒 公式/ポイント',
-          sourceType: 'pocketshonen'
         });
       }
     });

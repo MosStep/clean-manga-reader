@@ -88,8 +88,7 @@
  19. SixManga      (id: 'six-manga',    url: 'https://www.sixmanga.com',   type: 'madara',      icon: '6️⃣', lang: 'th')
  20. Asura Scans   (id: 'asura-scans',  url: 'https://asurascans.com',     type: 'asurascans',  icon: '⚔️', lang: 'en')
  21. MangaTown     (id: 'manga-town',   url: 'https://www.mangatown.com',  type: 'mangatown',   icon: '🏙️', lang: 'en')
- 22. Pocket Shonen (id: 'pocket-shonen',url: 'https://pocket.shonenmagazine.com', type: 'pocketshonen', icon: '🇯🇵', lang: 'ja')
- 23. MangaDex      (id: 'mangadex',     url: 'https://mangadex.org',       type: 'mangadex',    icon: '🌐', lang: 'en')
+ 22. MangaDex      (id: 'mangadex',     url: 'https://mangadex.org',       type: 'mangadex',    icon: '🌐', lang: 'en')
 
 --------------------------------------------------------------------------------
 [ 4. โครงสร้างไฟล์และหน้าที่ (FILE ARCHITECTURE) ]
@@ -110,9 +109,9 @@
   - recordReadingHistory: บันทึกประวัติอ่านลง localStorage ทันทีที่คลิกตอน และอัปเดตเลขตอนล่าสุดไม่ให้ค้าง
   - initSyncEngine, pushSyncData, pullAndMergeSyncData: ระบบซิงก์ข้ามเครื่องผ่าน Cloudflare KV
 - config.js:
-  ตั้งค่า SOURCES (ไทย 18 เว็บ + Eng 2 เว็บ: Asura Scans, MangaTown + JP 1 เว็บ: Pocket Shonen) และ MANGADEX (อังกฤษ), PROXY_URL, CHAT_API_URL, SYNC_API_BASE
+  ตั้งค่า SOURCES (ไทย 18 เว็บ + Eng 2 เว็บ: Asura Scans, MangaTown) และ MANGADEX (อังกฤษ), PROXY_URL, CHAT_API_URL, SYNC_API_BASE
 - style.css:
-  สไตล์ Dark Modern ธีมเขียว-ฟ้า นีออน ปรับแต่ง Mobile First สบายตา พร้อม Badge ภาษา (🇹🇭 TH / 🇬🇧 EN / 🇯🇵 JA) และปุ่ม Pill ไร้เครื่องหมายถูก
+  สไตล์ Dark Modern ธีมเขียว-ฟ้า นีออน ปรับแต่ง Mobile First สบายตา พร้อม Badge ภาษา (TH / EN / JA) และปุ่ม Pill ไร้เครื่องหมายถูก
 - worker/worker.js:
   Cloudflare Worker สำหรับทำ Proxy ปลดล็อก CORS, จัดการระบบแชทส่วนกลาง และเก็บข้อมูล KV Sync (Deduplicate ตามชื่อเรื่อง Normalized Title) พร้อม Referer routing พิเศษ
 
@@ -146,4 +145,18 @@
 3. การกำหนด Referer Routing:
    - เพิ่ม Referer https://www.sixmanga.com/ ใน getProxyUrl() และ worker/worker.js ป้องกันรูปภาพจาก cdn img.sixmanga.com ติด 403 Forbidden
 4. ปรับปรุงเวอร์ชันแคชเป็น v=4.3 ใน index.html และ reader.html
+--------------------------------------------------------------------------------
+[ 7. อัปเดตล่าสุด v4.4 ]
+1. แก้ไขรูปภาพปก MangaTown (fmcdn.mangahere.com) โหลดไม่ขึ้น:
+   - ตรวจพบเงื่อนไข isMangaDex = m.sourceId === 'mangadex' || (m.lang && m.lang !== 'th'); ทำให้ MangaTown ถูกเข้าใจว่าเป็น MangaDex และไม่ผ่าน Proxy ส่งผลให้ CDN บล็อกการโหลดโดยตรง (403 Forbidden)
+   - ปรับ isMangaDex ให้เช็คเฉพาะ 'mangadex' เท่านั้น ทำให้ภาพปกของ MangaTown ทั้งหมดวิ่งผ่าน Cloudflare Proxy พร้อมส่ง Referer: https://www.mangatown.com/ โหลดติด 100%
+2. ถอด Pocket Shonen (pocket.shonenmagazine.com) ออกจากระบบทั้งหมด:
+   - เนื่องจากเว็บต้นทางเป็น Nuxt App Shell ที่ไม่เปิดให้อ่านบนเว็บได้โดยตรง และมักส่งลิงก์ App Intent (magazinepocket://) ทำให้เกิด 404 หรือเด้งไปหน้าแชร์ Facebook บนมือถือ
+   - ลบออกจาก config.js, app.js และ worker.js อย่างหมดจด
+3. แก้ไขดีไซน์ Badge ภาษา TH และจัดระเบียบการแสดงเลขตอนด้านหน้าการ์ด:
+   - เพิ่ม align-items: flex-start ให้กับ .manga-badge-group และ display: inline-flex / fit-content ให้กับ .manga-lang-badge ป้องกันไม่ให้กรอบสีฟ้า TH ยืดตัวยาวเกิน
+   - ลบ Flag Emoji ใน renderLangBadge เพื่อป้องกันระบบปฏิบัติการ Windows แสดงผลเป็นตัวอักษรซ้ำสองตัว เช่น "TH TH"
+   - เพิ่ม Badge เลขตอนใหม่ (.manga-ep-badge) สีเขียวนีออนบนหน้าปกการ์ด (เช่น "ตอนที่ 124" หรือ "Ch. 531") ให้ผู้ใช้เห็นจำนวนตอนได้ทันทีจากด้านหน้า
+   - ปรับ displayEp ด้านล่างให้คลีน สวยงาม ไม่ติดชื่อเรื่องซ้ำซ้อน
+4. ปรับปรุงเวอร์ชันแคชเป็น v=4.4 ใน index.html และ reader.html
 ================================================================================

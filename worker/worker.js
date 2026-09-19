@@ -524,8 +524,6 @@ export default {
         refererHeader = "https://bully-manga.com/";
       } else if (origin.includes("sixmanga") || targetUrl.includes("sixmanga")) {
         refererHeader = "https://www.sixmanga.com/";
-      } else if (origin.includes("shonenmagazine") || targetUrl.includes("shonenmagazine")) {
-        refererHeader = "https://pocket.shonenmagazine.com/";
       }
 
       const fetchOptions = {
