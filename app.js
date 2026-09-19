@@ -16,6 +16,8 @@ function getProxyUrl(targetUrl, referer = '') {
     url += `&referer=${encodeURIComponent(referer)}`;
   } else if (targetUrl.includes('webtoon168')) {
     url += `&referer=${encodeURIComponent('https://ped-manga.com/')}`;
+  } else if (targetUrl.includes('chibi-manga')) {
+    url += `&referer=${encodeURIComponent('https://chibi-manga.com/')}`;
   }
   return url;
 }
@@ -1259,10 +1261,23 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
       ? `ตอนที่ ${readEpNum}` 
       : (manga.latestEp || (existing ? existing.latestEp : cleanChapterTitle));
 
+    // กู้คืนหรือสกัดภาพปกอัตโนมัติหากปกเดิมว่าง
+    let resolvedCover = manga.cover || (existing ? existing.cover : '');
+    if (!resolvedCover && allMangaList && allMangaList.length > 0) {
+      const match = allMangaList.find(am => am.title === manga.title || getMangaTitleKeys(am.title).some(k => keys.includes(k)));
+      if (match && match.cover) {
+        resolvedCover = match.cover;
+      }
+    }
+    if (!resolvedCover && manga.altSources && manga.altSources.length > 0) {
+      const altWithCover = manga.altSources.find(a => a.cover);
+      if (altWithCover) resolvedCover = altWithCover.cover;
+    }
+
     // สร้างหรืออัปเดตข้อมูลเรื่อง
     const item = {
       title: manga.title,
-      cover: manga.cover || (existing ? existing.cover : ''),
+      cover: resolvedCover,
       type: manga.type || (existing ? existing.type : 'Manga'),
       latestEp: finalLatestEp,
       mangaUrl: manga.mangaUrl || (existing ? existing.mangaUrl : ''),
@@ -2683,7 +2698,19 @@ function renderMangaCards() {
     if (m.mangaUrl) card.dataset.url = m.mangaUrl;
     if (m.title) card.dataset.title = m.title;
 
-    const placeholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'%3E%3Crect width='200' height='280' fill='%23161821'/%3E%3Ctext x='50%25' y='50%25' fill='%23444' font-family='sans-serif' font-size='13' text-anchor='middle'%3ELoading...%3C/text%3E%3C/svg%3E";
+    // กู้คืนภาพปกอัตโนมัติหากปกเดิมว่าง
+    if (!m.cover && allMangaList && allMangaList.length > 0) {
+      const match = allMangaList.find(am => am.title === m.title || getMangaTitleKeys(am.title).some(k => getMangaTitleKeys(m.title).includes(k)));
+      if (match && match.cover) {
+        m.cover = match.cover;
+      }
+    }
+    if (!m.cover && m.altSources && m.altSources.length > 0) {
+      const altWithCover = m.altSources.find(a => a.cover);
+      if (altWithCover) m.cover = altWithCover.cover;
+    }
+
+    const placeholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23161821'/%3E%3Cstop offset='100%25' stop-color='%231f2330'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='200' height='280' rx='8' fill='url(%23bg)'/%3E%3Ctext x='50%25' y='46%25' fill='%23555b70' font-size='36' text-anchor='middle' dominant-baseline='middle'%3E📖%3C/text%3E%3Ctext x='50%25' y='64%25' fill='%23666d85' font-family='sans-serif' font-size='12' font-weight='bold' text-anchor='middle'%3ECleanManga%3C/text%3E%3C/svg%3E";
     const coverUrl = m.cover ? getProxyUrl(m.cover) : placeholder;
     const isFav = isFavorite(m.title);
 
@@ -2697,17 +2724,17 @@ function renderMangaCards() {
       `;
     }
 
-        let displayEp = (m.latestEp || '').trim();
-        if (!displayEp || displayEp === 'ตอนที่' || /อัปเดต\s*202\d|อัพเดต\s*202\d|\b202\d-\d{2}-\d{2}\b/i.test(displayEp)) {
-          displayEp = m.lastChapterTitle || 'ตอนล่าสุด';
-        }
-        const epNumLatest = extractEpNumberFromText(displayEp);
-        const epNumRead = extractEpNumberFromText(m.lastChapterTitle);
-        if (epNumRead > epNumLatest && epNumRead > 0) {
-          displayEp = `ตอนที่ ${epNumRead}`;
-        }
+    let displayEp = (m.latestEp || '').trim();
+    if (!displayEp || displayEp === 'ตอนที่' || /อัปเดต\s*202\d|อัพเดต\s*202\d|\b202\d-\d{2}-\d{2}\b/i.test(displayEp)) {
+      displayEp = m.lastChapterTitle || 'ตอนล่าสุด';
+    }
+    const epNumLatest = extractEpNumberFromText(displayEp);
+    const epNumRead = extractEpNumberFromText(m.lastChapterTitle);
+    if (epNumRead > epNumLatest && epNumRead > 0) {
+      displayEp = `ตอนที่ ${epNumRead}`;
+    }
 
-        card.innerHTML = `
+    card.innerHTML = `
       <div class="manga-cover">
         <div class="manga-badge-group">
           <span class="manga-badge">${m.type || 'Manga'}</span>
@@ -2766,6 +2793,31 @@ function renderMangaCards() {
         e.stopPropagation();
         deleteFavoriteItem(m);
       });
+    }
+
+    // หากภาพปกยังไม่มี ให้ดึงจากเว็บต้นทางในพื้นหลังและบันทึกซ่อมแซมลงฐานข้อมูลประวัติ
+    if (!m.cover && m.mangaUrl) {
+      fetchViaProxy(m.mangaUrl, {}, 6000).then(html => {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const coverEl = doc.querySelector('.thumb img, .summary_image img, .series-thumb img, .post-thumbnail img, img[class*="wp-post-image"]');
+        if (coverEl) {
+          const foundCover = extractCoverUrl(coverEl, m.sourceUrl || m.mangaUrl);
+          if (foundCover) {
+            m.cover = foundCover;
+            const cardImg = card.querySelector('.manga-cover img');
+            if (cardImg) cardImg.src = getProxyUrl(foundCover);
+            try {
+              let hist = JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
+              const hItem = hist.find(h => h.title === m.title || h.mangaUrl === m.mangaUrl);
+              if (hItem) {
+                hItem.cover = foundCover;
+                localStorage.setItem(STORAGE_HISTORY, JSON.stringify(hist));
+              }
+            } catch (e) {}
+          }
+        }
+      }).catch(() => {});
     }
 
     card.addEventListener('click', () => openChapterModal(m));
@@ -3552,12 +3604,14 @@ async function openChapterModal(manga, activeSource = null) {
         `;
       } else {
         // ตอนฟรี: เปิดอ่านด้วย Vertical Reader
+        const finalCover = manga.cover || currentSource.cover || '';
         const q = new URLSearchParams();
         q.set('url', c.url);
         q.set('title', manga.title + ' - ' + c.title);
         q.set('source', currentSource.sourceUrl);
         q.set('mangaUrl', currentSource.mangaUrl);
         q.set('mangaTitle', manga.title);
+        if (finalCover) q.set('cover', finalCover);
         q.set('sourceId', currentSource.sourceId || '');
         q.set('sourceName', currentSource.sourceName);
         q.set('sourceType', currentSource.sourceType);
@@ -3576,8 +3630,10 @@ async function openChapterModal(manga, activeSource = null) {
 
       // บันทึกประวัติการอ่านทันทีที่คลิกตอน (ไม่ว่าจะอ่านในเว็บหรือเปิดแท็บต้นทาง)
       a.addEventListener('click', () => {
+        const finalCover = manga.cover || currentSource.cover || '';
         const mangaForHist = {
           ...manga,
+          cover: finalCover,
           mangaUrl: currentSource.mangaUrl || manga.mangaUrl,
           sourceId: currentSource.sourceId || manga.sourceId,
           sourceName: currentSource.sourceName || manga.sourceName,
@@ -3859,6 +3915,7 @@ async function initReaderPage() {
 
   let mangaUrl = params.get('mangaUrl');
   let mangaTitle = params.get('mangaTitle');
+  let mangaCover = params.get('cover');
   let sourceId = params.get('sourceId');
   let sourceName = params.get('sourceName');
   let sourceUrl = params.get('source');
@@ -3881,6 +3938,7 @@ async function initReaderPage() {
       const m = JSON.parse(saved);
       if (!mangaUrl) mangaUrl = m.mangaUrl;
       if (!mangaTitle) mangaTitle = m.title;
+      if (!mangaCover && m.cover) mangaCover = m.cover;
       if (!sourceId) sourceId = m.sourceId;
       if (!sourceName) sourceName = m.sourceName;
       if (!sourceUrl) sourceUrl = m.sourceUrl;
@@ -3893,6 +3951,7 @@ async function initReaderPage() {
 
   const mangaObj = {
     title: mangaTitle || title.split(' - ')[0] || 'มังงะ',
+    cover: mangaCover || '',
     mangaUrl: mangaUrl || '',
     sourceId: sourceId || '',
     sourceName: sourceName || 'Online',
@@ -4087,6 +4146,7 @@ async function initReaderPage() {
         if (mangaObj.sourceId) p.set('sourceId', mangaObj.sourceId);
         if (mangaObj.sourceName) p.set('sourceName', mangaObj.sourceName);
         if (mangaObj.sourceType) p.set('sourceType', mangaObj.sourceType);
+        if (mangaObj.cover) p.set('cover', mangaObj.cover);
         return `reader.html?${p.toString()}`;
       };
 

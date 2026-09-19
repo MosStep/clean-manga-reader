@@ -44,9 +44,14 @@
      เพื่อป้องกันไม่ให้ข้อมูลเก่าที่อยู่บนคลาวด์ฟื้นคืนชีพกลับมาตอนซิงก์
    - จดจำชื่อเล่นที่ใช้คอมเมนต์ในห้องแชทผ่าน localStorage (CHAT_STORAGE_NICKNAME) และซิงก์ตาม Sync Key
 
-6. การแก้ปัญหารูปภาพติด Hotlink Protection:
+6. การแก้ปัญหารูปภาพติด Hotlink Protection & ระบบกู้คืนภาพปกอัตโนมัติ (COVER AUTO-HEALING):
    - รูปภาพบนโดเมน server1.webtoon168.com (ของ Ped-Manga และ MangaStep)
      ต้องส่ง Referer เป็น https://ped-manga.com/ ใน Proxy Header เสมอ (ระบบใน app.js และ worker.js ทำไว้แล้ว)
+   - รูปภาพของ Chibi-Manga (chibi-manga.com) ต้องส่ง Referer เป็น https://chibi-manga.com/ เสมอ
+   - ระบบ Auto-Healing กู้คืนภาพปก: หากประวัติหรือรายการเรื่องใดไม่มีภาพปก (`cover: ""`)
+     * เลเยอร์ 1: ตรวจสอบจับคู่ชื่อเรื่องกับ allMangaList หรือ altSources ทันที 0s
+     * เลเยอร์ 2: หากยังไม่มี จะดึงจาก mangaUrl เบื้องหลังผ่าน Proxy มาสกัดภาพปก แล้วอัปเดตลง localStorage (STORAGE_HISTORY) ให้อัตโนมัติ
+     * เปลี่ยนรูปภาพสำรอง (Placeholder) เป็น SVG รูป 📖 CleanManga ดีไซน์โมเดิร์น ไร้ข้อความ "Loading..." ค้าง
 
 7. กฎการนำทางตอนก่อนหน้า/ตอนต่อไป (CHAPTER NAVIGATION & SAFE URLS):
    - ห้ามส่งค่า URL ที่เป็น placeholder เช่น `#/next/`, `#/prev/`, `#`, `javascript:...` เข้าสู่ Proxy โดยเด็ดขาด

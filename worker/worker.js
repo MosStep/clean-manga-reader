@@ -516,6 +516,8 @@ export default {
         refererHeader = customReferer;
       } else if (origin.includes("webtoon168") || targetUrl.includes("webtoon168")) {
         refererHeader = "https://ped-manga.com/";
+      } else if (origin.includes("chibi-manga") || targetUrl.includes("chibi-manga")) {
+        refererHeader = "https://chibi-manga.com/";
       }
 
       const fetchOptions = {
