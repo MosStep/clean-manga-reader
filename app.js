@@ -2521,6 +2521,7 @@ async function performGlobalLiveSearch(query) {
       console.warn(`Global search error for ${source.name}:`, e.message);
       return [];
     }
+  });
   const results = await Promise.allSettled(promises);
   let foundItems = [];
   
@@ -4134,6 +4135,10 @@ function cleanChapterNavUrl(rawUrl, currentUrl = '') {
     return '';
   }
 
+  if (trimmed.startsWith('mangadex://')) {
+    return trimmed;
+  }
+
   let finalUrl = trimmed;
   if (finalUrl.startsWith('//')) {
     finalUrl = 'https:' + finalUrl;
@@ -4370,7 +4375,11 @@ async function initReaderPage() {
   if (titleEl) titleEl.textContent = title;
 
   // ตั้งค่าปุ่มเปิดดูที่เว็บต้นทาง
-  const directSourceUrl = chapterUrl || mangaObj.mangaUrl || mangaObj.sourceUrl;
+  let directSourceUrl = chapterUrl || mangaObj.mangaUrl || mangaObj.sourceUrl;
+  if (directSourceUrl && directSourceUrl.startsWith('mangadex://')) {
+    const chId = directSourceUrl.replace('mangadex://', '').split('?')[0];
+    directSourceUrl = `https://mangadex.org/chapter/${chId}`;
+  }
   if (readerSourceBtn && directSourceUrl) {
     readerSourceBtn.href = directSourceUrl;
     readerSourceBtn.innerHTML = `<span class="nav-icon">🌐</span> <span class="nav-label">ต้นทาง (${mangaObj.sourceName}) ↗</span>`;
@@ -4471,36 +4480,35 @@ async function initReaderPage() {
       readerData = parseReaderData(html, cleanCurrentChapterUrl);
     }
 
+    // โหลดรายการตอนจาก cached_chapters มาเตรียมไว้สำหรับปุ่มตอนก่อนหน้า/ถัดไป
+    let cachedChapters = null;
+    try {
+      if (mangaObj.mangaUrl) {
+        const rawCached = sessionStorage.getItem('cached_chapters_' + mangaObj.mangaUrl);
+        if (rawCached) cachedChapters = JSON.parse(rawCached);
+      }
+      if (!cachedChapters && mangaObj.title) {
+        const rawCached = sessionStorage.getItem('cached_chapters_title_' + mangaObj.title);
+        if (rawCached) cachedChapters = JSON.parse(rawCached);
+      }
+    } catch (e) {}
+
     // ถ้าระบบยังหา prevUrl หรือ nextUrl ไม่พบ ให้ดึงจาก cached_chapters มาคำนวณตอนถัดไป/ก่อนหน้า
     if (!readerData.prevUrl || !readerData.nextUrl) {
-      try {
-        let cachedChapters = null;
-        if (mangaObj.mangaUrl) {
-          const rawCached = sessionStorage.getItem('cached_chapters_' + mangaObj.mangaUrl);
-          if (rawCached) cachedChapters = JSON.parse(rawCached);
-        }
-        if (!cachedChapters && mangaObj.title) {
-          const rawCached = sessionStorage.getItem('cached_chapters_title_' + mangaObj.title);
-          if (rawCached) cachedChapters = JSON.parse(rawCached);
-        }
-
-        if (Array.isArray(cachedChapters) && cachedChapters.length > 0) {
-          const normCurrent = cleanCurrentChapterUrl.replace(/\/$/, '');
-          const currentIndex = cachedChapters.findIndex(c => c.url && cleanChapterNavUrl(c.url).replace(/\/$/, '') === normCurrent);
-          if (currentIndex !== -1) {
-            // เนื่องจาก chapters เรียงจาก มากสุด -> น้อยสุด (1 อยู่ล่างสุด)
-            // ตอนต่อไป (Next, เลขตอนมากกว่า) จะอยู่ที่ currentIndex - 1
-            // ตอนก่อนหน้า (Prev, เลขตอนน้อยกว่า) จะอยู่ที่ currentIndex + 1
-            if (!readerData.nextUrl && currentIndex > 0) {
-              readerData.nextUrl = cleanChapterNavUrl(cachedChapters[currentIndex - 1].url);
-            }
-            if (!readerData.prevUrl && currentIndex < cachedChapters.length - 1) {
-              readerData.prevUrl = cleanChapterNavUrl(cachedChapters[currentIndex + 1].url);
-            }
+      if (Array.isArray(cachedChapters) && cachedChapters.length > 0) {
+        const normCurrent = cleanCurrentChapterUrl.replace(/\/$/, '');
+        const currentIndex = cachedChapters.findIndex(c => c.url && cleanChapterNavUrl(c.url).replace(/\/$/, '') === normCurrent);
+        if (currentIndex !== -1) {
+          // เนื่องจาก chapters เรียงจาก มากสุด -> น้อยสุด (1 อยู่ล่างสุด)
+          // ตอนต่อไป (Next, เลขตอนมากกว่า) จะอยู่ที่ currentIndex - 1
+          // ตอนก่อนหน้า (Prev, เลขตอนน้อยกว่า) จะอยู่ที่ currentIndex + 1
+          if (!readerData.nextUrl && currentIndex > 0) {
+            readerData.nextUrl = cleanChapterNavUrl(cachedChapters[currentIndex - 1].url);
+          }
+          if (!readerData.prevUrl && currentIndex < cachedChapters.length - 1) {
+            readerData.prevUrl = cleanChapterNavUrl(cachedChapters[currentIndex + 1].url);
           }
         }
-      } catch (e) {
-        console.warn("Cached chapters lookup error:", e);
       }
     }
 
@@ -4532,12 +4540,19 @@ async function initReaderPage() {
       const buildNavUrl = (targetEpUrl) => {
         const p = new URLSearchParams();
         p.set('url', targetEpUrl);
-        const decodedTarget = decodeURIComponent(targetEpUrl);
-        const tm = decodedTarget.match(/ตอนที่[-_ ]*(\d+(?:\.\d+)?)/i) ||
-                   decodedTarget.match(/ch(?:apter)?[-_ ]*(\d+(?:\.\d+)?)/i) ||
-                   decodedTarget.match(/\/(\d+(?:\.\d+)?)\/?$/) ||
-                   decodedTarget.match(/-(\d+(?:\.\d+)?)\/?$/);
-        const epStr = tm ? `ตอนที่ ${tm[1]}` : '';
+        let epStr = '';
+        if (Array.isArray(cachedChapters)) {
+          const foundCh = cachedChapters.find(c => c.url === targetEpUrl);
+          if (foundCh && foundCh.title) epStr = foundCh.title;
+        }
+        if (!epStr) {
+          const decodedTarget = decodeURIComponent(targetEpUrl);
+          const tm = decodedTarget.match(/ตอนที่[-_ ]*(\d+(?:\.\d+)?)/i) ||
+                     decodedTarget.match(/ch(?:apter)?[-_ ]*(\d+(?:\.\d+)?)/i) ||
+                     decodedTarget.match(/\/(\d+(?:\.\d+)?)\/?$/) ||
+                     decodedTarget.match(/-(\d+(?:\.\d+)?)\/?$/);
+          epStr = tm ? `ตอนที่ ${tm[1]}` : '';
+        }
         p.set('title', epStr ? `${mangaObj.title} - ${epStr}` : mangaObj.title);
         if (mangaObj.sourceUrl) p.set('source', mangaObj.sourceUrl);
         if (mangaObj.mangaUrl) p.set('mangaUrl', mangaObj.mangaUrl);
