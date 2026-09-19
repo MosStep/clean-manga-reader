@@ -93,21 +93,23 @@
   - fetchSingleSource, fetchMangaBatch: รวบรวมข้อมูลเรื่องล่าสุด
   - mergeAndDeduplicate: ผสานเรื่องซ้ำข้ามค่าย เลือกเว็บฟรีที่มีตอนมากที่สุดขึ้นนำ
   - parseChaptersFromHtml: แกะรายชื่อตอน และเรียก sortChaptersDescending (ตอน 1 อยู่ล่างสุดเสมอ)
-  - recordReadingHistory: บันทึกประวัติอ่านลง localStorage อัตโนมัติ
+  - cleanMangaChapterTitle: ทำความสะอาดชื่อตอน ตัดชื่อเรื่องซ้ำซ้อน และตัดวันที่ไทย/สากลทุกรูปแบบทิ้ง 100%
+  - getReadingHistory: ดึงประวัติอ่านพร้อมระบบ Smart Deduplication ข้ามเว็บต้นทาง ยุบเรื่องซ้ำเหลือ 1 รายการ
+  - recordReadingHistory: บันทึกประวัติอ่านลง localStorage ทันทีที่คลิกตอน และอัปเดตเลขตอนล่าสุดไม่ให้ค้าง
   - initSyncEngine, pushSyncData, pullAndMergeSyncData: ระบบซิงก์ข้ามเครื่องผ่าน Cloudflare KV
 - config.js:
   ตั้งค่า SOURCES, PROXY_URL, CHAT_API_URL, SYNC_API_BASE
 - style.css:
   สไตล์ Dark Modern ธีมเขียว-ฟ้า นีออน ปรับแต่ง Mobile First สบายตา
 - worker/worker.js:
-  Cloudflare Worker สำหรับทำ Proxy ปลดล็อก CORS, จัดการระบบแชทส่วนกลาง และเก็บข้อมูล KV Sync
+  Cloudflare Worker สำหรับทำ Proxy ปลดล็อก CORS, จัดการระบบแชทส่วนกลาง และเก็บข้อมูล KV Sync (Deduplicate ตามชื่อเรื่อง Normalized Title)
 
 --------------------------------------------------------------------------------
 [ 5. คำสั่งสำหรับการทดสอบและ Deploy ]
 - เมื่อแก้ไขโค้ด:
-  1. เพิ่มตัวเลข Cache Buster เสมอ เช่น ?v=2.7 -> ?v=2.8 ใน index.html และ reader.html
+  1. เพิ่มตัวเลข Cache Buster เสมอ เช่น ?v=3.4 -> ?v=3.5 ใน index.html และ reader.html
   2. สั่ง commit และ push ขึ้น GitHub:
      git add .
-     git commit -m \ข้อความอธิบายการแก้ไข\
+     git commit -m "ข้อความอธิบายการแก้ไข"
      git push origin main
 ================================================================================
