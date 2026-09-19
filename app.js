@@ -547,6 +547,47 @@ function getMangaTitleKeys(title) {
   return Array.from(keys);
 }
 
+// ฟังก์ชันทำความสะอาดชื่อตอนให้อ่านง่าย กระชับ ตัดวันที่และตัดชื่อเรื่องซ้ำซ้อนออก 100%
+function cleanMangaChapterTitle(chapterTitle, mangaTitle, chapterUrl) {
+  let s = (chapterTitle || '').trim();
+
+  // 1. ตัดชื่อเรื่องออกถ้าปนมาในชื่อตอน
+  if (mangaTitle) {
+    s = s.split(mangaTitle).join('').trim();
+  }
+
+  // 2. ตัดวันที่ภาษาไทยและสากลทุกรูปแบบ (เช่น กันยายน 7, 2026 หรือ 7 กันยายน 2026 หรือ 2026-09-07)
+  const thaiMonths = 'มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม|ม\\.ค\\.|ก\\.พ\\.|มี\\.ค\\.|เม\\.ย\\.|พ\\.ค\\.|มิ\\.ย\\.|ก\\.ค\\.|ส\\.ค\\.|ก\\.ย\\.|ต\\.ค\\.|พ\\.ย\\.|ธ\\.ค\\.';
+  const engMonths = 'Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?';
+  s = s.replace(new RegExp(`\\b\\d{1,2}\\s+(?:${thaiMonths}|${engMonths})\\s*,?\\s*\\d{2,4}\\b`, 'gi'), '');
+  s = s.replace(new RegExp(`(?:${thaiMonths}|${engMonths})\\s+\\d{1,2},?\\s*\\d{2,4}\\b`, 'gi'), '');
+  s = s.replace(/\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b/g, '');
+  s = s.replace(/\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b/g, '');
+  s = s.replace(/\b202\d\b/g, '');
+  s = s.replace(/^[- :|]+|[- :|]+$/g, '').trim();
+
+  // 3. ตรวจสอบว่ามีเลขตอนระบุชัดเจนหรือไม่
+  const numMatch = s.match(/(?:ตอนที่|ตอน|ch(?:apter)?\.?|ep(?:isode)?\.?)\s*(\d+(?:\.\d+)?)/i) ||
+                   s.match(/\b(\d+(?:\.\d+)?)\b/);
+  if (numMatch) {
+    return `ตอนที่ ${numMatch[1]}`;
+  }
+
+  // 4. ถ้าไม่มีเลขในชื่อ หรือเหลือแต่ข้อความว่าง ให้แกะจาก URL
+  if (chapterUrl) {
+    const decodedUrl = decodeURIComponent(chapterUrl);
+    const m = decodedUrl.match(/ตอนที่[-_ ]*(\d+(?:\.\d+)?)/i) ||
+              decodedUrl.match(/ch(?:apter)?[-_ ]*(\d+(?:\.\d+)?)/i) ||
+              decodedUrl.match(/\/(\d+(?:\.\d+)?)\/?$/) ||
+              decodedUrl.match(/-(\d+(?:\.\d+)?)\/?$/);
+    if (m) {
+      return `ตอนที่ ${m[1]}`;
+    }
+  }
+
+  return s || 'ตอนล่าสุด';
+}
+
 // ==========================================================
 // ระบบประวัติการอ่าน (Reading History) และเรื่องโปรด (Favorites)
 // รองรับ Local Storage + Cloudflare KV Multi-Device Sync
@@ -804,7 +845,13 @@ async function pullAndMergeSyncData() {
 
         const mergedFavs = [...localFavs];
         cloudFavs.forEach(cf => {
-          if (!mergedFavs.some(lf => lf.title === cf.title || (lf.mangaUrl && lf.mangaUrl === cf.mangaUrl))) {
+          const cfKeys = getMangaTitleKeys(cf.title);
+          const isDup = mergedFavs.some(lf => {
+            if (lf.title === cf.title || (lf.mangaUrl && cf.mangaUrl && lf.mangaUrl === cf.mangaUrl)) return true;
+            const lfKeys = getMangaTitleKeys(lf.title);
+            return cfKeys.some(k => lfKeys.includes(k));
+          });
+          if (!isDup) {
             mergedFavs.push(cf);
           }
         });
@@ -824,7 +871,12 @@ async function pullAndMergeSyncData() {
 
         const mergedHist = [...localHist];
         cloudHist.forEach(ch => {
-          const existIdx = mergedHist.findIndex(lh => lh.title === ch.title || (lh.mangaUrl && lh.mangaUrl === ch.mangaUrl));
+          const chKeys = getMangaTitleKeys(ch.title);
+          const existIdx = mergedHist.findIndex(lh => {
+            if (lh.title === ch.title || (lh.mangaUrl && ch.mangaUrl && lh.mangaUrl === ch.mangaUrl)) return true;
+            const lhKeys = getMangaTitleKeys(lh.title);
+            return chKeys.some(k => lhKeys.includes(k));
+          });
           if (existIdx >= 0) {
             const exist = mergedHist[existIdx];
             const readChapters = Array.from(new Set([
@@ -955,10 +1007,67 @@ function copySyncKey() {
   }
 }
 
-// ดึงประวัติการอ่าน
+// ดึงประวัติการอ่าน พร้อมระบบตัดและรวมเรื่องซ้ำอัตโนมัติ (Smart Deduplication ข้ามเว็บต้นทาง)
 function getReadingHistory() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
+    const raw = JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
+    if (!Array.isArray(raw) || raw.length === 0) return [];
+
+    const map = new Map();
+    const result = [];
+    let hasMerged = false;
+
+    raw.forEach(item => {
+      if (!item || !item.title) return;
+      const keys = getMangaTitleKeys(item.title);
+      let foundKey = null;
+      for (const k of keys) {
+        if (map.has(k)) {
+          foundKey = k;
+          break;
+        }
+      }
+
+      if (foundKey) {
+        hasMerged = true;
+        const existing = map.get(foundKey);
+        const existingRead = Array.isArray(existing.readChapters) ? existing.readChapters : [];
+        const itemRead = Array.isArray(item.readChapters) ? item.readChapters : [];
+        const mergedRead = Array.from(new Set([...existingRead, ...itemRead]));
+
+        // เลือกรายการที่อ่านล่าสุดกว่า
+        const newer = (item.updatedAt || 0) >= (existing.updatedAt || 0) ? item : existing;
+        const older = newer === item ? existing : item;
+
+        // รวมรายการเว็บสำรอง (altSources)
+        const combinedAlt = [
+          ...(newer.altSources || []),
+          ...(older.altSources || []),
+          ...(older.mangaUrl && older.mangaUrl !== newer.mangaUrl ? [older] : [])
+        ];
+
+        const merged = {
+          ...newer,
+          readChapters: mergedRead,
+          altSources: combinedAlt,
+          updatedAt: Math.max(existing.updatedAt || 0, item.updatedAt || 0)
+        };
+
+        const idx = result.indexOf(existing);
+        if (idx !== -1) result[idx] = merged;
+        keys.forEach(k => map.set(k, merged));
+      } else {
+        keys.forEach(k => map.set(k, item));
+        result.push(item);
+      }
+    });
+
+    if (hasMerged) {
+      try {
+        localStorage.setItem(STORAGE_HISTORY, JSON.stringify(result.slice(0, 500)));
+      } catch (e) {}
+    }
+    return result;
   } catch (e) {
     return [];
   }
@@ -1140,33 +1249,22 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
       readChapters.push(chapterUrl);
     }
 
-    // ทำความสะอาดชื่อตอนให้อ่านง่าย ชัดเจน ไม่ซ้ำกับชื่อเรื่อง
-    let cleanChapterTitle = (chapterTitle || '').trim();
-    if (manga.title && cleanChapterTitle.includes(manga.title)) {
-      cleanChapterTitle = cleanChapterTitle.split(manga.title).join('').replace(/^[- :]+/, '').trim();
-    }
-    cleanChapterTitle = cleanChapterTitle.replace(/(?:มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+\d{1,2},?\s+\d{4}/gi, '').trim();
-    cleanChapterTitle = cleanChapterTitle.replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}/gi, '').trim();
+    // ทำความสะอาดชื่อตอนให้อ่านง่าย ชัดเจน ไม่ซ้ำกับชื่อเรื่อง ตัดวันที่ทิ้ง 100%
+    const cleanChapterTitle = cleanMangaChapterTitle(chapterTitle, manga.title, chapterUrl);
 
-    if (!cleanChapterTitle || !/\d/.test(cleanChapterTitle)) {
-      const decodedUrl = decodeURIComponent(chapterUrl || '');
-      const m = decodedUrl.match(/ตอนที่[-_ ]*(\d+(?:\.\d+)?)/i) ||
-                decodedUrl.match(/ch(?:apter)?[-_ ]*(\d+(?:\.\d+)?)/i) ||
-                decodedUrl.match(/\/(\d+(?:\.\d+)?)\/?$/) ||
-                decodedUrl.match(/-(\d+(?:\.\d+)?)\/?$/);
-      if (m) {
-        cleanChapterTitle = `ตอนที่ ${m[1]}`;
-      } else {
-        cleanChapterTitle = cleanChapterTitle || 'ตอนล่าสุด';
-      }
-    }
+    // ตรวจสอบเลขตอน เพื่อไม่ให้เลขตอนล่าสุดต่ำกว่าตอนที่อ่านจริง
+    const readEpNum = extractEpNumberFromText(cleanChapterTitle);
+    const curLatestNum = extractEpNumberFromText(manga.latestEp || (existing ? existing.latestEp : ''));
+    const finalLatestEp = (readEpNum > curLatestNum && readEpNum > 0) 
+      ? `ตอนที่ ${readEpNum}` 
+      : (manga.latestEp || (existing ? existing.latestEp : cleanChapterTitle));
 
     // สร้างหรืออัปเดตข้อมูลเรื่อง
     const item = {
       title: manga.title,
       cover: manga.cover || (existing ? existing.cover : ''),
       type: manga.type || (existing ? existing.type : 'Manga'),
-      latestEp: manga.latestEp || (existing ? existing.latestEp : ''),
+      latestEp: finalLatestEp,
       mangaUrl: manga.mangaUrl || (existing ? existing.mangaUrl : ''),
       sourceId: manga.sourceId || (existing ? existing.sourceId : ''),
       sourceName: manga.sourceName || (existing ? existing.sourceName : 'Online'),
@@ -2599,7 +2697,17 @@ function renderMangaCards() {
       `;
     }
 
-    card.innerHTML = `
+        let displayEp = (m.latestEp || '').trim();
+        if (!displayEp || displayEp === 'ตอนที่' || /อัปเดต\s*202\d|อัพเดต\s*202\d|\b202\d-\d{2}-\d{2}\b/i.test(displayEp)) {
+          displayEp = m.lastChapterTitle || 'ตอนล่าสุด';
+        }
+        const epNumLatest = extractEpNumberFromText(displayEp);
+        const epNumRead = extractEpNumberFromText(m.lastChapterTitle);
+        if (epNumRead > epNumLatest && epNumRead > 0) {
+          displayEp = `ตอนที่ ${epNumRead}`;
+        }
+
+        card.innerHTML = `
       <div class="manga-cover">
         <div class="manga-badge-group">
           <span class="manga-badge">${m.type || 'Manga'}</span>
@@ -2626,7 +2734,7 @@ function renderMangaCards() {
       <div class="manga-info">
         <div class="manga-title" title="${m.title}">${m.title}</div>
         <div class="manga-latest">
-          <span class="manga-latest-ep">${(/อัปเดต\s*202\d|อัพเดต\s*202\d|\b202\d-\d{2}-\d{2}\b/i.test(m.latestEp || '')) ? 'ตอนล่าสุด' : (m.latestEp || (m.lastChapterTitle ? m.lastChapterTitle : 'อ่านต่อ'))}</span>
+          <span class="manga-latest-ep">${displayEp || 'อ่านต่อ'}</span>
           <span style="font-size: 0.75rem; color: #888;">อ่าน →</span>
         </div>
         ${historyBadgeHtml}
@@ -3466,6 +3574,19 @@ async function openChapterModal(manga, activeSource = null) {
         `;
       }
 
+      // บันทึกประวัติการอ่านทันทีที่คลิกตอน (ไม่ว่าจะอ่านในเว็บหรือเปิดแท็บต้นทาง)
+      a.addEventListener('click', () => {
+        const mangaForHist = {
+          ...manga,
+          mangaUrl: currentSource.mangaUrl || manga.mangaUrl,
+          sourceId: currentSource.sourceId || manga.sourceId,
+          sourceName: currentSource.sourceName || manga.sourceName,
+          sourceUrl: currentSource.sourceUrl || manga.sourceUrl,
+          sourceType: currentSource.sourceType || manga.sourceType
+        };
+        recordReadingHistory(mangaForHist, c.title, c.url);
+      });
+
       chapterList.appendChild(a);
     });
 
@@ -3868,6 +3989,23 @@ async function initReaderPage() {
     return;
   }
 
+  // ทำความสะอาดชื่อตอนและบันทึกประวัติการอ่านทันที ไม่ต้องรอรูปภาพโหลดเสร็จ
+  try {
+    const savedMangaRaw = sessionStorage.getItem('currentManga');
+    if (savedMangaRaw) {
+      const sm = JSON.parse(savedMangaRaw);
+      if (!mangaObj.cover && sm.cover) mangaObj.cover = sm.cover;
+      if (!mangaObj.type && sm.type) mangaObj.type = sm.type;
+      if (!mangaObj.latestEp && sm.latestEp) mangaObj.latestEp = sm.latestEp;
+    }
+  } catch (e) {}
+
+  const chapterEpTitle = cleanMangaChapterTitle(title, mangaObj.title, cleanCurrentChapterUrl);
+  if (titleEl && mangaObj.title) {
+    titleEl.textContent = `${mangaObj.title} - ${chapterEpTitle}`;
+  }
+  recordReadingHistory(mangaObj, chapterEpTitle, cleanCurrentChapterUrl);
+
   try {
     statusEl.style.display = 'block';
     statusEl.innerHTML = '<div class="spinner"></div>กำลังโหลดรูปภาพมังงะ...';
@@ -3931,43 +4069,6 @@ async function initReaderPage() {
       `;
       return;
     }
-
-    // บันทึกประวัติการอ่านเข้า localStorage อัตโนมัติ (ไม่หายแม้ปิดเครื่อง ไม่ต้องล็อกอิน)
-    try {
-      const savedMangaRaw = sessionStorage.getItem('currentManga');
-      if (savedMangaRaw) {
-        const sm = JSON.parse(savedMangaRaw);
-        if (!mangaObj.cover && sm.cover) mangaObj.cover = sm.cover;
-        if (!mangaObj.type && sm.type) mangaObj.type = sm.type;
-        if (!mangaObj.latestEp && sm.latestEp) mangaObj.latestEp = sm.latestEp;
-      }
-    } catch (e) {}
-
-    let chapterEpTitle = (title || '').trim();
-    if (mangaObj.title && chapterEpTitle.includes(mangaObj.title)) {
-      chapterEpTitle = chapterEpTitle.split(mangaObj.title).join('').replace(/^[- :]+/, '').trim();
-    }
-    chapterEpTitle = chapterEpTitle.replace(/(?:มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+\d{1,2},?\s+\d{4}/gi, '').trim();
-    chapterEpTitle = chapterEpTitle.replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}/gi, '').trim();
-
-    if (!chapterEpTitle || !/\d/.test(chapterEpTitle)) {
-      const decodedUrl = decodeURIComponent(cleanCurrentChapterUrl || '');
-      const m = decodedUrl.match(/ตอนที่[-_ ]*(\d+(?:\.\d+)?)/i) ||
-                decodedUrl.match(/ch(?:apter)?[-_ ]*(\d+(?:\.\d+)?)/i) ||
-                decodedUrl.match(/\/(\d+(?:\.\d+)?)\/?$/) ||
-                decodedUrl.match(/-(\d+(?:\.\d+)?)\/?$/);
-      if (m) {
-        chapterEpTitle = `ตอนที่ ${m[1]}`;
-      } else {
-        chapterEpTitle = chapterEpTitle || 'ตอนล่าสุด';
-      }
-    }
-
-    if (titleEl && mangaObj.title) {
-      titleEl.textContent = `${mangaObj.title} - ${chapterEpTitle}`;
-    }
-
-    recordReadingHistory(mangaObj, chapterEpTitle, cleanCurrentChapterUrl);
 
     const setupNavButtons = (prev, next) => {
       const buildNavUrl = (targetEpUrl) => {

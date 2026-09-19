@@ -191,7 +191,8 @@ export default {
           ? item.readChapters 
           : (typeof item.readChapters === 'string' && item.readChapters ? [item.readChapters] : []);
 
-        const itemKey = urlKey || titleKey;
+        const normTitle = titleKey.toLowerCase().replace(/แปลไทย|manga|manhwa|ตอนที่|ch\.|season|[^\u0E00-\u0E7Fa-zA-Z0-9]/g, '').trim();
+        const itemKey = (normTitle && normTitle.length >= 3) ? normTitle : (titleKey || urlKey);
         if (!map.has(itemKey)) {
           map.set(itemKey, { 
             ...item,
@@ -202,9 +203,16 @@ export default {
           const existRead = Array.isArray(existing.readChapters) ? existing.readChapters : [];
           const combinedRead = Array.from(new Set([...existRead, ...itemReadChapters]));
           const newer = itemUpdatedAt >= (existing.updatedAt || 0) ? item : existing;
+          const older = newer === item ? existing : item;
+          const combinedAlt = [
+            ...(newer.altSources || []),
+            ...(older.altSources || []),
+            ...(older.mangaUrl && older.mangaUrl !== newer.mangaUrl ? [older] : [])
+          ];
           map.set(itemKey, {
             ...newer,
             readChapters: combinedRead,
+            altSources: combinedAlt,
             updatedAt: Math.max(existing.updatedAt || 0, itemUpdatedAt)
           });
         }
@@ -231,7 +239,8 @@ export default {
           continue;
         }
 
-        const itemKey = urlKey || titleKey;
+        const normTitle = titleKey.toLowerCase().replace(/แปลไทย|manga|manhwa|ตอนที่|ch\.|season|[^\u0E00-\u0E7Fa-zA-Z0-9]/g, '').trim();
+        const itemKey = (normTitle && normTitle.length >= 3) ? normTitle : (titleKey || urlKey);
         if (!map.has(itemKey)) {
           map.set(itemKey, item);
         } else {
