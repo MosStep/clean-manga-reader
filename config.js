@@ -36,8 +36,10 @@ const CONFIG = {
     { id: 'nano-manga', name: 'Nano-Manga', url: 'https://nano-manga.com', type: 'madara', icon: '🧬', readable: true, isCoin: false, lang: 'th' },
     { id: 'ecchi-doujin', name: 'Ecchi-Doujin', url: 'https://ecchi-doujin.com', type: 'mangareader', icon: '🔞', readable: true, isCoin: false, lang: 'th' },
     { id: 'ntrnaja', name: 'NTRnaja', url: 'https://ntrnaja.com', type: 'ntrnaja', icon: '🔥', readable: false, isCoin: true, lang: 'th' },
+    { id: 'bully-manga', name: 'Bully Manga', url: 'https://bully-manga.com', type: 'bullymanga', icon: '🐂', readable: true, isCoin: false, lang: 'th' },
     { id: 'asura-scans', name: 'Asura Scans', url: 'https://asurascans.com', type: 'asurascans', icon: '⚔️', readable: true, isCoin: false, lang: 'en' },
-    { id: 'manga-town', name: 'MangaTown', url: 'https://www.mangatown.com', type: 'mangatown', icon: '🏙️', readable: true, isCoin: false, lang: 'en' }
+    { id: 'manga-town', name: 'MangaTown', url: 'https://www.mangatown.com', type: 'mangatown', icon: '🏙️', readable: true, isCoin: false, lang: 'en' },
+    { id: 'pocket-shonen', name: 'マガポケ (Pocket Shonen)', url: 'https://pocket.shonenmagazine.com', type: 'pocketshonen', icon: '🇯🇵', readable: false, isCoin: true, lang: 'ja' }
   ],
 
   // แหล่งข้อมูลการ์ตูนภาษาอังกฤษระดับโลก (MangaDex)

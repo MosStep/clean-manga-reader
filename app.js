@@ -18,6 +18,12 @@ function getProxyUrl(targetUrl, referer = '') {
     url += `&referer=${encodeURIComponent('https://ped-manga.com/')}`;
   } else if (targetUrl.includes('chibi-manga')) {
     url += `&referer=${encodeURIComponent('https://chibi-manga.com/')}`;
+  } else if (targetUrl.includes('mangahere') || targetUrl.includes('mangatown')) {
+    url += `&referer=${encodeURIComponent('https://www.mangatown.com/')}`;
+  } else if (targetUrl.includes('bully-manga')) {
+    url += `&referer=${encodeURIComponent('https://bully-manga.com/')}`;
+  } else if (targetUrl.includes('shonenmagazine')) {
+    url += `&referer=${encodeURIComponent('https://pocket.shonenmagazine.com/')}`;
   }
   return url;
 }
@@ -551,7 +557,7 @@ function parseAsuraScansHtml(html, sourceInfo) {
       seenUrls.add(href);
 
       // ตรวจสอบตอนล่าสุดถ้ามีระบุใน card
-      const epEl = a.parentElement ? a.parentElement.querySelector('a[href*="/chapter/"], span:contains("Chapter")') : null;
+      const epEl = a.parentElement ? a.parentElement.querySelector('a[href*="/chapter/"]') : null;
       let latestEp = epEl ? epEl.textContent.trim() : 'ตอนล่าสุด (EN)';
 
       let type = 'Manhwa';
@@ -578,6 +584,158 @@ function parseAsuraScansHtml(html, sourceInfo) {
   return items;
 }
 
+// 9. แกะข้อมูลจาก Bully Manga (bully-manga.com)
+function parseBullyMangaHtml(html, sourceInfo) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const items = [];
+  const seenUrls = new Set();
+  const baseUrl = 'https://bully-manga.com';
+
+  // 1. ประมวลผล mc-card (มีข้อมูลตอนล่าสุดชัดเจน)
+  doc.querySelectorAll('.mc-card').forEach(card => {
+    const linkEl = card.querySelector('a.mc-img-wrap, a.mc-title');
+    if (!linkEl) return;
+    let href = (linkEl.getAttribute('href') || '').trim();
+    if (!href || href === '#' || seenUrls.has(href)) return;
+    seenUrls.add(href);
+
+    const titleEl = card.querySelector('.mc-title');
+    const title = titleEl ? titleEl.textContent.trim() : '';
+    if (!title) return;
+
+    const imgEl = card.querySelector('img');
+    let cover = imgEl ? (imgEl.getAttribute('data-src') || imgEl.getAttribute('src') || '') : '';
+    if (cover && !cover.startsWith('http')) cover = `${baseUrl}${cover}`;
+
+    const epEl = card.querySelector('a.mc-ep');
+    const epNumEl = epEl ? epEl.querySelector('.mc-ep-num') : null;
+    const latestEp = epNumEl ? epNumEl.textContent.trim() : (epEl ? epEl.textContent.trim() : 'ตอนล่าสุด');
+
+    items.push({
+      title,
+      mangaUrl: href.startsWith('http') ? href : `${baseUrl}${href}`,
+      cover,
+      latestEp,
+      type: 'Manhwa',
+      sourceId: sourceInfo.id,
+      sourceName: sourceInfo.name,
+      sourceUrl: sourceInfo.url,
+      sourceType: 'bullymanga',
+      readable: true,
+      isCoin: false,
+      lang: 'th',
+      icon: sourceInfo.icon || '🐂'
+    });
+  });
+
+  // 2. ประมวลผล m2-card และ hit-card
+  doc.querySelectorAll('a.m2-card, a.hit-card').forEach(card => {
+    let href = (card.getAttribute('href') || '').trim();
+    if (!href || href === '#' || seenUrls.has(href)) return;
+    seenUrls.add(href);
+
+    const titleEl = card.querySelector('.m2-title, .hit-title');
+    const title = titleEl ? titleEl.textContent.trim() : '';
+    if (!title) return;
+
+    const imgEl = card.querySelector('img');
+    let cover = imgEl ? (imgEl.getAttribute('data-src') || imgEl.getAttribute('src') || '') : '';
+    if (cover && !cover.startsWith('http')) cover = `${baseUrl}${cover}`;
+
+    items.push({
+      title,
+      mangaUrl: href.startsWith('http') ? href : `${baseUrl}${href}`,
+      cover,
+      latestEp: 'ตอนล่าสุด',
+      type: 'Manga',
+      sourceId: sourceInfo.id,
+      sourceName: sourceInfo.name,
+      sourceUrl: sourceInfo.url,
+      sourceType: 'bullymanga',
+      readable: true,
+      isCoin: false,
+      lang: 'th',
+      icon: sourceInfo.icon || '🐂'
+    });
+  });
+
+  return items;
+}
+
+// 10. แกะข้อมูลจาก Magazine Pocket (pocket.shonenmagazine.com - ภาษาญี่ปุ่น JP)
+function parsePocketShonenHtml(html, sourceInfo) {
+  const items = [];
+  const seenIds = new Set();
+  const baseUrl = 'https://pocket.shonenmagazine.com';
+
+  // 1. ดึงจาก Nuxt SSR Payload หรือ JSON ในสคริปต์
+  try {
+    const titleRegex = /"title_id":(\d+),"title_name":"([^"]+)".*?"thumbnail_image_url":"([^"]+)"/g;
+    let match;
+    while ((match = titleRegex.exec(html)) !== null) {
+      const id = match[1];
+      const title = match[2].replace(/\\u([0-9a-fA-F]{4})/g, (_, c) => String.fromCharCode(parseInt(c, 16)));
+      let cover = match[3].replace(/\\u002F/g, '/');
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        items.push({
+          title,
+          mangaUrl: `${baseUrl}/title/${id}`,
+          cover,
+          latestEp: '最新話',
+          type: 'Manga',
+          sourceId: sourceInfo.id,
+          sourceName: sourceInfo.name,
+          sourceUrl: sourceInfo.url,
+          sourceType: 'pocketshonen',
+          readable: false,
+          isCoin: true,
+          lang: 'ja',
+          icon: sourceInfo.icon || '🇯🇵'
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("Pocket Shonen regex parse error:", e);
+  }
+
+  // 2. DOM fallback
+  if (items.length === 0) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    doc.querySelectorAll('a[href*="/title/"]').forEach(a => {
+      let href = (a.getAttribute('href') || '').trim();
+      if (!href || href === '#' || seenIds.has(href)) return;
+      seenIds.add(href);
+
+      const titleEl = a.querySelector('.title, h2, h3, h4, p');
+      const title = titleEl ? titleEl.textContent.trim() : (a.getAttribute('title') || '');
+      if (!title) return;
+
+      const imgEl = a.querySelector('img');
+      const cover = imgEl ? (imgEl.getAttribute('src') || '') : '';
+
+      items.push({
+        title,
+        mangaUrl: href.startsWith('http') ? href : `${baseUrl}${href}`,
+        cover,
+        latestEp: '最新話',
+        type: 'Manga',
+        sourceId: sourceInfo.id,
+        sourceName: sourceInfo.name,
+        sourceUrl: sourceInfo.url,
+        sourceType: 'pocketshonen',
+        readable: false,
+        isCoin: true,
+        lang: 'ja',
+        icon: sourceInfo.icon || '🇯🇵'
+      });
+    });
+  }
+
+  return items;
+}
 
 // รายชื่อจับคู่เรื่องข้ามเว็บที่เป็นเรื่องเดียวกันแต่ชื่อต่างกัน (Aliases Map)
 const KNOWN_MANGA_ALIASES = [
@@ -712,7 +870,7 @@ async function fetchMangaDexChapters(mangaId, targetLang = '') {
     if (!langFilter) {
       if (selectedLanguages.has('en')) langFilter = 'en';
       else if (selectedLanguages.has('ja')) langFilter = 'ja';
-      else if (selectedLanguages.has('ko')) langFilter = 'ko';
+      else langFilter = 'en';
     }
 
     let url = `https://api.mangadex.org/manga/${mangaId}/feed?order[chapter]=desc&limit=300&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
@@ -1575,6 +1733,7 @@ function getReadingHistory() {
         }
       }
     });
+    result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     return result;
   } catch (e) {
     return [];
@@ -2069,6 +2228,10 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
       targetUrl = page > 1 ? `${source.url}/new/${page}.htm` : `${source.url}/new/`;
     } else if (source.type === 'asurascans') {
       targetUrl = page > 1 ? `${source.url}/comics?page=${page}` : `${source.url}/`;
+    } else if (source.type === 'bullymanga') {
+      targetUrl = page > 1 ? `${source.url}/page/${page}` : `${source.url}/`;
+    } else if (source.type === 'pocketshonen') {
+      targetUrl = page > 1 ? `${source.url}/ranking` : `${source.url}/`;
     }
 
     const html = await fetchViaProxy(targetUrl, {}, timeoutMs);
@@ -2088,6 +2251,10 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
       items = parseMangaTownHtml(html, source);
     } else if (source.type === 'asurascans') {
       items = parseAsuraScansHtml(html, source);
+    } else if (source.type === 'bullymanga') {
+      items = parseBullyMangaHtml(html, source);
+    } else if (source.type === 'pocketshonen') {
+      items = parsePocketShonenHtml(html, source);
     } else {
       items = parseMangaReaderHtml(html, source);
     }
@@ -2136,7 +2303,7 @@ async function fetchMangaBatch(page = 1) {
 // ค่าเริ่มต้น: ไทยเป็นหลัก ('th')
 // กฎ: เลือกได้หลายภาษา หรืออย่างใดอย่างหนึ่ง ถ้าไม่เลือกเลยจะถือว่าเลือกทั้งหมด
 // ==========================================================
-const ALL_SUPPORTED_LANGS = ['th', 'en', 'ja', 'ko'];
+const ALL_SUPPORTED_LANGS = ['th', 'en', 'ja'];
 let selectedLanguages = new Set(['th']);
 
 function getSelectedLanguages() {
@@ -2150,13 +2317,11 @@ function updateLanguageFilterUI() {
   const btnTh = document.getElementById('btnLangTh');
   const btnEn = document.getElementById('btnLangEn');
   const btnJa = document.getElementById('btnLangJa');
-  const btnKo = document.getElementById('btnLangKo');
   const btnAll = document.getElementById('btnLangAll');
 
   if (btnTh) btnTh.classList.toggle('active', selectedLanguages.has('th'));
   if (btnEn) btnEn.classList.toggle('active', selectedLanguages.has('en'));
   if (btnJa) btnJa.classList.toggle('active', selectedLanguages.has('ja'));
-  if (btnKo) btnKo.classList.toggle('active', selectedLanguages.has('ko'));
 
   const isAll = ALL_SUPPORTED_LANGS.every(l => selectedLanguages.has(l));
   if (btnAll) btnAll.classList.toggle('active', isAll);
@@ -2188,12 +2353,11 @@ function setupLanguageFilter() {
   const btnTh = document.getElementById('btnLangTh');
   const btnEn = document.getElementById('btnLangEn');
   const btnJa = document.getElementById('btnLangJa');
-  const btnKo = document.getElementById('btnLangKo');
   const btnAll = document.getElementById('btnLangAll');
 
   const onLangChange = async () => {
     updateLanguageFilterUI();
-    const needed = ['en', 'ja', 'ko'].filter(l => selectedLanguages.has(l) && !mangadexLoadedLangs.has(l));
+    const needed = ['en', 'ja'].filter(l => selectedLanguages.has(l) && !mangadexLoadedLangs.has(l));
     if (needed.length > 0) {
       const bgBadge = document.getElementById('bgLoadingBadge');
       const bgText = document.getElementById('bgLoadingText');
@@ -2213,11 +2377,12 @@ function setupLanguageFilter() {
     if (!btn || btn.dataset.bound) return;
     btn.dataset.bound = "1";
     btn.addEventListener('click', () => {
-      if (selectedLanguages.has(langKey)) {
+      if (selectedLanguages.size === 0) {
+        // หากยังไม่ได้เลือกภาษาใดเลย แล้วกดเลือก ให้เลือกเฉพาะภาษานั้นทันที
+        selectedLanguages.add(langKey);
+      } else if (selectedLanguages.has(langKey)) {
         selectedLanguages.delete(langKey);
-        if (selectedLanguages.size === 0) {
-          ALL_SUPPORTED_LANGS.forEach(l => selectedLanguages.add(l));
-        }
+        // หากลบจนหมด จะปล่อยให้ว่าง ซึ่ง getSelectedLanguages() จะคืน ALL_SUPPORTED_LANGS เพื่อแสดงทุกภาษา
       } else {
         selectedLanguages.add(langKey);
       }
@@ -2228,12 +2393,18 @@ function setupLanguageFilter() {
   bindLangBtn(btnTh, 'th');
   bindLangBtn(btnEn, 'en');
   bindLangBtn(btnJa, 'ja');
-  bindLangBtn(btnKo, 'ko');
 
   if (btnAll && !btnAll.dataset.bound) {
     btnAll.dataset.bound = "1";
     btnAll.addEventListener('click', () => {
-      ALL_SUPPORTED_LANGS.forEach(l => selectedLanguages.add(l));
+      const isAll = ALL_SUPPORTED_LANGS.every(l => selectedLanguages.has(l));
+      if (isAll) {
+        // ถ้าเลือกทั้งหมดอยู่แล้ว กดอีกทีจะเอาออกทั้งหมด (ไม่มีไฮไลท์ แต่ getSelectedLanguages() จะแสดงทุกภาษา)
+        selectedLanguages.clear();
+      } else {
+        // จะมาร์คทั้งหมดก่อน
+        selectedLanguages = new Set(ALL_SUPPORTED_LANGS);
+      }
       onLangChange();
     });
   }
@@ -2271,7 +2442,14 @@ function applyFilters() {
     // 0. Language filter (กรองภาษาตามปุ่มที่เลือก ทั้งตอนดูปกติและตอนค้นหา)
     const mangaLang = m.lang || 'th';
     if (currentSourceFilter === 'all') {
-      if (!allowedLangs.has(mangaLang)) return false;
+      if (!currentSearchQuery) {
+        if (!allowedLangs.has(mangaLang)) return false;
+      } else {
+        // เมื่อพิมพ์ค้นหา: ถ้าเรื่องตรงกับคำค้นหาโดยตรง ไม่ต้องตัดทิ้งด้วยตัวกรองภาษา (เพื่อค้นพบ MangaDex/สากล เช่น Hathaway ได้ทันที)
+        const q = currentSearchQuery.trim().toLowerCase();
+        const isQuerySearch = m._searchQuery || (m.title && m.title.toLowerCase().includes(q));
+        if (!isQuerySearch && !allowedLangs.has(mangaLang)) return false;
+      }
     }
 
     // 1. Source filter (แยกตามเว็บต้นทาง)
@@ -2332,7 +2510,10 @@ function applyFilters() {
   });
 
   // จัดการลำดับการแสดงผล:
-  if (currentSearchQuery) {
+  if (currentTagFilter === 'history') {
+    // ประวัติการอ่าน: เรียงตามเวลาอ่านล่าสุดจากบนลงล่างเสมอ 100% ห้ามสลับตามภาษา
+    filteredList.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  } else if (currentSearchQuery) {
     // กรณีพิมพ์ค้นหา: ให้การ์ตูนไทยขึ้นนำก่อนเสมอ
     if (allowedLangs.has('th')) {
       filteredList.sort((a, b) => {
@@ -2344,7 +2525,7 @@ function applyFilters() {
       });
     }
   } else if (allowedLangs.size > 1 && currentTagFilter === 'all' && currentSourceFilter === 'all') {
-    // กรณีเลือกหลายภาษาหรือทั้งหมดในหน้าแรก: สลับกันขึ้น (Interleave) เพื่อให้มังงะสากล (EN/JA/KO) ปรากฏร่วมกับมังงะไทยในหน้าแรก
+    // กรณีเลือกหลายภาษาหรือทั้งหมดในหน้าแรก: สลับกันขึ้น (Interleave) เพื่อให้มังงะสากล (EN/JA) ปรากฏร่วมกับมังงะไทยในหน้าแรก
     const thList = filteredList.filter(m => (m.lang || 'th') === 'th');
     const foreignList = filteredList.filter(m => (m.lang || 'th') !== 'th');
     if (thList.length > 0 && foreignList.length > 0) {
@@ -2362,7 +2543,7 @@ function applyFilters() {
       }
       filteredList = interleaved;
     }
-  } else if (allowedLangs.has('th') && allowedLangs.size > 1) {
+  } else if (allowedLangs.has('th') && allowedLangs.size > 1 && currentTagFilter !== 'history' && currentTagFilter !== 'favorites') {
     // ในหมวดอื่นๆ ที่ไม่ใช่หน้าแรก ให้การ์ตูนไทยนำหน้า
     filteredList.sort((a, b) => {
       const aTh = (a.lang || 'th') === 'th';
@@ -2875,6 +3056,10 @@ async function performGlobalLiveSearch(query) {
         searchUrl = `${source.url}/search?name=${encodeURIComponent(q)}`;
       } else if (source.type === 'asurascans') {
         searchUrl = `${source.url}/comics?search=${encodeURIComponent(q)}`;
+      } else if (source.type === 'bullymanga') {
+        searchUrl = `${source.url}/search?keyword=${encodeURIComponent(q)}`;
+      } else if (source.type === 'pocketshonen') {
+        return [];
       }
       const html = await fetchViaProxy(searchUrl, {}, 10000);
       let items = [];
@@ -2887,6 +3072,8 @@ async function performGlobalLiveSearch(query) {
         items = parseMangaTownHtml(html, source);
       } else if (source.type === 'asurascans') {
         items = parseAsuraScansHtml(html, source);
+      } else if (source.type === 'bullymanga') {
+        items = parseBullyMangaHtml(html, source);
       } else {
         items = parseMangaReaderHtml(html, source);
       }
@@ -3910,6 +4097,49 @@ function parseChaptersFromHtml(html, baseUrl, sourceType) {
         });
       }
     });
+  } else if (sourceType === 'bullymanga') {
+    const links = doc.querySelectorAll('a.sh-ep, a[href*="-ep"]');
+    links.forEach(a => {
+      let url = (a.getAttribute('href') || '').trim();
+      if (!url || url.includes('/page/')) return;
+      if (url.startsWith('/')) url = 'https://bully-manga.com' + url;
+
+      const titleEl = a.querySelector('.sh-ep-label, .sh-ep-n');
+      const rawTitle = titleEl ? titleEl.textContent.trim() : a.textContent.trim();
+      const numMatch = rawTitle.match(/(\d+(?:\.\d+)?)/) || url.match(/-ep0*(\d+(?:\.\d+)?)/i);
+      const epNum = numMatch ? parseFloat(numMatch[1]) : undefined;
+      const title = epNum ? `ตอนที่ ${epNum}` : (rawTitle || 'อ่านตอนนี้');
+
+      if (!seenUrls.has(url)) {
+        seenUrls.add(url);
+        chapters.push({
+          title,
+          url,
+          num: epNum,
+          isLocked: false,
+          badge: '✨ ฟรี',
+          sourceType: 'bullymanga'
+        });
+      }
+    });
+  } else if (sourceType === 'pocketshonen') {
+    const links = doc.querySelectorAll('a[href*="/episode/"], a[href*="/title/"]');
+    links.forEach(a => {
+      let url = (a.getAttribute('href') || '').trim();
+      if (!url) return;
+      if (url.startsWith('/')) url = 'https://pocket.shonenmagazine.com' + url;
+      let title = a.textContent.trim().replace(/\s+/g, ' ') || 'エピソードを読む';
+      if (!seenUrls.has(url)) {
+        seenUrls.add(url);
+        chapters.push({
+          title,
+          url,
+          isLocked: true,
+          badge: '🔒 公式/ポイント',
+          sourceType: 'pocketshonen'
+        });
+      }
+    });
   } else {
     // MangaReader (Go, Fin, Dark, Up, Slow, NTR-Manga, Ped-Manga, MangaStep, Ecchi, Speed)
     doc.querySelectorAll('#series-history, #series-history-tpl, [id*="history"]').forEach(el => el.remove());
@@ -4389,7 +4619,7 @@ async function openChapterModal(manga, activeSource = null) {
     let chapters = [];
     if (currentSource.sourceType === 'mangadex') {
       const mangaId = currentSource.mangaId || (currentSource.mangaUrl.match(/title\/([a-f0-9-]+)/i) || [])[1];
-      const targetLang = currentSource.lang || (selectedLanguages.has('en') ? 'en' : (selectedLanguages.has('ja') ? 'ja' : (selectedLanguages.has('ko') ? 'ko' : '')));
+      const targetLang = currentSource.lang || (selectedLanguages.has('en') ? 'en' : (selectedLanguages.has('ja') ? 'ja' : 'en'));
       chapters = await fetchMangaDexChapters(mangaId, targetLang);
     } else {
       let html = await fetchViaProxy(currentSource.mangaUrl);
@@ -4764,6 +4994,43 @@ function parseReaderData(html, currentUrl = '') {
         prevUrl: '',
         nextUrl: '',
         images: imgs
+      };
+    }
+  }
+
+  // 3.8 ตรวจสอบ Bully Manga (IMAGE_MAP array หรือ .manga-img)
+  if (currentUrl.includes('bully-manga.com') || html.includes('IMAGE_MAP') || html.includes('manga-img')) {
+    let images = [];
+    const bullyMapMatch = html.match(/IMAGE_MAP\s*=\s*(\[[^\]]+\])/);
+    if (bullyMapMatch) {
+      try {
+        const rawBully = JSON.parse(bullyMapMatch[1]);
+        if (Array.isArray(rawBully) && rawBully.length > 0) {
+          const baseUrl = 'https://bully-manga.com';
+          images = rawBully.map(p => {
+            const fullUrl = p.startsWith('http') ? p : `${baseUrl}${p}`;
+            return getProxyUrl(fullUrl, 'https://bully-manga.com/');
+          });
+        }
+      } catch (e) {
+        console.warn("Failed to parse Bully Manga IMAGE_MAP:", e);
+      }
+    }
+
+    if (images.length > 0) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const prevEl = doc.querySelector('a.rd-nav-prev, a[href*="-ep"][title*="ก่อน"]');
+      const nextEl = doc.querySelector('a.rd-nav-next, a[href*="-ep"][title*="ถัดไป"]');
+      let prevUrl = prevEl ? (prevEl.getAttribute('href') || '') : '';
+      let nextUrl = nextEl ? (nextEl.getAttribute('href') || '') : '';
+      if (prevUrl && !prevUrl.startsWith('http')) prevUrl = 'https://bully-manga.com' + prevUrl;
+      if (nextUrl && !nextUrl.startsWith('http')) nextUrl = 'https://bully-manga.com' + nextUrl;
+
+      return {
+        prevUrl: cleanChapterNavUrl(prevUrl, currentUrl),
+        nextUrl: cleanChapterNavUrl(nextUrl, currentUrl),
+        images
       };
     }
   }

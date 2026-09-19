@@ -84,14 +84,16 @@
 15. Nano-Manga    (id: 'nano-manga',   url: 'https://nano-manga.com',     type: 'madara',      icon: '🧬')
  16. Ecchi-Doujin  (id: 'ecchi-doujin', url: 'https://ecchi-doujin.com',   type: 'mangareader', icon: '🔞')
  17. NTRnaja       (id: 'ntrnaja',      url: 'https://ntrnaja.com',        type: 'ntrnaja',     icon: '🔥')
- 18. Asura Scans   (id: 'asura-scans',  url: 'https://asurascans.com',     type: 'asurascans',  icon: '⚔️', lang: 'en')
- 19. MangaTown     (id: 'manga-town',   url: 'https://www.mangatown.com',  type: 'mangatown',   icon: '🏙️', lang: 'en')
- 20. MangaDex      (id: 'mangadex',     url: 'https://mangadex.org',       type: 'mangadex',    icon: '🌐', lang: 'en')
+ 18. Bully Manga   (id: 'bully-manga',  url: 'https://bully-manga.com',    type: 'bullymanga',  icon: '🐂', lang: 'th')
+ 19. Asura Scans   (id: 'asura-scans',  url: 'https://asurascans.com',     type: 'asurascans',  icon: '⚔️', lang: 'en')
+ 20. MangaTown     (id: 'manga-town',   url: 'https://www.mangatown.com',  type: 'mangatown',   icon: '🏙️', lang: 'en')
+ 21. Pocket Shonen (id: 'pocket-shonen',url: 'https://pocket.shonenmagazine.com', type: 'pocketshonen', icon: '🇯🇵', lang: 'ja')
+ 22. MangaDex      (id: 'mangadex',     url: 'https://mangadex.org',       type: 'mangadex',    icon: '🌐', lang: 'en')
 
 --------------------------------------------------------------------------------
 [ 4. โครงสร้างไฟล์และหน้าที่ (FILE ARCHITECTURE) ]
 - index.html:
-  หน้าหลัก แสดงคลังการ์ตูนทุกเว็บ, แถบตัวกรองภาษา [ไทย/อังกฤษ/ทั้งหมด], แท็บหมวดหมู่ (ทั้งหมด, มันฮวา, ประวัติ, เรื่องโปรด),
+  หน้าหลัก แสดงคลังการ์ตูนทุกเว็บ, แถบตัวกรองภาษา [ไทย/อังกฤษ/ญี่ปุ่น/ทั้งหมด], แท็บหมวดหมู่ (ทั้งหมด, มันฮวา, ประวัติ, เรื่องโปรด),
   กล่องค้นหาแบบ Realtime ข้ามค่าย, หน้าต่าง Modal รายชื่อตอน และแถบตั้งค่า Sync Key
 - reader.html:
   หน้าอ่านการ์ตูนแนวตั้ง (Vertical Continuous Scroll), ปุ่มเปลี่ยนตอนก่อนหน้า/ถัดไป (ทั้งบนและล่าง),
@@ -99,30 +101,35 @@
 - app.js:
   หัวใจหลักของฝั่ง Frontend:
   - fetchSingleSource, fetchMangaBatch, fetchMangaDexBatch: รวบรวมข้อมูลเรื่องล่าสุด
-  - setupLanguageFilter, applyFilters: กรองภาษาโดยเน้นไทยเป็นหลัก
+  - setupLanguageFilter, applyFilters: กรองภาษาโดยเน้นไทยเป็นหลัก พร้อมระบบ QoL ปลดล็อคภาษาทั้งหมดเมื่อไม่เลือก
   - mergeAndDeduplicate: ผสานเรื่องซ้ำข้ามค่าย เลือกเว็บฟรีที่มีตอนมากที่สุดขึ้นนำ
   - parseChaptersFromHtml, fetchMangaDexChapters: แกะรายชื่อตอน และเรียก sortChaptersDescending (ตอน 1 อยู่ล่างสุดเสมอ)
   - cleanMangaChapterTitle: ทำความสะอาดชื่อตอน ตัดชื่อเรื่องซ้ำซ้อน และตัดวันที่ไทย/สากลทุกรูปแบบทิ้ง 100%
-  - getReadingHistory: ดึงประวัติอ่านพร้อมระบบ Smart Deduplication ข้ามเว็บต้นทาง ยุบเรื่องซ้ำเหลือ 1 รายการ
+  - getReadingHistory: ดึงประวัติอ่านพร้อมระบบ Smart Deduplication ข้ามเว็บต้นทาง และเรียงตอนอ่านล่าสุดไว้บนสุดเสมอ 100%
   - recordReadingHistory: บันทึกประวัติอ่านลง localStorage ทันทีที่คลิกตอน และอัปเดตเลขตอนล่าสุดไม่ให้ค้าง
   - initSyncEngine, pushSyncData, pullAndMergeSyncData: ระบบซิงก์ข้ามเครื่องผ่าน Cloudflare KV
 - config.js:
-  ตั้งค่า SOURCES (ไทย 17 เว็บ + Eng 2 เว็บ: Asura Scans, MangaTown) และ MANGADEX (อังกฤษ), PROXY_URL, CHAT_API_URL, SYNC_API_BASE
+  ตั้งค่า SOURCES (ไทย 18 เว็บ + Eng 2 เว็บ: Asura Scans, MangaTown + JP 1 เว็บ: Pocket Shonen) และ MANGADEX (อังกฤษ), PROXY_URL, CHAT_API_URL, SYNC_API_BASE
 - style.css:
-  สไตล์ Dark Modern ธีมเขียว-ฟ้า นีออน ปรับแต่ง Mobile First สบายตา พร้อม Badge ภาษา (🇹🇭 TH / 🇬🇧 EN / 🇯🇵 JA / 🇰🇷 KO) และปุ่ม Pill ไร้เครื่องหมายถูก
+  สไตล์ Dark Modern ธีมเขียว-ฟ้า นีออน ปรับแต่ง Mobile First สบายตา พร้อม Badge ภาษา (🇹🇭 TH / 🇬🇧 EN / 🇯🇵 JA) และปุ่ม Pill ไร้เครื่องหมายถูก
 - worker/worker.js:
-  Cloudflare Worker สำหรับทำ Proxy ปลดล็อก CORS, จัดการระบบแชทส่วนกลาง และเก็บข้อมูล KV Sync (Deduplicate ตามชื่อเรื่อง Normalized Title)
+  Cloudflare Worker สำหรับทำ Proxy ปลดล็อก CORS, จัดการระบบแชทส่วนกลาง และเก็บข้อมูล KV Sync (Deduplicate ตามชื่อเรื่อง Normalized Title) พร้อม Referer routing พิเศษ
 
 --------------------------------------------------------------------------------
-[ 5. อัปเดตล่าสุด v4.1 ]
-1. เพิ่มแหล่งการ์ตูนภาษาอังกฤษชั้นนำ 2 เว็บ:
-   - Asura Scans (https://asurascans.com): คลังการ์ตูน Manhwa แปลอังกฤษยอดนิยม อ่านภาพ WebP ชัดเจนเต็มความละเอียด
-   - MangaTown (https://www.mangatown.com/new/): คลังการ์ตูนภาษาอังกฤษขนาดใหญ่ ครอบคลุมการ์ตูนญี่ปุ่นและมังฮวาคลาสสิกรวมถึงเรื่องดัง อ่านภาพเรียงต่อเนื่อง 100%
-2. แก้ไขระบบเลือกภาษาตอนค้นหา:
-   - ปลดล็อกตัวกรองภาษาขณะพิมพ์ค้นหา (แก้ปัญหาเงื่อนไขเดิมที่ข้ามการเช็คภาษาตอนค้นหา)
-   - ขณะพิมพ์ค้นหา ผู้ใช้สามารถแตะสลับปุ่มภาษา (ไทย, อังกฤษ, ญี่ปุ่น, เกาหลี, ทั้งหมด) เพื่อกรองเฉพาะผลลัพธ์ในภาษานั้นได้อย่างถูกต้องแม่นยำ 100%
-3. ค้นหาเรื่องจาก MangaDex ได้ครบถ้วน 100% (รวมถึง Gundam Hathaway):
-   - รองรับการวาง URL เต็ม หรือรหัส UUID ของ MangaDex (เช่น 01abaf91-3d82-4d75-baae-f46e9baa19fe หรือ https://mangadex.org/title/01abaf91-3d82-4d75-baae-f46e9baa19fe/mobile-suit-gundam-hathaway-s-flash)
-   - ปรับปรุงระบบค้นหาคำแบบ Tokenized Words (ตัดเครื่องหมาย : หรือ ' เช่น Gundam: Hathaway's Flash ให้ตรงกับคำค้นหาได้อย่างสมบูรณ์แบบ)
-   - ระบบ Auto-Debounce Search เมื่อพิมพ์คำค้นหาภาษาอังกฤษ จะค้นหาจาก MangaDex ให้โดยอัตโนมัติทันที
+[ 5. อัปเดตล่าสุด v4.2 ]
+1. จัดเรียงประวัติการอ่านตามเวลาอ่านล่าสุดไว้บนสุดเสมอ 100%:
+   - แก้ไข applyFilters() ไม่ให้จัดเรียงประวัติด้วยภาษาไทยก่อน เพื่อรักษาลำดับเวลาที่อ่านล่าสุดไว้บนสุดอย่างเคร่งครัด
+   - getReadingHistory() เรียงลำดับตาม updatedAt จากมากไปน้อยก่อนส่งออก
+2. ปรับปรุงระบบตัวกรองภาษา (Language Filter QoL):
+   - หากผู้ใช้เอาภาษาออกทั้งหมด (ไม่มีไฮไลท์) ระบบจะแสดง "ทุกภาษา" เพื่อความสะดวก
+   - ปุ่ม "ทั้งหมด" ทำงานแบบ Toggle: ถ้ายังไม่เลือกครบทุกภาษา กดแล้วจะเลือกทั้งหมด; ถ้าเลือกครบอยู่แล้ว กดอีกทีจะล้างออกทั้งหมด เพื่อให้ผู้ใช้สามารถกดเลือกดูทีละภาษาได้ในคลิกเดียว
+   - เอาภาษาเกาหลี (ko) ออกจากระบบอย่างสมบูรณ์ เนื่องจากเนื้อหาส่วนใหญ่แปลจากญี่ปุ่นเป็นเกาหลี
+3. แก้ไขปัญหารูปภาพ MangaTown และฟีด Asura Scans:
+   - MangaTown: เพิ่ม Referer https://www.mangatown.com/ ใน worker/worker.js และ getProxyUrl() ป้องกันข้อผิดพลาด 403 Forbidden
+   - Asura Scans: แก้ไข DOMException จากตัวเลือก span:contains("Chapter") ใน parseAsuraScansHtml ทำให้ดึงรายการการ์ตูนมาแสดงผลได้อย่างสมบูรณ์
+4. ปลดล็อกผลการค้นหาภาษาอังกฤษ/MangaDex (เช่น Mobile Suit Gundam Hathaway):
+   - applyFilters() จะไม่กรองผลลัพธ์การค้นหาทิ้งด้วยตัวกรองภาษา ทำให้ค้นพบการ์ตูนอังกฤษจาก MangaDex ได้ทันทีแม้จะเปิดตัวกรองภาษาไทยอยู่
+5. เพิ่ม 2 เว็บต้นทางใหม่:
+   - Bully Manga (https://bully-manga.com - ภาษาไทย): รองรับการแกะการ์ตูน, รายการตอน และ Vertical Reader ผ่าน IMAGE_MAP
+   - Pocket Shonen (https://pocket.shonenmagazine.com - ภาษาญี่ปุ่น): เว็บทางการของ Kodansha เชื่อมต่อไปยังต้นทาง
 ================================================================================

@@ -518,6 +518,12 @@ export default {
         refererHeader = "https://ped-manga.com/";
       } else if (origin.includes("chibi-manga") || targetUrl.includes("chibi-manga")) {
         refererHeader = "https://chibi-manga.com/";
+      } else if (origin.includes("mangahere") || targetUrl.includes("mangahere") || origin.includes("mangatown") || targetUrl.includes("mangatown")) {
+        refererHeader = "https://www.mangatown.com/";
+      } else if (origin.includes("bully-manga") || targetUrl.includes("bully-manga")) {
+        refererHeader = "https://bully-manga.com/";
+      } else if (origin.includes("shonenmagazine") || targetUrl.includes("shonenmagazine")) {
+        refererHeader = "https://pocket.shonenmagazine.com/";
       }
 
       const fetchOptions = {
