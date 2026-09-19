@@ -1453,7 +1453,8 @@ body {
   box-shadow: 0 0 30px rgba(0,0,0,0.8);
 }
 
-.reader-container img {
+.reader-container img,
+.reader-container canvas {
   width: 100%;
   height: auto;
   display: block;

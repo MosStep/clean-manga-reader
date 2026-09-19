@@ -22,6 +22,8 @@ function getProxyUrl(targetUrl, referer = '') {
     url += `&referer=${encodeURIComponent('https://www.mangatown.com/')}`;
   } else if (targetUrl.includes('bully-manga')) {
     url += `&referer=${encodeURIComponent('https://bully-manga.com/')}`;
+  } else if (targetUrl.includes('sixmanga')) {
+    url += `&referer=${encodeURIComponent('https://www.sixmanga.com/')}`;
   } else if (targetUrl.includes('shonenmagazine')) {
     url += `&referer=${encodeURIComponent('https://pocket.shonenmagazine.com/')}`;
   }
@@ -5035,6 +5037,102 @@ function parseReaderData(html, currentUrl = '') {
     }
   }
 
+  // 3.9 ตรวจสอบ SixManga (ระบบเรียงชิ้นส่วนภาพที่สลับตำแหน่ง sovleImage / displayImage)
+  if (currentUrl.includes('sixmanga.com') || html.includes('displayImage')) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const readingArea = doc.querySelector('.reading-content') || doc.querySelector('.read-container') || doc.querySelector('.entry-content');
+
+    // แกะ script packer ทั้งหมดที่อยู่ใน HTML
+    const scriptPacks = {};
+    const scriptMatches = [...html.matchAll(/<script[^>]*>(eval\(function\(p,a,c,k,e,d\)[\s\S]*?)<\/script>/gi)];
+    for (const sm of scriptMatches) {
+      const code = sm[1];
+      try {
+        const fnCode = code.replace(/^eval\s*\(/i, '(');
+        const unpacked = Function("return " + fnCode)();
+        if (typeof unpacked === 'string') {
+          const idMatch = unpacked.match(/getElementById\(["']([^"']+)["']\)/i);
+          const urlMatch = unpacked.match(/https?:\/\/[^'"]+?\.(?:jpg|jpeg|png|webp)/i);
+          const sliceMatch = unpacked.match(/sovleImage\s*=\s*(\[\[[\s\S]*?\]\]);/i);
+          const dimMatch = unpacked.match(/width:\s*(\d+)px;\s*height:\s*(\d+)px/i);
+
+          if (idMatch && urlMatch && sliceMatch) {
+            const elId = idMatch[1];
+            let slices = [];
+            try {
+              slices = JSON.parse(sliceMatch[1]);
+            } catch (errJson) {
+              const rawSlices = [...sliceMatch[1].matchAll(/\["([^"]+)","([^"]+)","([^"]+)","([^"]+)"\]/g)];
+              slices = rawSlices.map(r => [r[1], r[2], r[3], r[4]]);
+            }
+            scriptPacks[elId] = {
+              rawUrl: urlMatch[0],
+              slices,
+              tileW: dimMatch ? parseInt(dimMatch[1], 10) : 500,
+              tileH: dimMatch ? parseInt(dimMatch[2], 10) : 550
+            };
+          }
+        }
+      } catch (errUnpack) {
+        console.warn("Failed to unpack SixManga script:", errUnpack);
+      }
+    }
+
+    if (readingArea) {
+      const imgs = [];
+      const prevLink = doc.querySelector('.nav-previous a:not(.disabled), a.prev_page:not(.disabled), .btn.prev_page:not(.disabled)');
+      const nextLink = doc.querySelector('.nav-next a:not(.disabled), a.next_page:not(.disabled), .btn.next_page:not(.disabled)');
+
+      const elements = readingArea.querySelectorAll('img, .displayImage');
+      elements.forEach(el => {
+        if (el.classList.contains('displayImage')) {
+          const elId = el.getAttribute('id') || '';
+          const pack = scriptPacks[elId];
+          const oriW = parseInt(el.getAttribute('ori-width') || '1000', 10);
+          const oriH = parseInt(el.getAttribute('ori-height') || '2750', 10);
+          if (pack) {
+            imgs.push({
+              isScrambled: true,
+              rawUrl: getProxyUrl(pack.rawUrl, 'https://www.sixmanga.com/'),
+              width: oriW,
+              height: oriH,
+              tileW: pack.tileW || Math.round(oriW / 2),
+              tileH: pack.tileH || Math.round(oriH / (pack.slices.length / 2)),
+              slices: pack.slices
+            });
+          }
+        } else if (el.tagName === 'IMG') {
+          let src = el.getAttribute('data-src') || 
+                    el.getAttribute('data-lazy-src') || 
+                    el.getAttribute('data-original') || 
+                    el.getAttribute('src') || '';
+          src = src.replace(/&amp;/g, '&').trim();
+          if (
+            src &&
+            !src.includes('data:image') &&
+            !src.includes('blank.gif') &&
+            !src.includes('dflazy') &&
+            !src.includes('HL-728x200px') &&
+            !src.includes('Banner') &&
+            !src.includes('banner')
+          ) {
+            if (src.startsWith('//')) src = 'https:' + src;
+            imgs.push(getProxyUrl(src, 'https://www.sixmanga.com/'));
+          }
+        }
+      });
+
+      if (imgs.length > 0) {
+        return {
+          prevUrl: scriptPrevUrl || cleanChapterNavUrl(prevLink ? prevLink.getAttribute('href') : '', currentUrl),
+          nextUrl: scriptNextUrl || cleanChapterNavUrl(nextLink ? nextLink.getAttribute('href') : '', currentUrl),
+          images: imgs
+        };
+      }
+    }
+  }
+
   // 4. ตรวจสอบเว็บตระกูล Madara (Du-Manga, Manga-LC)
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
@@ -5403,25 +5501,63 @@ async function initReaderPage() {
 
     setupNavButtons(readerData.prevUrl, readerData.nextUrl);
 
-    // แสดงรูปภาพทั้งหมดพร้อมระบบ Auto-Retry เมื่อรูปโหลดสะดุด
-    readerData.images.forEach((imgUrl, idx) => {
-      const img = document.createElement('img');
-      img.src = imgUrl;
-      img.alt = `Page ${idx + 1}`;
-      img.loading = idx < 4 ? 'eager' : 'lazy';
-      img.referrerPolicy = 'no-referrer';
+    // แสดงรูปภาพทั้งหมดพร้อมระบบ Auto-Retry เมื่อรูปโหลดสะดุด (รองรับทั้งรูปธรรมดา และรูปถอดรหัสแบบ Canvas ของ SixManga)
+    readerData.images.forEach((item, idx) => {
+      if (typeof item === 'string') {
+        const img = document.createElement('img');
+        img.src = item;
+        img.alt = `Page ${idx + 1}`;
+        img.loading = idx < 4 ? 'eager' : 'lazy';
+        img.referrerPolicy = 'no-referrer';
 
-      let retried = false;
-      img.onerror = function() {
-        if (!retried) {
-          retried = true;
-          setTimeout(() => {
-            this.src = imgUrl + (imgUrl.includes('?') ? '&' : '?') + 'retry=' + Date.now();
-          }, 1200);
-        }
-      };
+        let retried = false;
+        img.onerror = function() {
+          if (!retried) {
+            retried = true;
+            setTimeout(() => {
+              this.src = item + (item.includes('?') ? '&' : '?') + 'retry=' + Date.now();
+            }, 1200);
+          }
+        };
 
-      container.appendChild(img);
+        container.appendChild(img);
+      } else if (item && item.isScrambled) {
+        const canvas = document.createElement('canvas');
+        canvas.width = item.width || 1000;
+        canvas.height = item.height || 2750;
+        canvas.style.width = '100%';
+        canvas.style.height = 'auto';
+        canvas.style.display = 'block';
+        canvas.style.margin = '0 auto';
+        container.appendChild(canvas);
+
+        const ctx = canvas.getContext('2d');
+        const rawImg = new Image();
+        rawImg.crossOrigin = 'anonymous';
+        rawImg.onload = () => {
+          if (Array.isArray(item.slices)) {
+            item.slices.forEach(slice => {
+              const dx = parseFloat(slice[0]);
+              const dy = parseFloat(slice[1]);
+              const sx = parseFloat(slice[2]);
+              const sy = parseFloat(slice[3]);
+              ctx.drawImage(rawImg, sx, sy, item.tileW, item.tileH, dx, dy, item.tileW, item.tileH);
+            });
+          }
+        };
+
+        let retried = false;
+        rawImg.onerror = function() {
+          if (!retried) {
+            retried = true;
+            setTimeout(() => {
+              rawImg.src = item.rawUrl + (item.rawUrl.includes('?') ? '&' : '?') + 'retry=' + Date.now();
+            }, 1200);
+          }
+        };
+
+        rawImg.src = item.rawUrl;
+      }
     });
 
   } catch (err) {

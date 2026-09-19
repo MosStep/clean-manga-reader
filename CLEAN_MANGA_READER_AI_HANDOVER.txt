@@ -85,10 +85,11 @@
  16. Ecchi-Doujin  (id: 'ecchi-doujin', url: 'https://ecchi-doujin.com',   type: 'mangareader', icon: '🔞')
  17. NTRnaja       (id: 'ntrnaja',      url: 'https://ntrnaja.com',        type: 'ntrnaja',     icon: '🔥')
  18. Bully Manga   (id: 'bully-manga',  url: 'https://bully-manga.com',    type: 'bullymanga',  icon: '🐂', lang: 'th')
- 19. Asura Scans   (id: 'asura-scans',  url: 'https://asurascans.com',     type: 'asurascans',  icon: '⚔️', lang: 'en')
- 20. MangaTown     (id: 'manga-town',   url: 'https://www.mangatown.com',  type: 'mangatown',   icon: '🏙️', lang: 'en')
- 21. Pocket Shonen (id: 'pocket-shonen',url: 'https://pocket.shonenmagazine.com', type: 'pocketshonen', icon: '🇯🇵', lang: 'ja')
- 22. MangaDex      (id: 'mangadex',     url: 'https://mangadex.org',       type: 'mangadex',    icon: '🌐', lang: 'en')
+ 19. SixManga      (id: 'six-manga',    url: 'https://www.sixmanga.com',   type: 'madara',      icon: '6️⃣', lang: 'th')
+ 20. Asura Scans   (id: 'asura-scans',  url: 'https://asurascans.com',     type: 'asurascans',  icon: '⚔️', lang: 'en')
+ 21. MangaTown     (id: 'manga-town',   url: 'https://www.mangatown.com',  type: 'mangatown',   icon: '🏙️', lang: 'en')
+ 22. Pocket Shonen (id: 'pocket-shonen',url: 'https://pocket.shonenmagazine.com', type: 'pocketshonen', icon: '🇯🇵', lang: 'ja')
+ 23. MangaDex      (id: 'mangadex',     url: 'https://mangadex.org',       type: 'mangadex',    icon: '🌐', lang: 'en')
 
 --------------------------------------------------------------------------------
 [ 4. โครงสร้างไฟล์และหน้าที่ (FILE ARCHITECTURE) ]
@@ -132,4 +133,17 @@
 5. เพิ่ม 2 เว็บต้นทางใหม่:
    - Bully Manga (https://bully-manga.com - ภาษาไทย): รองรับการแกะการ์ตูน, รายการตอน และ Vertical Reader ผ่าน IMAGE_MAP
    - Pocket Shonen (https://pocket.shonenmagazine.com - ภาษาญี่ปุ่น): เว็บทางการของ Kodansha เชื่อมต่อไปยังต้นทาง
+
+--------------------------------------------------------------------------------
+[ 6. อัปเดตล่าสุด v4.3 ]
+1. เพิ่มเว็บ SixManga (https://www.sixmanga.com - ภาษาไทย):
+   - เพิ่มเข้า CONFIG.SOURCES (type: 'madara', readable: true, isCoin: false, lang: 'th')
+   - รองรับการดึงข้อมูลหน้าแรก, ค้นหา (search post_type=wp-manga), และรายชื่อตอนครบถ้วน
+2. ระบบถอดรหัสภาพสลับชิ้นส่วน (Scrambled Tile Unscrambler via HTML5 Canvas):
+   - SixManga มีการเข้ารหัสภาพบางหน้าด้วย Dean Edwards' p.a.c.k.e.r. (div.displayImage + sovleImage slices)
+   - ใน parseReaderData: ทำการ Unpack script อัตโนมัติ สกัด raw image URL, ตำแหน่ง slice [dx, dy, sx, sy] และขนาดภาพต้นฉบับ
+   - ใน initReaderPage: เรนเดอร์ภาพที่ถูกสลับชิ้นส่วนลงบน HTML5 Canvas โดยใช้ drawImage วาดแต่ละชิ้นส่วนกลับสู่ตำแหน่งจริง 100% ต่อเนื่องกับภาพปกติอย่างเนียนกริบ ไร้รอยต่อ
+3. การกำหนด Referer Routing:
+   - เพิ่ม Referer https://www.sixmanga.com/ ใน getProxyUrl() และ worker/worker.js ป้องกันรูปภาพจาก cdn img.sixmanga.com ติด 403 Forbidden
+4. ปรับปรุงเวอร์ชันแคชเป็น v=4.3 ใน index.html และ reader.html
 ================================================================================
