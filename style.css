@@ -1486,6 +1486,129 @@ body {
   transition: opacity 0.3s;
 }
 
+/* Single Page Mode Styles */
+.btn-mode-toggle {
+  background: rgba(0, 230, 118, 0.12);
+  border: 1px solid rgba(0, 230, 118, 0.35);
+  color: #00e676;
+}
+
+.btn-mode-toggle:hover {
+  background: rgba(0, 230, 118, 0.25);
+  border-color: #00e676;
+  color: #fff;
+}
+
+.reader-container.single-page-mode {
+  min-height: calc(100vh - 120px);
+  margin-bottom: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.single-page-wrapper {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  max-width: 1000px;
+  min-height: 60vh;
+  user-select: none;
+}
+
+.single-page-wrapper img {
+  max-height: calc(100vh - 130px);
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 4px 28px rgba(0, 0, 0, 0.85);
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.single-page-wrapper .tap-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 35%;
+  z-index: 10;
+  cursor: pointer;
+}
+
+.single-page-wrapper .tap-zone-left {
+  left: 0;
+}
+
+.single-page-wrapper .tap-zone-right {
+  right: 0;
+}
+
+/* Floating Bottom Single Page Bar */
+.single-page-bar {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(14, 16, 23, 0.94);
+  border: 1px solid rgba(0, 230, 118, 0.38);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.8), 0 0 16px rgba(0, 230, 118, 0.2);
+  padding: 8px 18px;
+  border-radius: 40px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  z-index: 120;
+}
+
+.single-page-bar .btn-page-nav {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.single-page-bar .btn-page-nav:hover:not(:disabled) {
+  background: rgba(0, 230, 118, 0.2);
+  border-color: #00e676;
+  color: #00e676;
+}
+
+.single-page-bar .btn-page-nav:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.single-page-bar .page-indicator {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #00e676;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.single-page-spinner {
+  display: inline-block;
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: #00e676;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
 /* Reader 2-Row Footer Navigation */
 .reader-footer {
   max-width: 840px;

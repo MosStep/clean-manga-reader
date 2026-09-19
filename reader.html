@@ -6,7 +6,7 @@
   <title>อ่านมังงะ | Clean Manga</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2300e676'/%3E%3Cstop offset='100%25' stop-color='%2300b0ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%230c0d12'/%3E%3Crect x='1.5' y='1.5' width='61' height='61' rx='14.5' fill='none' stroke='url(%23g)' stroke-width='2' stroke-opacity='0.6'/%3E%3Cpath d='M36 7 L17 34 L31 34 L26 57 L47 27 L33 27 Z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="style.css?v=4.4">
+  <link rel="stylesheet" href="style.css?v=4.5">
 </head>
 <body class="reader-page">
 
@@ -26,6 +26,10 @@
     <div id="readerTitle" class="reader-nav-title">กำลังโหลด...</div>
 
     <div class="reader-nav-right">
+      <button id="btnReaderMode" class="btn-nav btn-mode-toggle" title="สลับโหมดการอ่าน (เลื่อนยาว / ทีละหน้า)" style="display:none;">
+        <span class="nav-icon" id="readerModeIcon">📖</span>
+        <span class="nav-label" id="readerModeLabel">ทีละหน้า</span>
+      </button>
       <a id="readerSourceBtn" href="#" target="_blank" class="btn-nav btn-source-link" title="เปิดอ่านที่หน้าเว็บต้นทาง">
         <span class="nav-icon">🌐</span>
         <span class="nav-label">ต้นทาง ↗</span>
@@ -42,6 +46,15 @@
   </div>
 
   <main id="readerImages" class="reader-container"></main>
+
+  <!-- แถบนำทางโหมดอ่านทีละหน้า (Single Page Slider Bar) -->
+  <div id="singlePageBar" class="single-page-bar" style="display:none;">
+    <button id="btnSinglePrev" class="btn-page-nav" title="หน้าก่อนหน้า (แตะซ้าย หรือ กดลูกศรซ้าย)">◀ หน้าก่อน</button>
+    <div class="page-indicator">
+      หน้า <span id="pageCurrent">1</span> / <span id="pageTotal">1</span>
+    </div>
+    <button id="btnSingleNext" class="btn-page-nav" title="หน้าต่อไป (แตะขวา หรือ กดลูกศรขวา)">หน้าต่อไป ▶</button>
+  </div>
 
   <!-- Reader Footer Navigation (2 บรรทัด: ปุ่มตอนก่อนหน้า/ต่อไปเด่นชัด + ปุ่มรายการตอน/เลือกตอน/ต้นทาง) -->
   <footer class="reader-footer">
@@ -155,8 +168,8 @@
     </div>
   </div>
 
-  <script src="config.js?v=4.4"></script>
-  <script src="app.js?v=4.4"></script>
+  <script src="config.js?v=4.5"></script>
+  <script src="app.js?v=4.5"></script>
   <script>
     document.addEventListener('DOMContentLoaded', initReaderPage);
   </script>
