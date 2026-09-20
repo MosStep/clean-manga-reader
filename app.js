@@ -4948,6 +4948,66 @@ async function openChapterModal(manga, activeSource = null) {
       let html = await fetchViaProxy(currentSource.mangaUrl);
       chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType);
 
+      // สำหรับ MangaBlackCat: ตรวจสอบการแบ่งหน้าตอน (Pagination) เช่น หน้า 1 - 6
+      if (currentSource.sourceType === 'mangablackcat') {
+        let maxPage = 1;
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        // 1. ดึงจาก Alpine.js x-data หรือ script: max: 6
+        const maxMatch = html.match(/max:\s*(\d+)/i);
+        if (maxMatch) {
+          maxPage = Math.max(maxPage, parseInt(maxMatch[1], 10) || 1);
+        }
+
+        // 2. ดึงจากทุกลิงก์ page=(\d+) ใน pagination
+        doc.querySelectorAll('nav a[href*="page="], a[href*="page="]').forEach(a => {
+          const href = a.getAttribute('href') || '';
+          const pMatch = href.match(/[?&]page=(\d+)/);
+          if (pMatch) {
+            maxPage = Math.max(maxPage, parseInt(pMatch[1], 10) || 1);
+          }
+        });
+
+        // 3. ตรวจสอบปุ่มไปที่หน้า / X
+        const totalPageMatch = html.match(/\/\s*(\d+)\s*<\/button>/i) || html.match(/\/\s*(\d+)\s*<\/span>/i);
+        if (totalPageMatch) {
+          maxPage = Math.max(maxPage, parseInt(totalPageMatch[1], 10) || 1);
+        }
+
+        // หากมีหลายหน้า ดึงตอนหน้า 2..maxPage ทั้งหมดแบบคู่ขนาน (Parallel)
+        if (maxPage > 1) {
+          const totalToFetch = Math.min(maxPage, 35); // รองรับสูงสุด 35 หน้า (700 ตอน)
+          const pagePromises = [];
+          for (let p = 2; p <= totalToFetch; p++) {
+            const pageUrl = currentSource.mangaUrl.includes('?')
+              ? `${currentSource.mangaUrl}&page=${p}`
+              : `${currentSource.mangaUrl}?page=${p}`;
+            pagePromises.push(
+              fetchViaProxy(pageUrl, {}, 10000)
+                .then(pHtml => parseChaptersFromHtml(pHtml, currentSource.sourceUrl, currentSource.sourceType))
+                .catch(err => {
+                  console.warn(`Fetch error for blackcat chapters page ${p}:`, err);
+                  return [];
+                })
+            );
+          }
+
+          const pagesResults = await Promise.allSettled(pagePromises);
+          const existingUrls = new Set(chapters.map(c => c.url));
+          pagesResults.forEach(res => {
+            if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+              res.value.forEach(ch => {
+                if (!existingUrls.has(ch.url)) {
+                  existingUrls.add(ch.url);
+                  chapters.push(ch);
+                }
+              });
+            }
+          });
+        }
+      }
+
       // สำหรับเว็บตระกูล Madara (เช่น Du-Manga) หากหน้าแรกไม่ได้ใส่รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที
       if (currentSource.sourceType === 'madara' && chapters.length === 0) {
         try {
@@ -4997,9 +5057,17 @@ async function openChapterModal(manga, activeSource = null) {
     chapters = sortChaptersDescending(chapters);
     if (chapters.length > 0) {
       currentSource.latestEp = chapters[0].title;
+      if (manga) manga.latestEp = chapters[0].title;
+      // อัปเดตตัวเลขจำนวนตอนใน Pill ของ Modal ทันที
+      const activePill = sourcePills ? sourcePills.querySelector('.modal-source-pill.active span:nth-child(2)') : null;
+      if (activePill) {
+        const epNum = extractEpNumberFromText(chapters[0].title);
+        const epLabel = epNum > 0 ? ` (${epNum} ตอน)` : ` (${chapters[0].title})`;
+        activePill.textContent = `${currentSource.sourceName}${epLabel}`;
+      }
+      updateCardLatestEpInDom(currentSource.mangaUrl, manga.title, chapters[0].title);
       if (currentSource.sourceId === 'ntrnaja' && currentSource.mangaUrl) {
         saveNtrChapterCache(currentSource.mangaUrl, chapters[0].title);
-        updateCardLatestEpInDom(currentSource.mangaUrl, manga.title, chapters[0].title);
       }
       if (chapters[0].isLocked) {
         currentSource.isCoin = true;
