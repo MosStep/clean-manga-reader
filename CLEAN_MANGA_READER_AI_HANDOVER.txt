@@ -185,5 +185,34 @@
    - สกัดเลขตอนครอบคลุมทุกจุดในหน้าเว็บ: ลิงก์ตอนใน HTML (`/comics/<slug>/chapter/<num>`), Astro Island JSON payloads (`chapter_count` และ `latest_chapter_number`), ตลอดจน DOM container
    - แก้ไขปัญหา Hero Carousel ด้านบนสุดของ Asura Scans (ซึ่งไม่มีข้อมูลตอน) เข้าไปแย่งลงทะเบียนการ์ตูนก่อน ทำให้การ์ตูนในฟีดหลักไม่ได้รับเลขตอน
    - มังงะ Asura Scans เช่น "War of Extinction" แสดงเลขตอน "Ch. 7" ที่ข้อความสีเขียวมุมซ้ายล่างหน้าแรกอย่างแม่นยำ 100% แทนข้อความเดิม "ตอนล่าสุด (EN)"
-3. อัปเดตเวอร์ชันแคชเป็น v=4.6 ใน index.html และ reader.html
+--------------------------------------------------------------------------------
+[ 10. อัปเดตล่าสุด v4.7 & v4.8 ]
+1. เพิ่มเว็บต้นทางใหม่: MangaBlackCat (mangablackcat.com):
+   - เพิ่มเข้าระบบใน config.js ด้วย id 'mangablackcat', icon '🐈‍⬛', readable: true, lang 'th'
+   - ดึงหน้าอัปเดตล่าสุดจาก https://mangablackcat.com/latest (60 เรื่องต่อหน้า พร้อมเลขตอน)
+   - แกะรายชื่อตอนจาก `.chapter-card-link` พร้อมสกัดเลขตอนจาก `data-chapter-number`
+   - แกะรูปภาพใน Reader จาก Alpine.js `boot: JSON.parse(...)` (cdn.mangablackcat.com) พร้อมแก้ปัญหา Unicode escape ใน Path ภาษาไทย
+   - เพิ่ม Referer: https://mangablackcat.com/ ใน getProxyUrl, worker.js และ local_server.ps1
+2. ระบบดึงการ์ตูนยอดนิยม (Popular) ควบคู่กับอัปเดตล่าสุด โดยนำมาต่อท้ายเรื่องพึ่งอัปเดตเสมอ:
+   - กฎการจัดวาง: ให้การ์ตูนที่พึ่งอัปเดตล่าสุดของทุกเว็บขึ้นนำก่อนทั้งหมด และนำเรื่องยอดนิยม/ฮิตมาต่อท้าย
+   - `interleaveSources`: แยก partition ข้อมูลของแต่ละเว็บออกเป็น `latest` และ `popular` โดยทำ Round-Robin เรื่องอัปเดตล่าสุดจนครบก่อน แล้วจึงทำ Round-Robin เรื่องยอดนิยมต่อท้าย
+   - MangaReader: ดึงการ์ดอัปเดตล่าสุดจาก `.listupd` ก่อน แล้วสกัดการ์ดยอดนิยมจาก `.wpop .bsx, .top10manga li` ต่อท้าย
+   - Bully Manga: ดึง `.mc-card` และ `a.m2-card` (อัปเดตล่าสุด) ก่อน แล้วดึง `a.hit-card, .hs-slide` (เรื่องฮิต) ต่อท้าย
+   - Asura Scans: จัดเรื่องที่มีตอนอัปเดตขึ้นก่อน แล้วนำเรื่องยอดนิยม/สไลเดอร์แบนเนอร์มาต่อท้าย
+   - MangaTown: ดึง `/latest/` ก่อน แล้วดึง `/hot/` มาต่อท้าย
+   - Madara (SixManga, Du-Manga ฯลฯ): ดึง `/manga/?m_orderby=latest` ก่อน แล้วดึง `/manga/?m_orderby=trending` มาต่อท้าย
+   - MangaBlackCat: ดึง `/latest` ก่อน แล้วดึง `/manga?sort=popular` มาต่อท้าย
+   - MangaDex: ดึง `latestUploadedChapter` ก่อน แล้วดึง `followedCount` (ยอดนิยม) มาต่อท้าย
+3. เพิ่มความเร็วในการโหลด MangaDex (MangaDex Speed Optimization):
+   - ปรับ Batch limit จาก 40 เป็น 24 เรื่อง โหลดได้ไวกว่าเดิมเท่าตัว
+   - เพิ่มระบบ Timeout Race 2.5 วินาทีในเบื้องหน้า หากติด CORS หรือช้าจะสลับไปดึงผ่าน Proxy ทันที ไม่ค้างหน้าจอ
+   - เพิ่มระบบแคชผลลัพธ์ MangaDex ทั้ง Batch และคำค้นหาลงใน sessionStorage เปิดดูหรือค้นหาซ้ำได้ทันทีใน 0s
+4. แก้ไขระบบค้นหาและความแม่นยำของผลลัพธ์ (Search Accuracy & Token Matching):
+   - เพิ่มฟังก์ชัน `isMangaMatchQuery(m, query)` คัดกรองความตรงแบบ Tokenized Match (เช่น ค้น "gundam hathaway" จะตรวจสอบว่าทุกคำต้องตรงกับชื่อเรื่อง, altTitles หรือ URL slug)
+   - ตัดปัญหาค้น "gundam" แล้วมีเรื่องไม่เกี่ยวข้องเช่น "Casino" หรือ "Solo Leveling" หลุดมา
+   - บันทึก `altTitles` ของ MangaDex ทั้งหมด ทำให้ค้นพบชื่อเรื่องทางเลือก เช่น "Mobile Suit Gundam: Hathaway's Flash"
+5. แก้ไขปุ่มตัวกรองภาษาในการค้นหา (Language Filter in Search):
+   - แก้ไขเงื่อนไข `applyFilters()` ให้เคารพตัวกรองภาษา `allowedLangs.has(mangaLang)` 100% ตลอดเวลา
+   - ปลดล็อกปัญหาที่กดปุ่ม [TH], [EN], [JA] หรือ [ทั้งหมด] ในหน้าค้นหาแล้วไม่ยอมกรองตามที่เลือก
+6. อัปโหลดขึ้น GitHub และ Cloudflare Worker พร้อมใช้งานจริงบน Production
 ================================================================================

@@ -82,7 +82,7 @@ while ($listener.IsListening) {
             $safeTargetUrl = $uriObj.AbsoluteUri
             $origin = "$($uriObj.Scheme)://$($uriObj.Host)/"
             $customReferer = $req.QueryString["referer"]
-            $referer = if ($customReferer) { $customReferer } elseif ($safeTargetUrl -match "webtoon168") { "https://ped-manga.com/" } elseif ($safeTargetUrl -match "chibi-manga") { "https://chibi-manga.com/" } else { $origin }
+            $referer = if ($customReferer) { $customReferer } elseif ($safeTargetUrl -match "webtoon168") { "https://ped-manga.com/" } elseif ($safeTargetUrl -match "chibi-manga") { "https://chibi-manga.com/" } elseif ($safeTargetUrl -match "mangablackcat") { "https://mangablackcat.com/" } else { $origin }
 
             $bytes = $null
             $contentType = $null
