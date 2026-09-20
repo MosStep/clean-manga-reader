@@ -815,15 +815,24 @@ function parseMangaBlackCatHtml(html, sourceInfo, isPopular = false) {
       if (href.startsWith('/')) href = baseUrl + href;
       seenUrls.add(href);
 
-      const titleEl = card.querySelector('h3, h2, .font-medium');
-      let title = titleEl ? titleEl.textContent.replace(/\bUP\b/g, '').trim() : '';
+      const titleEl = card.querySelector('h3, h2, .line-clamp-2');
+      let title = '';
+      if (titleEl) {
+        const clone = titleEl.cloneNode(true);
+        clone.querySelectorAll('span, .bg-info').forEach(s => s.remove());
+        title = clone.textContent.replace(/\bUP\b/gi, '').trim();
+      }
       
       const imgEl = card.querySelector('img');
       let cover = imgEl ? (imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || '') : '';
       if (cover && cover.startsWith('/')) cover = baseUrl + cover;
 
-      if (!title && imgEl) {
-        title = imgEl.getAttribute('alt') || '';
+      if ((!title || /^\d+\s*ตอน$/i.test(title)) && imgEl) {
+        title = (imgEl.getAttribute('alt') || '').trim();
+      }
+      if (!title || /^\d+\s*ตอน$/i.test(title)) {
+        const slug = href.split('/manga/')[1]?.split(/[?#/]/)[0] || '';
+        title = decodeURIComponent(slug.replace(/[-_]/g, ' ')).trim();
       }
       if (!title) return;
 
