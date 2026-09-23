@@ -763,6 +763,27 @@ body {
   gap: 22px;
 }
 
+.manga-feed-heading {
+  margin: 28px 0 16px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.manga-feed-heading h2 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 1.3rem;
+  line-height: 1.25;
+}
+
+.manga-feed-heading p {
+  margin: 5px 0 0;
+  color: var(--text-sub);
+  font-size: 0.86rem;
+}
+
 .manga-card {
   background-color: var(--card-bg);
   border-radius: 14px;
@@ -1734,9 +1755,10 @@ body {
   .hero-title {
     font-size: 1.6rem;
   }
-  .hero-section {
-    min-height: 320px;
-  }
+  .hero-section { min-height: auto; }
+  .manga-feed-heading { margin: 18px 0 12px; }
+  .manga-feed-heading h2 { font-size: 1.1rem; }
+  .manga-feed-heading p { font-size: 0.78rem; }
   .manga-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: 14px;
@@ -2349,26 +2371,6 @@ body {
   color: #ff6666;
   border: 1px solid rgba(255, 68, 68, 0.45);
   box-shadow: 0 0 8px rgba(255, 68, 68, 0.2);
-}
-
-/* Alert Banner for offline sources */
-.source-alert-banner {
-  background: rgba(255, 68, 68, 0.1);
-  border: 1px solid rgba(255, 68, 68, 0.35);
-  border-radius: 12px;
-  padding: 10px 16px;
-  margin-bottom: 14px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: #ffbbbb;
-  font-size: 0.85rem;
-  backdrop-filter: blur(8px);
-}
-
-.source-alert-icon {
-  font-size: 1.15rem;
-  line-height: 1;
 }
 
 .modal-source-pill.offline {
@@ -2998,5 +3000,4 @@ body {
   .source-manager-item { align-items: flex-start; flex-direction: column; }
   .source-manager-item-actions { width: 100%; }
 }
-
 
