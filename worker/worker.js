@@ -49,7 +49,7 @@ export default {
 
     const syncSourceTypes = new Set([
       'autodetect', 'mangareader', 'madara', 'whytoon', 'readtoon', 'ntrnaja',
-      'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'mangadex'
+      'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost', 'mangadex'
     ]);
     const safePublicUrl = (value) => {
       try {

@@ -11,6 +11,8 @@ let isInitialSourceLoadBusy = true;
 
 const MAX_PARALLEL_SOURCE_FETCHES = 4;
 const INITIAL_SOURCE_PAGES = 3;
+const AUTO_FEED_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const AUTO_FEED_REFRESH_STAMP = 'clean_manga_auto_feed_refresh_at_v1';
 
 async function mapSourceQueue(sources, task, onComplete = null) {
   const results = new Array(sources.length);
@@ -34,8 +36,9 @@ async function mapSourceQueue(sources, task, onComplete = null) {
 const USER_SOURCE_PROFILES_KEY = 'clean_manga_user_source_profiles_v1';
 const ALLOWED_SOURCE_PARSER_TYPES = new Set([
   'autodetect', 'mangareader', 'madara', 'whytoon', 'readtoon', 'ntrnaja',
-  'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga'
+  'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost'
 ]);
+let showUnavailableSources = false;
 
 function isAllowedSourceUrl(value, originOnly = false) {
   try {
@@ -177,6 +180,8 @@ function getProxyUrl(targetUrl, referer = '') {
     url += `&referer=${encodeURIComponent('https://www.sixmanga.com/')}`;
   } else if (targetUrl.includes('mangablackcat')) {
     url += `&referer=${encodeURIComponent('https://mangablackcat.com/')}`;
+  } else if (targetUrl.includes('nekopost')) {
+    url += `&referer=${encodeURIComponent('https://www.nekopost.net/')}`;
   }
   return url;
 }
@@ -2705,6 +2710,8 @@ function buildSourcePageUrl(source, page) {
   if (page === 1) return source.listingUrl || source.url;
   const discovered = source.discoveredPageUrls && source.discoveredPageUrls[page];
   if (discovered) return discovered;
+  // Nekopost paginates its latest manga feed through the API, not by changing the page URL.
+  if (source.type === 'nekopost') return source.listingUrl || source.url;
   if (source.pageUrlTemplate) {
     try {
       const target = new URL(source.pageUrlTemplate.replace(/\{page\}/g, String(page)), source.url);
@@ -2808,8 +2815,211 @@ function parseDongMangaHtml(html, sourceInfo) {
   return items.length ? items : parseGenericSourceHtml(html, sourceInfo, 'dongmanga');
 }
 
+function parseNekopostHtml(html, sourceInfo) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const items = [];
+  const seen = new Set();
+  const mangaLinks = doc.querySelectorAll('a[href]');
+
+  mangaLinks.forEach(anchor => {
+    const rawHref = (anchor.getAttribute('href') || '').trim();
+    let target;
+    try { target = new URL(rawHref, sourceInfo.url); } catch (e) { return; }
+    if (!matchesSourceHost(target.href, sourceInfo.url) || !/^\/manga\/\d+\/?$/.test(target.pathname)) return;
+
+    const mangaId = target.pathname.match(/^\/manga\/(\d+)/)?.[1];
+    const key = mangaId || target.href;
+    if (seen.has(key)) return;
+
+    const card = anchor.closest('article, li, [class*="manga-card"], [class*="MangaCard"], [class*="comic-card"], [class*="Card"], [class*="card"], [class*="item"]') || anchor;
+    const titleNode = anchor.querySelector('h1, h2, h3, h4, [class*="title"], [class*="Title"]');
+    const image = anchor.querySelector('img') || card.querySelector('img');
+    const rawTitle = (titleNode?.textContent || anchor.getAttribute('title') || anchor.getAttribute('aria-label') || anchor.textContent || image?.getAttribute('alt') || '')
+      .replace(/\s+/g, ' ').trim();
+    const chapterMatch = rawTitle.match(/\b(?:ch\.?|chapter|ep\.?|episode)\s*#?\s*(\d+(?:\.\d+)?)/i)
+      || rawTitle.match(/ตอนที่\s*(\d+(?:\.\d+)?)/i);
+    let title = rawTitle
+      .replace(/^(?:NEW|ISEKAI SPOTLIGHT|PICKED FOR YOU|WEEKLY POPULAR)\s+/i, '')
+      .replace(/\s+(?:NEW|ISEKAI SPOTLIGHT|PICKED FOR YOU)\s+/ig, ' ')
+      .replace(/\s*(?:\bch\.?|\bchapter|\bep\.?|\bepisode)\s*#?\s*\d+(?:\.\d+)?[\s\S]*$/i, '')
+      .replace(/\s*ตอนที่\s*\d+(?:\.\d+)?[\s\S]*$/i, '')
+      .replace(/\s+/g, ' ').trim();
+    if (title.length < 2 || title.length > 180 || /^(?:manga latest|manga weekly popular|view all|explore|อ่านเลย|รายละเอียด)$/i.test(title)) return;
+
+    seen.add(key);
+    items.push({
+      title,
+      mangaUrl: target.href,
+      cover: extractCoverUrl(image, sourceInfo.url),
+      latestEp: chapterMatch ? (/^ตอนที่/i.test(chapterMatch[0]) ? `ตอนที่ ${chapterMatch[1]}` : `Ch.${chapterMatch[1]}`) : 'ตอนล่าสุด',
+      type: 'Manga',
+      sourceId: sourceInfo.id,
+      sourceName: sourceInfo.name,
+      sourceUrl: sourceInfo.url,
+      sourceType: 'nekopost',
+      readable: true,
+      isCoin: false,
+      icon: sourceInfo.icon || '🐱',
+      lang: 'th'
+    });
+  });
+
+  return items;
+}
+
+function parseNekopostLatestFeed(payload, sourceInfo) {
+  const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
+  const chapters = Array.isArray(data?.listChapter) ? data.listChapter : [];
+  const items = [];
+  const seenProjects = new Set();
+  chapters.forEach(chapter => {
+    const pid = String(chapter?.pid || '').trim();
+    const title = String(chapter?.projectName || '').replace(/\s+/g, ' ').trim();
+    if (!/^\d+$/.test(pid) || title.length < 2 || seenProjects.has(pid)) return;
+    if (chapter.projectType && chapter.projectType !== 'm') return;
+    seenProjects.add(pid);
+    const chapterNo = String(chapter.chapterNo || '').trim();
+    const chapterIndexUrl = chapterNo
+      ? `${sourceInfo.url.replace(/\/$/, '')}/manga/${pid}/${encodeURIComponent(chapterNo)}`
+      : '';
+    const coverVersion = Number(chapter.coverVersion) || 0;
+    items.push({
+      title,
+      mangaUrl: `${sourceInfo.url.replace(/\/$/, '')}/project/${pid}`,
+      chapterIndexUrl,
+      cover: `https://www.osemocphoto.com/collectManga/${pid}/${pid}_cover.jpg?ver=${coverVersion}`,
+      latestEp: String(chapter.chapterName || (chapterNo ? `Ch.${chapterNo}` : 'ตอนล่าสุด')),
+      type: 'Manga',
+      sourceId: sourceInfo.id,
+      sourceName: sourceInfo.name,
+      sourceUrl: sourceInfo.url,
+      sourceType: 'nekopost',
+      readable: true,
+      isCoin: false,
+      icon: sourceInfo.icon || '🐱',
+      lang: 'th'
+    });
+  });
+  return items;
+}
+
+function md5Bytes(input) {
+  const shifts = [7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21];
+  const constants = Array.from({ length: 64 }, (_, index) => Math.floor(Math.abs(Math.sin(index + 1)) * 0x100000000) >>> 0);
+  const paddedLength = Math.ceil((input.length + 9) / 64) * 64;
+  const data = new Uint8Array(paddedLength);
+  data.set(input);
+  data[input.length] = 0x80;
+  const bitLength = input.length * 8;
+  for (let index = 0; index < 4; index++) {
+    data[paddedLength - 8 + index] = (bitLength >>> (index * 8)) & 0xff;
+    data[paddedLength - 4 + index] = (Math.floor(bitLength / 0x100000000) >>> (index * 8)) & 0xff;
+  }
+
+  let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+  const rotateLeft = (value, amount) => (value << amount) | (value >>> (32 - amount));
+  for (let offset = 0; offset < data.length; offset += 64) {
+    const words = new Uint32Array(16);
+    for (let index = 0; index < 16; index++) {
+      const at = offset + index * 4;
+      words[index] = (data[at] | (data[at + 1] << 8) | (data[at + 2] << 16) | (data[at + 3] << 24)) >>> 0;
+    }
+    let a = a0, b = b0, c = c0, d = d0;
+    for (let index = 0; index < 64; index++) {
+      let f, wordIndex;
+      if (index < 16) { f = (b & c) | (~b & d); wordIndex = index; }
+      else if (index < 32) { f = (d & b) | (~d & c); wordIndex = (5 * index + 1) % 16; }
+      else if (index < 48) { f = b ^ c ^ d; wordIndex = (3 * index + 5) % 16; }
+      else { f = c ^ (b | ~d); wordIndex = (7 * index) % 16; }
+      const sum = (a + f + constants[index] + words[wordIndex]) >>> 0;
+      const rotated = rotateLeft(sum, shifts[index]);
+      const nextB = (b + rotated) >>> 0;
+      a = d; d = c; c = b; b = nextB;
+    }
+    a0 = (a0 + a) >>> 0; b0 = (b0 + b) >>> 0; c0 = (c0 + c) >>> 0; d0 = (d0 + d) >>> 0;
+  }
+  const digest = new Uint8Array(16);
+  [a0, b0, c0, d0].forEach((word, wordIndex) => {
+    for (let index = 0; index < 4; index++) digest[wordIndex * 4 + index] = (word >>> (index * 8)) & 0xff;
+  });
+  return digest;
+}
+
+async function decryptNekopostPayload(cipherText) {
+  const binary = atob(String(cipherText || '').trim());
+  const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+  if (bytes.length < 32 || new TextDecoder().decode(bytes.slice(0, 8)) !== 'Salted__') {
+    throw new Error('Nekopost ตอบข้อมูลเข้ารหัสในรูปแบบที่ไม่รู้จัก');
+  }
+  const salt = bytes.slice(8, 16);
+  const password = new TextEncoder().encode('AeyTest');
+  let previous = new Uint8Array(0);
+  const keyAndIv = new Uint8Array(48);
+  let written = 0;
+  while (written < keyAndIv.length) {
+    const material = new Uint8Array(previous.length + password.length + salt.length);
+    material.set(previous, 0);
+    material.set(password, previous.length);
+    material.set(salt, previous.length + password.length);
+    previous = md5Bytes(material);
+    const take = Math.min(previous.length, keyAndIv.length - written);
+    keyAndIv.set(previous.slice(0, take), written);
+    written += take;
+  }
+  const key = await crypto.subtle.importKey('raw', keyAndIv.slice(0, 32), { name: 'AES-CBC' }, false, ['decrypt']);
+  const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-CBC', iv: keyAndIv.slice(32, 48) }, key, bytes.slice(16));
+  return JSON.parse(new TextDecoder('utf-8').decode(plainBuffer));
+}
+
+function getNekopostChapterNavigation(html, currentUrl, mangaId, chapterNo) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const options = [];
+  const seen = new Set();
+  doc.querySelectorAll('select option[value]').forEach(option => {
+    let value = String(option.value || '').trim();
+    if (/^\d+(?:\.\d+)?$/.test(value)) value = `/manga/${mangaId}/${value}`;
+    let target;
+    try { target = new URL(value, currentUrl); } catch (e) { return; }
+    if (!new RegExp(`^/manga/${mangaId}/\\d+(?:\\.\\d+)?/?$`).test(target.pathname) || seen.has(target.pathname)) return;
+    seen.add(target.pathname);
+    options.push({ url: target.href, chapterNo: target.pathname.split('/').filter(Boolean).at(-1) });
+  });
+  const currentIndex = options.findIndex(option => option.chapterNo === chapterNo);
+  return {
+    prevUrl: currentIndex >= 0 ? options[currentIndex + 1]?.url || '' : '',
+    nextUrl: currentIndex >= 0 ? options[currentIndex - 1]?.url || '' : ''
+  };
+}
+
+async function fetchNekopostReaderData(chapterUrl) {
+  const route = new URL(chapterUrl);
+  const chapterRoute = route.pathname.match(/^\/manga\/(\d+)\/(\d+(?:\.\d+)?)\/?$/);
+  if (!chapterRoute) throw new Error('ลิงก์ตอน Nekopost ไม่อยู่ในรูปแบบที่รองรับ');
+  const [, mangaId, chapterNo] = chapterRoute;
+  const html = await fetchViaProxy(chapterUrl, {}, 15000);
+  const chapterEntries = [...html.matchAll(/\{ChapterID:(\d+),ChapterNo:"((?:[^"\\]|\\.)*)"/g)];
+  const matchingChapter = chapterEntries.find(match => match[2] === chapterNo);
+  if (!matchingChapter) throw new Error('หน้า Nekopost ไม่ส่งรหัสตอนมาให้ตัวอ่าน');
+  const chapterId = matchingChapter[1];
+  const encrypted = await fetchViaProxy(`${route.origin}/handler/cinfo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p: Number(mangaId), c: Number(chapterId) })
+  }, 15000);
+  const payload = await decryptNekopostPayload(encrypted);
+  const pageItems = Array.isArray(payload?.pageItem) ? payload.pageItem : [];
+  const cdn = Number(mangaId) > 17500 ? 'https://fs.osemocphoto.com/collectManga/' : 'https://www.osemocphoto.com/collectManga/';
+  const nav = getNekopostChapterNavigation(html, chapterUrl, mangaId, chapterNo);
+  const images = pageItems
+    .map(item => item?.pageName || item?.fileName)
+    .filter(name => typeof name === 'string' && /^[a-z0-9._-]+$/i.test(name))
+    .map(name => getProxyUrl(`${cdn}${mangaId}/${chapterId}/${name}`, 'https://www.nekopost.net/'));
+  return { ...nav, images };
+}
+
 function parseSourceListingHtml(html, source) {
   if (source.type === 'dongmanga') return { items: parseDongMangaHtml(html, source), parserType: 'dongmanga' };
+  if (source.type === 'nekopost') return { items: parseNekopostHtml(html, source), parserType: 'nekopost' };
   const parserMap = {
     mangareader: parseMangaReaderHtml,
     madara: parseMadaraHtml,
@@ -2821,14 +3031,15 @@ function parseSourceListingHtml(html, source) {
     asurascans: parseAsuraScansHtml,
     bullymanga: parseBullyMangaHtml,
     mangablackcat: parseMangaBlackCatHtml,
-    dongmanga: parseDongMangaHtml
+    dongmanga: parseDongMangaHtml,
+    nekopost: parseNekopostHtml
   };
   if (source.type !== 'autodetect') {
     const parser = parserMap[source.type] || parseMangaReaderHtml;
     return { items: parser(html, source), parserType: source.type || 'mangareader' };
   }
 
-  const strategies = [source.detectedParserType, 'madara', 'mangareader', 'whytoon', 'readtoon', 'ntrnaja', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga']
+  const strategies = [source.detectedParserType, 'madara', 'mangareader', 'whytoon', 'readtoon', 'ntrnaja', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost']
     .filter((type, index, all) => type && all.indexOf(type) === index && parserMap[type]);
   for (const strategy of strategies) {
     try {
@@ -2881,14 +3092,26 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
       return [];
     }
 
-    const html = await fetchViaProxy(targetUrl, {}, timeoutMs);
-    const blockedResult = classifySourceHtml(html);
-    if (blockedResult) {
-      recordSourceResult(source, page, blockedResult.state, 0, blockedResult.message);
-      return [];
+    let html = '';
+    let parsedListing;
+    if (source.type === 'nekopost') {
+      const apiUrl = `${source.url.replace(/\/$/, '')}/api/project/latest`;
+      const payloadText = await fetchViaProxy(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'm', paging: { pageNo: page, pageSize: 20 } })
+      }, timeoutMs);
+      parsedListing = { items: parseNekopostLatestFeed(payloadText, source), parserType: 'nekopost' };
+    } else {
+      html = await fetchViaProxy(targetUrl, {}, timeoutMs);
+      const blockedResult = classifySourceHtml(html);
+      if (blockedResult) {
+        recordSourceResult(source, page, blockedResult.state, 0, blockedResult.message);
+        return [];
+      }
+      source.discoveredPageUrls = { ...(source.discoveredPageUrls || {}), ...discoverSourcePageUrls(html, targetUrl, page) };
     }
-    source.discoveredPageUrls = { ...(source.discoveredPageUrls || {}), ...discoverSourcePageUrls(html, targetUrl, page) };
-    if (source.customSource) {
+    if (source.customSource && html) {
       const profileIndex = userSourceProfiles.findIndex(profile => profile.id === source.id);
       if (profileIndex >= 0) {
         const oldLinks = JSON.stringify(userSourceProfiles[profileIndex].discoveredPageUrls || {});
@@ -2903,7 +3126,7 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
         }
       }
     }
-    const parsedListing = parseSourceListingHtml(html, source);
+    parsedListing = parsedListing || parseSourceListingHtml(html, source);
     let items = parsedListing.items;
     if (source.type === 'autodetect' && parsedListing.parserType) {
       source.detectedParserType = parsedListing.parserType;
@@ -2987,6 +3210,54 @@ async function fetchMangaBatch(page = 1) {
 
   updateSourceHealthUi();
   return interleaveSources(sourceArrays);
+}
+
+function initAutomaticFeedRefresh() {
+  if (window.__automaticFeedRefreshBound) return;
+  window.__automaticFeedRefreshBound = true;
+
+  try {
+    if (!sessionStorage.getItem(AUTO_FEED_REFRESH_STAMP)) {
+      sessionStorage.setItem(AUTO_FEED_REFRESH_STAMP, String(Date.now()));
+    }
+  } catch (e) {}
+
+  let refreshing = false;
+  const refreshIfDue = async () => {
+    if (refreshing || isInitialSourceLoadBusy || document.visibilityState !== 'visible') return;
+    let lastRefresh = 0;
+    try { lastRefresh = Number(sessionStorage.getItem(AUTO_FEED_REFRESH_STAMP) || 0); } catch (e) {}
+    if (Date.now() - lastRefresh < AUTO_FEED_REFRESH_INTERVAL_MS) return;
+
+    refreshing = true;
+    try { sessionStorage.setItem(AUTO_FEED_REFRESH_STAMP, String(Date.now())); } catch (e) {}
+    const badge = document.getElementById('bgLoadingBadge');
+    const text = document.getElementById('bgLoadingText');
+    if (badge && text) {
+      badge.style.display = 'inline-flex';
+      text.textContent = `กำลังตรวจอัปเดตเรื่องใหม่จาก ${CONFIG.SOURCES.length} เว็บ...`;
+    }
+    try {
+      const latest = await fetchMangaBatch(1);
+      if (latest.length) {
+        allMangaList = interleaveSources([mergeAndDeduplicate([...latest, ...allMangaList])]);
+        try { sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList)); } catch (e) {}
+        updateSourceCounts();
+        if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery) applyFilters();
+        pushSyncData();
+      }
+      if (badge && text) text.textContent = `✓ ตรวจอัปเดตล่าสุดแล้ว (${latest.length} รายการ)`;
+    } catch (error) {
+      console.warn('Automatic manga feed refresh failed:', error);
+      if (badge && text) text.textContent = 'ตรวจอัปเดตไม่สำเร็จ จะลองใหม่รอบถัดไป';
+    } finally {
+      window.setTimeout(() => { if (badge) badge.style.display = 'none'; }, 2500);
+      refreshing = false;
+    }
+  };
+
+  document.addEventListener('visibilitychange', refreshIfDue);
+  window.setInterval(refreshIfDue, 60 * 1000);
 }
 
 // ==========================================================
@@ -3254,6 +3525,7 @@ function applyFilters() {
 // ฟังก์ชันจัดการปุ่มย่อ/ขยายรายการเว็บต้นทาง (Collapsible Source Bar)
 function initSourceBarToggle() {
   const toggleBtn = document.getElementById('btnToggleSources');
+  const unavailableBtn = document.getElementById('btnToggleUnavailableSources');
   const sourceTabs = document.getElementById('sourceTabs');
   const toggleIcon = document.getElementById('toggleSourcesIcon');
   const toggleText = document.getElementById('toggleSourcesText');
@@ -3283,45 +3555,81 @@ function initSourceBarToggle() {
     isCollapsed = !isCollapsed;
     updateUi();
   };
+
+  if (unavailableBtn) {
+    unavailableBtn.onclick = (e) => {
+      e.preventDefault();
+      showUnavailableSources = !showUnavailableSources;
+      updateUnavailableSourcesUi();
+    };
+  }
 }
 
-// อัปเดตป้ายสถานะบนเว็บต้นทางเมื่อมีเว็บขัดข้อง
+function isSourceUnavailable(source) {
+  const status = sourceHealthStatus[source.id];
+  return !!status && status.ok === false && ['error', 'blocked', 'parse-miss'].includes(status.state);
+}
+
+function sourceHealthLabel(status) {
+  if (!status) return '';
+  if (status.state === 'blocked') return '🛡️ Proxy ติดบล็อก';
+  if (status.state === 'parse-miss') return '⚠️ อ่านข้อมูลไม่พบ';
+  if (status.state === 'error') return '⚠️ ดึงข้อมูลไม่ได้';
+  if (status.state === 'partial') return '⚠️ บางหน้าดึงไม่ได้';
+  return '';
+}
+
+function updateUnavailableSourcesUi() {
+  const button = document.getElementById('btnToggleUnavailableSources');
+  const countEl = document.getElementById('unavailableSourcesCount');
+  const unavailable = CONFIG.SOURCES.filter(isSourceUnavailable);
+  const count = unavailable.length;
+
+  if (button) {
+    button.style.display = count ? 'inline-flex' : 'none';
+    button.setAttribute('aria-pressed', String(showUnavailableSources));
+    button.setAttribute('aria-label', `${showUnavailableSources ? 'ซ่อน' : 'แสดง'}เว็บที่อุปกรณ์นี้ดึงข้อมูลไม่สำเร็จ ${count} เว็บ`);
+    button.title = `${showUnavailableSources ? 'ซ่อน' : 'แสดง'}เว็บที่อุปกรณ์นี้ดึงข้อมูลไม่สำเร็จ ${count} เว็บ; ไม่ได้ยืนยันว่าเว็บต้นทางล่ม`;
+  }
+  if (countEl) countEl.textContent = String(count);
+
+  document.querySelectorAll('.source-tag[data-source]').forEach(btn => {
+    const source = CONFIG.SOURCES.find(item => item.id === btn.dataset.source);
+    if (!source) return;
+    const hiddenByDefault = isSourceUnavailable(source) && !showUnavailableSources && currentSourceFilter !== source.id;
+    btn.classList.toggle('status-unavailable', isSourceUnavailable(source));
+    btn.classList.toggle('source-unavailable-hidden', hiddenByDefault);
+    btn.hidden = hiddenByDefault;
+  });
+}
+
+// ป้ายนี้รายงานผลการดึงจากอุปกรณ์/Proxy รอบนี้ ไม่ใช้สรุปว่าเว็บต้นทางล่ม
 function updateSourceHealthUi() {
-  // อัปเดตสถานะสีแดงบนปุ่มแท็บ
   CONFIG.SOURCES.forEach(source => {
     const btn = document.querySelector(`.source-tag[data-source="${source.id}"]`);
     if (btn) {
       const status = sourceHealthStatus[source.id];
-      const isOffline = !source.isCoin && status && status.ok === false;
-      const isPartial = status && status.state === 'partial';
       let existingBadge = btn.querySelector('.source-status-badge');
       btn.title = status && (status.message || status.error)
-        ? `${status.message || status.error}${status.count ? ` — พบ ${status.count} เรื่อง` : ''}`
+        ? `ผลดึงจากอุปกรณ์นี้: ${status.message || status.error}${status.count ? ` — พบ ${status.count} เรื่อง` : ''}; ไม่ได้ยืนยันว่าเว็บต้นทางล่ม`
         : source.url;
-      if (isOffline) {
-        btn.classList.add('offline');
+      const label = sourceHealthLabel(status);
+      if (label) {
         if (!existingBadge) {
           const badge = document.createElement('span');
-          badge.className = 'source-status-badge error';
-          badge.textContent = status.state === 'parse-miss' ? '⚠️ อ่านไม่พบ' : (status.state === 'blocked' ? '🛡️ ถูกกัน' : '🔴 ขัดข้อง');
+          badge.className = 'source-status-badge warning';
+          badge.textContent = label;
           btn.appendChild(badge);
-          existingBadge = badge;
         } else {
-          existingBadge.textContent = status.state === 'parse-miss' ? '⚠️ อ่านไม่พบ' : (status.state === 'blocked' ? '🛡️ ถูกกัน' : '🔴 ขัดข้อง');
+          existingBadge.className = 'source-status-badge warning';
+          existingBadge.textContent = label;
         }
       } else {
-        btn.classList.remove('offline');
-        if (isPartial) {
-          if (!existingBadge) {
-            existingBadge = document.createElement('span');
-            existingBadge.className = 'source-status-badge warning';
-            btn.appendChild(existingBadge);
-          }
-          existingBadge.textContent = '⚠️ บางหน้า';
-        } else if (existingBadge) existingBadge.remove();
+        if (existingBadge) existingBadge.remove();
       }
     }
   });
+  updateUnavailableSourcesUi();
 }
 
 // สร้างปุ่มแยกเว็บต้นทาง (Source Tabs)
@@ -3343,20 +3651,21 @@ function renderSourceTabs() {
   }
 
   allAvailableSources.forEach(source => {
-    const isOffline = !source.isCoin && sourceHealthStatus[source.id] && sourceHealthStatus[source.id].ok === false;
     const btn = document.createElement('button');
-    btn.className = `source-tag ${currentSourceFilter === source.id ? 'active' : ''} ${isOffline ? 'offline' : ''}`;
+    btn.className = `source-tag ${currentSourceFilter === source.id ? 'active' : ''}`;
     btn.setAttribute('data-source', source.id);
+    const initialHealthLabel = sourceHealthLabel(sourceHealthStatus[source.id]);
     btn.innerHTML = `
       <span class="source-icon">${source.icon || '🌐'}</span>
       <span class="source-name">${source.name}</span>
       <span class="source-count" id="count-${source.id}">0</span>
-      ${isOffline ? '<span class="source-status-badge error">🔴 ขัดข้อง</span>' : ''}
+      ${initialHealthLabel ? `<span class="source-status-badge warning">${initialHealthLabel}</span>` : ''}
     `;
     btn.addEventListener('click', async () => {
       document.querySelectorAll('.source-tag').forEach(t => t.classList.remove('active'));
       btn.classList.add('active');
       currentSourceFilter = source.id;
+      updateUnavailableSourcesUi();
 
       if (source.id === 'mangadex' || source.lang === 'en') {
         selectedLanguages.add(source.lang || 'en');
@@ -3385,6 +3694,7 @@ function renderSourceTabs() {
       document.querySelectorAll('.source-tag').forEach(t => t.classList.remove('active'));
       allBtn.classList.add('active');
       currentSourceFilter = 'all';
+      updateUnavailableSourcesUi();
       applyFilters();
     });
   }
@@ -3573,34 +3883,65 @@ function initChatComponent(currentMangaContext = null) {
 
   // ฟังก์ชันให้บอทสุ่มแนะนำการ์ตูน
   const triggerBotRandom = async () => {
-    let pool = (typeof allMangaList !== 'undefined' && Array.isArray(allMangaList) && allMangaList.length > 0)
-      ? allMangaList
-      : [];
+    const getStoryPool = candidates => {
+      const pool = [];
+      const seenTitles = new Set();
+      (Array.isArray(candidates) ? candidates : []).forEach(item => {
+        const title = String(item?.title || '').replace(/\s+/g, ' ').trim();
+        const mangaUrl = String(item?.mangaUrl || '').trim();
+        if (title.length < 2 || !mangaUrl || /^(?:chapter|ch\.?|episode|ep\.?|ตอนที่)\s*\d/i.test(title)) return;
+        try {
+          const url = new URL(mangaUrl, window.location.href);
+          if (!/^https?:$/.test(url.protocol) || /[?&](?:chapter|ch|episode|ep)=/i.test(url.search)) return;
+          if (/\/manga\/\d+\/\d+(?:\.\d+)?\/?$/i.test(url.pathname)) return;
+          if (/\/(?:chapter|chapters|episode|episodes)[-_\/]?\d+(?:\.\d+)?(?:\/|$)/i.test(url.pathname)) return;
+          if (/(?:-|_)(?:ch|chapter|ep|episode)[-_]?\d+(?:\.\d+)?(?:\/|$)/i.test(url.pathname)) return;
+          const cleanTitle = title.replace(/\s+(?:ch\.?|chapter|ep\.?|episode|ตอนที่)\s*#?\d+(?:\.\d+)?[\s\S]*$/i, '').trim();
+          const key = cleanTitle.toLocaleLowerCase();
+          if (cleanTitle.length < 2 || seenTitles.has(key)) return;
+          seenTitles.add(key);
+          pool.push({ ...item, title: cleanTitle, mangaUrl: url.href });
+        } catch (e) {}
+      });
+      return pool;
+    };
 
+    let pool = getStoryPool(allMangaList);
     if (pool.length === 0) {
       try {
         const cached = sessionStorage.getItem('cached_all_manga');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) pool = parsed;
-        }
+        if (cached) pool = getStoryPool(JSON.parse(cached));
       } catch (e) {}
     }
+    if (pool.length === 0 && window.__mangaFeedReady) {
+      await Promise.race([
+        window.__mangaFeedReady,
+        new Promise(resolve => setTimeout(resolve, 15000))
+      ]);
+      pool = getStoryPool(allMangaList);
+    }
 
-    const fallbackList = [
-      { title: "Solo Leveling", mangaUrl: "" },
-      { title: "Omniscient Reader's Viewpoint", mangaUrl: "" },
-      { title: "The Beginning After the End", mangaUrl: "" },
-      { title: "Cosmic Heavenly Demon 3077", mangaUrl: "" },
-      { title: "Magic Emperor", mangaUrl: "" },
-      { title: "Nano Machine", mangaUrl: "" },
-      { title: "Return of the Mount Hua Sect", mangaUrl: "" },
-      { title: "Pick Me Up, Infinite Gacha", mangaUrl: "" },
-      { title: "Reincarnation of the Suicidal Battle God", mangaUrl: "" },
-      { title: "Damn Reincarnation", mangaUrl: "" }
-    ];
+    if (pool.length === 0) {
+      try {
+        const apiUrl = CONFIG.CHAT_API_URL || '/api/chat';
+        await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nickname: 'CleanManga Bot ⚡',
+            text: '🤖 รอบนี้ยังไม่มีรายการเรื่องที่ดึงได้ให้สุ่ม ลองใหม่หลังหน้าแรกโหลดข้อมูลเสร็จนะครับ',
+            mangaTitle: '',
+            mangaUrl: ''
+          })
+        });
+        await fetchChatMessages();
+      } catch (err) {
+        console.warn('Bot random post error:', err);
+      }
+      return;
+    }
 
-    const targetList = pool.length > 0 ? pool : fallbackList;
+    const targetList = pool;
     const picked = targetList[Math.floor(Math.random() * targetList.length)];
 
     const botPhrases = [
@@ -4564,6 +4905,7 @@ async function initAggregatorPage() {
       return [];
     }
   });
+  window.__mangaFeedReady = fetchPromises;
 
   // รอสูงสุด 1 วินาที หรือจนกว่าเว็บแรกจะตอบกลับ เพื่อปลด Spinner และเปิดหน้าแรกให้เร็วที่สุด
   await Promise.race([
@@ -4648,6 +4990,7 @@ async function initAggregatorPage() {
     console.error('Initial source pagination failed:', error);
   }).finally(() => {
     isInitialSourceLoadBusy = false;
+    initAutomaticFeedRefresh();
     if (loadMoreBtn) {
       loadMoreBtn.disabled = false;
       loadMoreBtn.querySelector('span').textContent = 'โหลดเรื่องเพิ่มเติม';
@@ -5015,13 +5358,43 @@ function sortChaptersDescending(chapters) {
 }
 
 // 12. แกะรายชื่อตอน (รองรับครบทุกระบบ พร้อมตรวจจับตอนฟรี / ติดเหรียญ)
-function parseChaptersFromHtml(html, baseUrl, sourceType) {
+function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const chapters = [];
   const seenUrls = new Set();
 
-  if (sourceType === 'readtoon') {
+  if (sourceType === 'nekopost') {
+    let mangaId = '';
+    try { mangaId = new URL(mangaUrl || baseUrl).pathname.match(/^\/(?:manga|project)\/(\d+)/)?.[1] || ''; } catch (e) {}
+    if (mangaId) {
+      const expectedPath = new RegExp(`^/manga/${mangaId}/(\\d+(?:\\.\\d+)?)/?$`);
+      const chapterEntries = [];
+      doc.querySelectorAll('a[href], select option[value]').forEach(node => {
+        let rawUrl = (node.getAttribute('href') || node.value || '').trim();
+        if (!rawUrl) return;
+        if (/^\d+(?:\.\d+)?$/.test(rawUrl)) rawUrl = `/manga/${mangaId}/${rawUrl}`;
+        let target;
+        try { target = new URL(rawUrl, baseUrl); } catch (e) { return; }
+        const pathMatch = target.pathname.match(expectedPath);
+        if (!pathMatch) return;
+        const number = pathMatch[1];
+        const text = (node.textContent || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+        const url = cleanChapterNavUrl(target.href, baseUrl);
+        if (!url || seenUrls.has(url)) return;
+        seenUrls.add(url);
+        chapterEntries.push({
+          title: text || `ตอนที่ ${number}`,
+          url,
+          num: parseFloat(number),
+          isLocked: false,
+          badge: '✨ ฟรี',
+          sourceType: 'nekopost'
+        });
+      });
+      chapters.push(...chapterEntries);
+    }
+  } else if (sourceType === 'readtoon') {
     const links = doc.querySelectorAll('a[href*="/content/"]');
     links.forEach(a => {
       const href = (a.getAttribute('href') || '').trim();
@@ -5412,6 +5785,7 @@ async function openChapterModal(manga, activeSource = null) {
           manga.altSources.push({
             title: other.title,
             mangaUrl: other.mangaUrl,
+            chapterIndexUrl: other.chapterIndexUrl || '',
             sourceId: other.sourceId,
             sourceName: other.sourceName,
             sourceUrl: other.sourceUrl,
@@ -5760,8 +6134,17 @@ async function openChapterModal(manga, activeSource = null) {
       const targetLang = currentSource.lang || (selectedLanguages.has('en') ? 'en' : (selectedLanguages.has('ja') ? 'ja' : 'en'));
       chapters = await fetchMangaDexChapters(mangaId, targetLang);
     } else {
-      let html = await fetchViaProxy(currentSource.mangaUrl);
-      chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType);
+      const chapterListingUrl = currentSource.sourceType === 'nekopost'
+        ? (currentSource.chapterIndexUrl || (() => {
+          const mangaId = String(currentSource.mangaUrl || '').match(/\/(?:project|manga)\/(\d+)/)?.[1];
+          const chapterNo = String(currentSource.latestEp || '').match(/\d+(?:\.\d+)?/)?.[0];
+          return mangaId && chapterNo
+            ? `${currentSource.sourceUrl.replace(/\/$/, '')}/manga/${mangaId}/${encodeURIComponent(chapterNo)}`
+            : currentSource.mangaUrl;
+        })())
+        : currentSource.mangaUrl;
+      let html = await fetchViaProxy(chapterListingUrl);
+      chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
 
       // สำหรับ MangaBlackCat: ตรวจสอบการแบ่งหน้าตอน (Pagination) เช่น หน้า 1 - 6
       if (currentSource.sourceType === 'mangablackcat') {
@@ -5800,7 +6183,7 @@ async function openChapterModal(manga, activeSource = null) {
               : `${currentSource.mangaUrl}?page=${p}`;
             pagePromises.push(
               fetchViaProxy(pageUrl, {}, 10000)
-                .then(pHtml => parseChaptersFromHtml(pHtml, currentSource.sourceUrl, currentSource.sourceType))
+                .then(pHtml => parseChaptersFromHtml(pHtml, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl))
                 .catch(err => {
                   console.warn(`Fetch error for blackcat chapters page ${p}:`, err);
                   return [];
@@ -5833,7 +6216,7 @@ async function openChapterModal(manga, activeSource = null) {
             body: 'action=manga_get_chapters'
           });
           if (ajaxHtml) {
-            const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, currentSource.sourceType);
+            const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
             if (ajaxChapters.length > 0) {
               chapters = ajaxChapters;
             }
@@ -5847,17 +6230,17 @@ async function openChapterModal(manga, activeSource = null) {
     if (!chapterList) return;
 
     if (chapters.length === 0) {
-      if (!currentSource.isCoin && sourceHealthStatus[currentSource.sourceId]) {
-        sourceHealthStatus[currentSource.sourceId] = { ok: false, error: 'ไม่พบรายการตอน' };
+      if (!currentSource.isCoin && currentSource.sourceId) {
+        recordSourceResult({ id: currentSource.sourceId }, 'chapters', 'parse-miss', 0, 'อุปกรณ์นี้ยังอ่านรายการตอนไม่พบ');
         updateSourceHealthUi();
       }
 
       chapterList.innerHTML = `
-        <div style="text-align: center; padding: 24px 16px; background: rgba(255,68,68,0.06); border-radius: 12px; border: 1px solid rgba(255,68,68,0.3); margin: 10px 0;">
-          <div style="font-size: 2rem; margin-bottom: 8px;">🔴</div>
-          <h4 style="color: #ff7777; margin-bottom: 6px; font-size: 1rem;">เว็บ ${currentSource.sourceName} ขัดข้องหรือใช้งานไม่ได้ชั่วคราว</h4>
+        <div style="text-align: center; padding: 24px 16px; background: rgba(255,211,106,0.06); border-radius: 12px; border: 1px solid rgba(255,211,106,0.24); margin: 10px 0;">
+          <div style="font-size: 2rem; margin-bottom: 8px;">🔎</div>
+          <h4 style="color: #ffd36a; margin-bottom: 6px; font-size: 1rem;">อุปกรณ์นี้ยังอ่านรายการตอนของ ${currentSource.sourceName} ไม่ได้</h4>
           <p style="color:#aaa; margin-bottom:14px; font-size: 0.88rem;">
-            ${isCurrentFree ? 'ต้นทางอาจปิดปรับปรุง หรือไม่สามารถดึงรายการตอนได้ คุณสามารถเปิดดูผ่านเว็บต้นทางโดยตรงได้' : `เว็บ ${currentSource.sourceName} ใช้ระบบเหรียญหรือระบบรักษาความปลอดภัย`}
+            ${isCurrentFree ? 'อาจเป็นรูปแบบหน้าเว็บหรือ Proxy ที่ใช้อยู่ ข้อความนี้ไม่ได้ยืนยันว่าเว็บต้นทางล่ม คุณสามารถเปิดดูผ่านเว็บต้นทางได้' : `การดึงข้อมูลจาก ${currentSource.sourceName} รอบนี้ไม่สำเร็จ คุณสามารถเปิดเว็บต้นทางได้`}
           </p>
           <a href="${currentSource.mangaUrl}" target="_blank" class="btn-primary" style="padding: 10px 20px; display: inline-flex; align-items: center; gap: 8px;">
             🌐 เปิดอ่านที่ ${currentSource.sourceName} ↗
@@ -6101,6 +6484,68 @@ function parseReaderData(html, currentUrl = '') {
   const jqPrev = html.match(/(?:jQuery|\$)\(["']a\.ch-prev-btn["']\)[^;]*?attr\(["']href["'],\s*["']([^"']+)["']\)/i);
   if (jqPrev && jqPrev[1]) {
     scriptPrevUrl = cleanChapterNavUrl(jqPrev[1], currentUrl);
+  }
+
+  if (/nekopost\.net/i.test(currentUrl)) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const images = [];
+    const seenImageUrls = new Set();
+
+    doc.querySelectorAll('img[alt], img[data-page], img[data-page-number]').forEach(img => {
+      const alt = (img.getAttribute('alt') || '').trim();
+      const pageAttr = img.getAttribute('data-page') || img.getAttribute('data-page-number') || '';
+      if (!/^page\s+\d+/i.test(alt) && !/^\d+$/.test(pageAttr)) return;
+      let raw = img.getAttribute('data-original') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('src') || '';
+      if (!raw) {
+        const srcset = img.getAttribute('data-srcset') || img.getAttribute('srcset') || '';
+        raw = srcset.split(',').map(part => part.trim().split(/\s+/)[0]).find(Boolean) || '';
+      }
+      raw = raw.replace(/&amp;/g, '&').trim();
+      if (!raw || /^data:image/i.test(raw)) return;
+      try {
+        const imageUrl = new URL(raw, currentUrl);
+        if (!['http:', 'https:'].includes(imageUrl.protocol) || seenImageUrls.has(imageUrl.href)) return;
+        seenImageUrls.add(imageUrl.href);
+        images.push(getProxyUrl(imageUrl.href, 'https://www.nekopost.net/'));
+      } catch (e) {}
+    });
+
+    const route = (() => {
+      try { return new URL(currentUrl).pathname.match(/^\/manga\/(\d+)\/(\d+(?:\.\d+)?)/); } catch (e) { return null; }
+    })();
+    let prevUrl = '';
+    let nextUrl = '';
+    if (route) {
+      const chapterPath = new RegExp(`^/manga/${route[1]}/\\d+(?:\\.\\d+)?/?$`);
+      const chapterOptions = [];
+      const seenChapterUrls = new Set();
+      doc.querySelectorAll('select option[value]').forEach(option => {
+        let rawUrl = (option.value || '').trim();
+        if (/^\d+(?:\.\d+)?$/.test(rawUrl)) rawUrl = `/manga/${route[1]}/${rawUrl}`;
+        let target;
+        try { target = new URL(rawUrl, currentUrl); } catch (e) { return; }
+        if (!chapterPath.test(target.pathname) || seenChapterUrls.has(target.href)) return;
+        seenChapterUrls.add(target.href);
+        chapterOptions.push({ url: target.href, selected: option.selected || target.pathname === new URL(currentUrl).pathname });
+      });
+      const currentIndex = chapterOptions.findIndex(option => option.selected);
+      if (currentIndex >= 0) {
+        // Nekopost แสดงตอนใหม่ก่อน: รายการถัดไปคือบทก่อนหน้าในลำดับการอ่าน
+        prevUrl = chapterOptions[currentIndex + 1]?.url || '';
+        nextUrl = chapterOptions[currentIndex - 1]?.url || '';
+      }
+    }
+
+    const prevAnchor = doc.querySelector('a[rel="prev"], a[aria-label*="Previous chapter"], a[title*="Previous chapter"]');
+    const nextAnchor = doc.querySelector('a[rel="next"], a[aria-label*="Next chapter"], a[title*="Next chapter"]');
+    if (images.length) {
+      return {
+        prevUrl: prevUrl || (prevAnchor ? cleanChapterNavUrl(prevAnchor.getAttribute('href'), currentUrl) : '') || scriptPrevUrl,
+        nextUrl: nextUrl || (nextAnchor ? cleanChapterNavUrl(nextAnchor.getAttribute('href'), currentUrl) : '') || scriptNextUrl,
+        images
+      };
+    }
   }
 
   if (/dongmanga\.com/i.test(currentUrl)) {
@@ -6737,6 +7182,8 @@ async function initReaderPage() {
     if (cleanCurrentChapterUrl.startsWith('mangadex://') || mangaObj.sourceType === 'mangadex') {
       const chId = cleanCurrentChapterUrl.replace('mangadex://', '').split('?')[0];
       readerData = await fetchMangaDexReaderImages(chId);
+    } else if (mangaObj.sourceType === 'nekopost' || /nekopost\.net\/manga\/\d+\/\d/i.test(cleanCurrentChapterUrl)) {
+      readerData = await fetchNekopostReaderData(cleanCurrentChapterUrl);
     } else {
       const html = await fetchViaProxy(cleanCurrentChapterUrl);
       readerData = parseReaderData(html, cleanCurrentChapterUrl);
@@ -6785,10 +7232,10 @@ async function initReaderPage() {
       statusEl.style.display = 'block';
       statusEl.innerHTML = `
         <div style="max-width:520px; margin: 40px auto; padding: 32px 24px; background: rgba(255,255,255,0.04); border-radius: 18px; border: 1px solid var(--border); text-align: center; backdrop-filter: blur(10px);">
-          <div style="font-size: 2.5rem; margin-bottom: 12px;">🔒</div>
-          <h3 style="font-size: 1.2rem; margin-bottom: 8px; color:#fff;">ตอนนี้อาจมีการเข้ารหัสหรือติดระบบเหรียญของต้นทาง</h3>
+          <div style="font-size: 2.5rem; margin-bottom: 12px;">🔎</div>
+          <h3 style="font-size: 1.2rem; margin-bottom: 8px; color:#fff;">อุปกรณ์นี้ยังดึงภาพของตอนนี้ไม่ได้</h3>
           <p style="color: var(--text-sub); font-size: 0.9rem; line-height: 1.6; margin-bottom: 22px;">
-            เนื่องจากตอนนี้ในเว็บต้นทาง (${mangaObj.sourceName}) มีการใช้ระบบป้องกันเหรียญหรือบอท คุณสามารถกดเปิดอ่านได้โดยตรงที่เว็บต้นทาง
+            อาจเกิดจากรูปแบบหน้าตอน, Proxy หรือข้อจำกัดของอุปกรณ์ ข้อความนี้ไม่ได้ยืนยันว่าเว็บต้นทางล่มหรือใช้ระบบเหรียญ คุณสามารถเปิดอ่านที่เว็บต้นทางได้
           </p>
           <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
             <a href="${directUrl}" target="_blank" class="btn-primary" style="padding: 11px 22px; font-size: 0.9rem;">
@@ -6989,7 +7436,6 @@ async function initReaderPage() {
         img.src = item;
         img.alt = `Page ${curPageIndex + 1} / ${totalPagesCount}`;
         img.referrerPolicy = 'no-referrer';
-        img.onclick = () => renderSinglePage(curPageIndex + 1);
         wrapper.appendChild(img);
         container.appendChild(wrapper);
 
@@ -7000,11 +7446,8 @@ async function initReaderPage() {
         const canvas = document.createElement('canvas');
         canvas.width = item.width || 1000;
         canvas.height = item.height || 2750;
-        canvas.style.maxHeight = 'calc(100vh - 130px)';
         canvas.style.width = 'auto';
         canvas.style.maxWidth = '100%';
-        canvas.style.cursor = 'pointer';
-        canvas.onclick = () => renderSinglePage(curPageIndex + 1);
         wrapper.appendChild(canvas);
         container.appendChild(wrapper);
 
@@ -7035,7 +7478,6 @@ async function initReaderPage() {
             img.src = fetchedSrc;
             img.alt = `Page ${curPageIndex + 1} / ${totalPagesCount}`;
             img.referrerPolicy = 'no-referrer';
-            img.onclick = () => renderSinglePage(curPageIndex + 1);
             wrapper.appendChild(img);
             preloadMangaTownNextPage(curPageIndex + 1);
           } else {

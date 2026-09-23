@@ -473,20 +473,38 @@ body {
 }
 
 .btn-add-source {
-  background: rgba(0, 230, 118, 0.13);
-  border: 1px solid rgba(0, 230, 118, 0.42);
-  color: var(--primary);
-  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--border);
+  color: var(--text-sub);
+  padding: 5px 10px;
   border-radius: 20px;
-  font-size: 0.8rem;
-  font-weight: 700;
+  font-size: 0.76rem;
+  font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
   font-family: inherit;
 }
 
-.btn-add-source:hover { background: rgba(0, 230, 118, 0.22); }
+.btn-add-source:hover { background: rgba(255, 255, 255, 0.1); color: var(--text-main); border-color: var(--border-light); }
 .btn-add-source:disabled { opacity: 0.55; cursor: wait; }
+
+.btn-toggle-unavailable {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 34px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 211, 106, 0.28);
+  border-radius: 20px;
+  color: #ffd36a;
+  background: rgba(255, 211, 106, 0.08);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-toggle-unavailable:hover { background: rgba(255, 211, 106, 0.16); }
 
 .toggle-icon {
   font-size: 0.72rem;
@@ -1543,21 +1561,27 @@ body {
 }
 
 .single-page-wrapper img {
-  max-height: calc(100vh - 130px);
+  max-height: calc(100dvh - 150px);
   width: auto;
   max-width: 100%;
   object-fit: contain;
   border-radius: 6px;
   box-shadow: 0 4px 28px rgba(0, 0, 0, 0.85);
-  cursor: pointer;
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  touch-action: pan-y;
+  transition: opacity 0.2s ease;
+}
+
+.single-page-wrapper canvas {
+  max-height: calc(100dvh - 150px);
+  object-fit: contain;
+  touch-action: pan-y;
 }
 
 .single-page-wrapper .tap-zone {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 35%;
+  width: clamp(28px, 8vw, 64px);
   z-index: 10;
   cursor: pointer;
 }
@@ -1588,6 +1612,9 @@ body {
   gap: 16px;
   z-index: 120;
 }
+
+.source-tag[hidden],
+.source-unavailable-hidden { display: none !important; }
 
 .single-page-bar .btn-page-nav {
   background: rgba(255, 255, 255, 0.08);
@@ -2339,19 +2366,8 @@ body {
 /* ==========================================================
    Source Health & Offline Status Indicators (สถานะเว็บขัดข้อง)
    ========================================================== */
-.source-tag.offline {
-  border-color: rgba(255, 85, 85, 0.5) !important;
-  background: rgba(255, 68, 68, 0.08) !important;
-  color: #ff9999 !important;
-}
-
-.source-tag.offline:hover {
-  background: rgba(255, 68, 68, 0.16) !important;
-  border-color: #ff4444 !important;
-}
-
-.source-tag.offline .source-name {
-  color: #ffaaaa !important;
+.source-tag.status-unavailable {
+  border-color: rgba(255, 211, 106, 0.28) !important;
 }
 
 .source-status-badge {
@@ -2364,13 +2380,6 @@ body {
   align-items: center;
   gap: 3px;
   line-height: 1;
-}
-
-.source-status-badge.error {
-  background: rgba(255, 68, 68, 0.25);
-  color: #ff6666;
-  border: 1px solid rgba(255, 68, 68, 0.45);
-  box-shadow: 0 0 8px rgba(255, 68, 68, 0.2);
 }
 
 .modal-source-pill.offline {
@@ -2989,10 +2998,26 @@ body {
 .source-manager-action { padding: 6px 9px; color: var(--primary); background: transparent; border: 1px solid rgba(0, 230, 118, 0.35); border-radius: 8px; font: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
 .source-manager-action.remove { color: #ff8b8b; border-color: rgba(255, 100, 100, 0.3); }
 .source-manager-empty { padding: 10px; color: var(--text-sub); font-size: 0.78rem; text-align: center; }
-.source-status-badge.warning { color: #ffd36a; background: rgba(255, 211, 106, 0.13); border-color: rgba(255, 211, 106, 0.28); }
+.source-status-badge.warning { color: #ffd36a; background: rgba(255, 211, 106, 0.1); border: 1px solid rgba(255, 211, 106, 0.24); box-shadow: none; }
 
 @media (max-width: 640px) {
-  .source-bar-controls { flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+  .source-bar-controls { flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .source-bar-controls .stats-counter { font-size: 0.7rem; }
+  .btn-add-source { padding: 5px 8px; font-size: 0.72rem; }
+  .btn-toggle-unavailable { min-width: 32px; padding: 5px 7px; }
+  .single-page-wrapper img,
+  .single-page-wrapper canvas { max-height: calc(100dvh - 172px); border-radius: 2px; }
+  .single-page-wrapper { min-height: calc(100dvh - 154px); }
+  .single-page-wrapper .tap-zone { width: clamp(28px, 8vw, 42px); }
+  .single-page-bar {
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 20px);
+    gap: 6px;
+    padding: 5px 8px;
+    box-shadow: 0 5px 18px rgba(0, 0, 0, 0.64);
+  }
+  .single-page-bar .btn-page-nav { padding: 7px 10px; font-size: 0.76rem; }
+  .single-page-bar .page-indicator { font-size: 0.78rem; }
   .source-manager-dialog { width: calc(100vw - 18px); max-height: 90dvh; border-radius: 15px; }
   .source-manager-header, .source-manager-form, .source-manager-section { padding-left: 15px; padding-right: 15px; }
   .source-manager-input-row { flex-direction: column; }
@@ -3000,4 +3025,3 @@ body {
   .source-manager-item { align-items: flex-start; flex-direction: column; }
   .source-manager-item-actions { width: 100%; }
 }
-
