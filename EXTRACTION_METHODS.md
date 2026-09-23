@@ -1,0 +1,57 @@
+# Clean Manga Reader — วิธีดึงข้อมูลรายเว็บไซต์
+
+อัปเดต 23 กันยายน 2026
+
+เอกสารนี้บันทึกวิธีที่ตัวอ่านใช้รวบรวมหน้าเรื่อง รายชื่อตอน และภาพอ่าน รวมถึงสถานะที่ควรตรวจซ้ำหลังเผยแพร่ การเพิ่มเว็บไซต์ด้วยปุ่ม **＋ เพิ่มเว็บ** จะลองอ่านหน้าเว็บและเลือก parser ที่มีให้อัตโนมัติ ถ้าตรวจเจออย่างน้อย 2 เรื่องจึงเปิดใช้ ถ้ายังอ่านไม่ได้จะเก็บในรายการ **เว็บที่รอตรวจ** ในหน้าจัดการเว็บ ไม่แสดงเป็นแท็บบนหน้าหลัก
+
+## วิธีดึงรายการเรื่อง
+
+| เว็บไซต์ | วิธีอ่านหน้าเรื่องและหน้าเพิ่มเติม | วิธีอ่านตอนและภาพ | หมายเหตุ |
+|---|---|---|---|
+| Go-Manga | MangaReader: อ่านการ์ด `.listupd`, `.uta`, `.bsx`, `.animposx` และกล่องตอนล่าสุด | `ts_reader.run(...)` พร้อมลิงก์ก่อน/ถัดไป; สำรองด้วยตัวอ่านรูปแบบ MangaReader | หน้าเพิ่มใช้ลิงก์แบ่งหน้าที่พบก่อน แล้ว fallback `/page/{n}/` |
+| Slow-Manga | MangaReader | `ts_reader.run(...)` | หน้าเพิ่มใช้ `/page/{n}/` และลิงก์แบ่งหน้าจริงถ้าพบ |
+| Ped-Manga | MangaReader | `ts_reader.run(...)`; ส่ง Referer สำหรับ CDN `webtoon168` | รูปจาก CDN ต้องอ้างเว็บต้นทาง |
+| MangaStep | MangaReader | `ts_reader.run(...)` | หน้าเพิ่มใช้ `/page/{n}/` |
+| NTR-Manga | MangaReader รวมการ์ด `.ntr-upd-card` และตอนย่อย | `ts_reader.run(...)` | หน้าเพิ่มใช้ `/page/{n}/` |
+| Dark-Manga | MangaReader | `ts_reader.run(...)` | หน้าเพิ่มใช้ `/page/{n}/` |
+| Fin-Manga | MangaReader | `ts_reader.run(...)` รวมค่าหน้าก่อนหน้า/ถัดไปจากข้อมูล reader | เริ่มดึงหน้า 1 และหน้า 2 อัตโนมัติ; ใช้ลิงก์แบ่งหน้าที่หน้าเว็บส่งมาเป็นหลัก |
+| Up-Manga | MangaReader | `ts_reader.run(...)` | หน้าเพิ่มใช้ `/page/{n}/` |
+| Speed-Manga | MangaReader | `ts_reader.run(...)` | หน้าเพิ่มใช้ `/page/{n}/` |
+| Sing-Manga | MangaReader | `ts_reader.run(...)` | หน้าเพิ่มใช้ `/page/{n}/` |
+| Flash-Manga | MangaReader | `ts_reader.run(...)` | หน้าเพิ่มใช้ `/page/{n}/` |
+| Chibi-Manga | MangaReader | `ts_reader.run(...)`; เพิ่ม Referer สำหรับ CDN ที่ต้องการ | หน้าเพิ่มใช้ `/page/{n}/` |
+| Ecchi-Doujin | MangaReader | `ts_reader.run(...)` | หน้าเพิ่มใช้ `/page/{n}/` |
+| Du-Manga | Madara: การ์ด `.page-item-detail`, `.c-tabs-item__content` และรูปแบบ Madara ที่รู้จัก | รายชื่อตอน `.wp-manga-chapter`; ภาพ `.reading-content` | หน้าเพิ่ม `/manga/page/{n}/?m_orderby=latest`; มีฟีดยอดนิยมแยก |
+| Manga-LC | Madara | `.wp-manga-chapter` และ `.reading-content` | หน้าเพิ่มใช้ pagination ของ Madara |
+| Nano-Manga | Madara | `.wp-manga-chapter` และ `.reading-content` | หน้าเพิ่มใช้ pagination ของ Madara |
+| SixManga | Madara | วิธีพิเศษ: แกะสคริปต์จัดเรียงภาพ `sovleImage` / `displayImage` ก่อนแสดงภาพ | หน้าเพิ่มใช้ pagination ของ Madara |
+| NTRnaja | parser เฉพาะ: `.ss-chlist`, `.ss-ch` และพารามิเตอร์ `?chapter=` | อ่าน `chapter_preloaded_images`; สถานะล็อก/ฟรีดูจาก badge และข้อความแต้ม | หน้ารายการ `/manga/page/{n}/?sort=update` |
+| Bully Manga | parser เฉพาะการ์ด `.mc-card`, `.m2-card` และลิงก์ตอน | แกะ `IMAGE_MAP`; สำรองด้วย `.manga-img`, `.entry-content` และรูป lazy-load | หน้าเพิ่ม `/page/{n}/` |
+| MangaBlackCat | parser เฉพาะข้อมูล Alpine/JSON และการ์ดเรื่อง; อ่านฟีดล่าสุดและยอดนิยม | แกะ `boot: JSON.parse(...)` และ URL ภาพ `cdn.mangablackcat.com` | หน้าเพิ่ม `/latest?page={n}`; ส่ง Referer ให้ CDN |
+| Asura Scans | parser เฉพาะการ์ดรายการ Comics | หา WebP จาก `cdn.asurascans.com/asura-images/chapters/` | หน้าเพิ่ม `/comics?page={n}`; ภาษาอังกฤษ |
+| MangaTown | parser เฉพาะรายการ `.manga_pic_list` และฟีด Popular | อ่าน `img#image` ทีละหน้า และไล่ URL จาก `.page_select`; ตอนก่อน/ถัดไปมาจาก chapter selector | หน้าเพิ่ม `/latest/{n}.htm`; ภาษาอังกฤษ |
+| MangaKimi | autodetect: ลอง parser ที่รองรับและ parser DOM ทั่วไป | ใช้ parser ที่ตรวจพบ; reader ใช้ตัวอ่าน HTML ทั่วไปของระบบ | ตั้งต้นหน้า `/` และ `/page/{n}/`; การตอบสนองต้นทางยังต้องยืนยันตอนใช้งานจริง |
+| Dongmanga | parser เฉพาะฟอรัม Discuz: หา forum/thread จาก `forum.php`, `fid`, `mod=viewthread` และ `tid`; อ่าน pagination ที่หน้าเว็บส่งมา | หาโพสต์ตอนใน thread และภาพจาก `.t_f`, `.pcb`, `.reader-area` และส่วนเนื้อหา; ส่ง Referer `dongmanga.com` | โครงสร้างหน้าฟอรัมต่างจากเว็บมังงะทั่วไป จึงมี parser แยก; ต้องตรวจภาพตอนจริงหลังเผยแพร่ |
+| WhyToon | parser Next.js เฉพาะ: ใช้หน้า `/browse` และการ์ด `/content/...` | อ่านไฟล์ WebP จาก `gd.whytoon.com` และลิงก์ตอน `/content/{slug}/{เลขตอน}` | URL `/content` ที่ผู้ใช้ให้มาเป็นหน้ารายละเอียด/ตอน ไม่ใช่หน้ารวม; ระบบใช้ `/browse` เป็นหน้ารวม |
+| Oremanga | autodetect และ parser DOM ทั่วไป; ใช้ pagination ที่หน้าเว็บระบุ | ใช้ parser ตอนที่ตรวจพบและตัวอ่าน HTML ทั่วไป | พบเส้นทาง `/page/2/`; ตรวจ parser ตอนจริงอีกครั้งหลังเผยแพร่ |
+| Manga-Neko | autodetect และ parser DOM ทั่วไป เริ่มที่ `/manga/?order=update` | ใช้ parser ตอนที่ตรวจพบและตัวอ่าน HTML ทั่วไป | กำหนด fallback `/manga/page/{n}/?order=update`; pagination จริงของหน้าเว็บจะมีลำดับความสำคัญกว่า |
+| MangaDex | ใช้ MangaDex API สำหรับรายการเรื่อง ปก และ feed ตอน ไม่ scrape หน้า HTML | ใช้ API at-home server เพื่อแกะรูปตอนจาก chapter ID | เป็นแหล่งข้อมูล API แยกจากเว็บไซต์ที่ใช้ HTML parser |
+
+## การดึงหน้าเพิ่มและการวินิจฉัย
+
+- ตอนเปิดหน้าแรก ระบบดึงหน้า 1 แล้วตามด้วยหน้า 2 ของทุกเว็บที่มีเส้นทางแบ่งหน้าหรือมี template รองรับ โดยจำกัดงานหน้า 2 พร้อมกันไม่เกิน 4 เว็บ
+- ถ้าหน้าเว็บมีลิงก์ `next`, pagination หรือเลขหน้า ระบบใช้ URL ที่อ่านพบก่อน fallback ตามรูปแบบของเว็บ เมื่อกด **โหลดเรื่องเพิ่มเติม** จะขยับไปหน้าถัดไปของแต่ละเว็บ
+- สถานะเว็บแยกเป็นพร้อมใช้งาน, มีบางหน้าที่อ่านไม่ได้, ถูกกัน/ติด CAPTCHA, อ่านโครงสร้างไม่พบ, หรือหมดรายการ เพื่อให้แยกปัญหาต้นทางออกจาก parser ได้
+- สถานะที่เห็นในหน้าเว็บเป็นผลจาก Proxy/Worker ที่อุปกรณ์นั้นใช้อยู่: localhost ใช้ local proxy ส่วนเว็บ production ใช้ Cloudflare Worker ที่เผยแพร่แล้ว ดังนั้น error หรือ badge สีแดงจาก local ใช้สรุปผล production ไม่ได้ และผลที่ต่างกันระหว่างคอมกับมือถืออาจมาจากเครือข่าย, cache, header หรือการตอบสนองของต้นทาง ณ เวลานั้น
+- หน้า HTML ผ่าน Proxy จะ cache 15 นาที ส่วนภาพ cache 1 วัน เพื่อให้รายการอัปเดตไวขึ้นโดยไม่โหลดภาพซ้ำบ่อย
+
+## การจำข้อมูลระหว่างอุปกรณ์
+
+- โปรไฟล์เว็บที่เพิ่มเอง รวมสถานะ, parser ที่ตรวจพบ, วิธีที่ลอง และ pagination ถูกเก็บในเครื่องและซิงก์กับ Private Sync Key เดิม
+- ผลรายการล่าสุดถูกแบ่งตามเว็บและซิงก์กับคีย์เดียวกัน จำกัดไม่เกิน 80 เรื่องต่อเว็บ และใช้ผลที่อัปเดตไม่เกิน 48 ชั่วโมง; เมื่ออุปกรณ์เปิดหน้าเว็บจะรวม snapshot ที่แชร์ไว้เข้ากับผลดึงสด
+- รายการที่ยังตรวจไม่ผ่านเก็บเป็น `pending` และไม่แสดงแท็บจนกว่าจะลองใหม่แล้วอ่านได้
+- ข้อมูลเว็บที่เพิ่มและรายการที่แชร์ในคลาวด์อยู่ภายใต้คีย์ซิงก์เดียวกับข้อมูลส่วนตัว ไม่มีการแสดงรหัสซิงก์ไว้ในโน้ตนี้
+
+## สิ่งที่ควรยืนยันภายหลัง
+
+parser เป็นโค้ดฝั่งเว็บที่ต้องใช้ Proxy/Worker ที่เผยแพร่จริงเพื่อยืนยันกับต้นทางอีกครั้ง รายการ MangaKimi ยังไม่ยืนยันผลดึงสด, หน้าอ่าน Dongmanga ยังต้องยืนยันรูปตอนจริง, และ parser ของ Oremanga กับ Manga-Neko ใช้ autodetect จึงอาจต้องเพิ่มกฎเฉพาะถ้าโครงสร้างที่ต้นทางตอบมาไม่ตรงกับตัวอ่านทั่วไป การอ่านไม่สำเร็จในรอบหนึ่งจะถูกบันทึกเป็นสถานะของเว็บ ไม่ได้ถือว่าเว็บมีจำนวนเรื่องเป็นศูนย์ถาวร

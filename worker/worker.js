@@ -47,6 +47,111 @@ export default {
         .slice(0, MAX_CHAT_MESSAGES);
     };
 
+    const syncSourceTypes = new Set([
+      'autodetect', 'mangareader', 'madara', 'whytoon', 'readtoon', 'ntrnaja',
+      'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'mangadex'
+    ]);
+    const safePublicUrl = (value) => {
+      try {
+        const parsed = new URL(String(value || ''));
+        const host = parsed.hostname.toLowerCase();
+        if (!['http:', 'https:'].includes(parsed.protocol) || !host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return '';
+        if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':')) return '';
+        return parsed.href;
+      } catch (e) { return ''; }
+    };
+    const cleanSyncText = (value, limit) => String(value || '').replace(/[<>]/g, '').trim().slice(0, limit);
+    const sanitizeSourceProfiles = (profiles) => (Array.isArray(profiles) ? profiles : []).map(profile => {
+      if (!profile || typeof profile !== 'object') return null;
+      const sourceUrl = safePublicUrl(profile.url);
+      if (!sourceUrl) return null;
+      const origin = new URL(sourceUrl).origin;
+      const id = cleanSyncText(profile.id, 72).toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      if (!id.startsWith('custom-')) return null;
+      const listing = safePublicUrl(profile.listingUrl || origin);
+      const listingUrl = listing && new URL(listing).origin === origin ? listing : origin;
+      const type = syncSourceTypes.has(profile.type) ? profile.type : 'autodetect';
+      const detectedParserType = syncSourceTypes.has(profile.detectedParserType) ? profile.detectedParserType : '';
+      const pageLinks = {};
+      if (profile.discoveredPageUrls && typeof profile.discoveredPageUrls === 'object') {
+        Object.entries(profile.discoveredPageUrls).slice(0, 25).forEach(([page, href]) => {
+          const number = Number(page);
+          const safeHref = safePublicUrl(href);
+          if (number > 1 && number <= 500 && safeHref && new URL(safeHref).hostname.replace(/^www\./i, '') === new URL(origin).hostname.replace(/^www\./i, '')) pageLinks[number] = safeHref;
+        });
+      }
+      return {
+        id,
+        name: cleanSyncText(profile.name || new URL(sourceUrl).hostname, 60),
+        url: origin,
+        listingUrl,
+        type,
+        detectedParserType,
+        pageUrlTemplate: /^\/(?!\/)[^\r\n<>]*$/.test(String(profile.pageUrlTemplate || '')) ? cleanSyncText(profile.pageUrlTemplate, 200) : '',
+        discoveredPageUrls: pageLinks,
+        icon: cleanSyncText(profile.icon || '🌐', 12),
+        lang: ['th', 'en', 'ja'].includes(profile.lang) ? profile.lang : 'th',
+        customSource: true,
+        status: ['active', 'pending', 'removed'].includes(profile.status) ? profile.status : 'pending',
+        triedStrategies: Array.isArray(profile.triedStrategies) ? profile.triedStrategies.slice(0, 12).map(item => cleanSyncText(item, 40)) : [],
+        lastMessage: cleanSyncText(profile.lastMessage, 220),
+        createdAt: Number(profile.createdAt) || Date.now(),
+        updatedAt: Number(profile.updatedAt) || Date.now(),
+        lastVerifiedAt: Number(profile.lastVerifiedAt) || 0
+      };
+    }).filter(Boolean).slice(-50);
+    const mergeSourceProfiles = (current, incoming) => {
+      const profiles = new Map(sanitizeSourceProfiles(current).map(profile => [profile.id, profile]));
+      sanitizeSourceProfiles(incoming).forEach(profile => {
+        const previous = profiles.get(profile.id);
+        if (!previous || profile.updatedAt > previous.updatedAt) profiles.set(profile.id, profile);
+      });
+      return Array.from(profiles.values()).sort((a, b) => a.updatedAt - b.updatedAt).slice(-50);
+    };
+    const sanitizeSourceSnapshots = (snapshots) => (Array.isArray(snapshots) ? snapshots : []).map(snapshot => {
+      if (!snapshot || typeof snapshot !== 'object') return null;
+      const sourceId = cleanSyncText(snapshot.sourceId, 72).toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      if (!sourceId || !Array.isArray(snapshot.items)) return null;
+      const seen = new Set();
+      const items = snapshot.items.slice(0, 80).map(item => {
+        if (!item || typeof item !== 'object' || cleanSyncText(item.sourceId, 72) !== sourceId) return null;
+        const mangaUrl = safePublicUrl(item.mangaUrl);
+        if (!mangaUrl || !cleanSyncText(item.title, 180) || seen.has(mangaUrl)) return null;
+        const cover = item.cover ? safePublicUrl(item.cover) : '';
+        seen.add(mangaUrl);
+        return {
+          title: cleanSyncText(item.title, 180),
+          mangaUrl,
+          cover,
+          latestEp: cleanSyncText(item.latestEp, 100),
+          type: cleanSyncText(item.type || 'Manga', 40),
+          sourceId,
+          sourceName: cleanSyncText(item.sourceName, 80),
+          sourceUrl: safePublicUrl(item.sourceUrl) || '',
+          sourceType: syncSourceTypes.has(item.sourceType) ? item.sourceType : 'mangareader',
+          readable: item.readable !== false,
+          isCoin: !!item.isCoin,
+          icon: cleanSyncText(item.icon || '🌐', 12),
+          lang: ['th', 'en', 'ja', 'ko'].includes(item.lang) ? item.lang : 'th'
+        };
+      }).filter(Boolean);
+      return { sourceId, updatedAt: Number(snapshot.updatedAt) || Date.now(), items };
+    }).filter(Boolean).slice(-60);
+    const mergeSourceSnapshots = (current, incoming) => {
+      const snapshots = new Map(sanitizeSourceSnapshots(current).map(snapshot => [snapshot.sourceId, snapshot]));
+      sanitizeSourceSnapshots(incoming).forEach(snapshot => {
+        const previous = snapshots.get(snapshot.sourceId);
+        if (!previous || snapshot.updatedAt > previous.updatedAt) {
+          snapshots.set(snapshot.sourceId, snapshot);
+        } else if (snapshot.updatedAt === previous.updatedAt) {
+          const byUrl = new Map(previous.items.map(item => [item.mangaUrl, item]));
+          snapshot.items.forEach(item => { if (!byUrl.has(item.mangaUrl)) byUrl.set(item.mangaUrl, item); });
+          snapshots.set(snapshot.sourceId, { ...previous, items: Array.from(byUrl.values()).slice(0, 80) });
+        }
+      });
+      return Array.from(snapshots.values()).sort((a, b) => a.updatedAt - b.updatedAt).slice(-60);
+    };
+
     // 1. ระบบแชทส่วนกลาง (Community Chat API รองรับ Cloudflare KV + In-Memory Fallback)
     if (url.pathname === '/api/chat') {
       if (request.method === "GET") {
@@ -330,7 +435,9 @@ export default {
           const existingData = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
           const isEmpty = !existingData || (
             (!existingData.favorites || existingData.favorites.length === 0) &&
-            (!existingData.history || existingData.history.length === 0)
+            (!existingData.history || existingData.history.length === 0) &&
+            (!existingData.sourceProfiles || existingData.sourceProfiles.length === 0) &&
+            (!existingData.sourceSnapshots || existingData.sourceSnapshots.length === 0)
           );
 
           if (isEmpty) {
@@ -371,7 +478,9 @@ export default {
         history: [],
         deletedFavorites: {},
         deletedHistory: {},
-        historyClearedAt: 0
+        historyClearedAt: 0,
+        sourceProfiles: [],
+        sourceSnapshots: []
       };
 
       if (env && env.CHAT_KV) {
@@ -388,14 +497,16 @@ export default {
               history: Array.isArray(stored.history) ? mergeHistoryList(stored.history, [], delHist, clearedAt) : [],
               deletedFavorites: delFavs,
               deletedHistory: delHist,
-              historyClearedAt: clearedAt
+              historyClearedAt: clearedAt,
+              sourceProfiles: sanitizeSourceProfiles(stored.sourceProfiles),
+              sourceSnapshots: sanitizeSourceSnapshots(stored.sourceSnapshots)
             };
           }
         } catch (e) {}
       }
 
       return new Response(JSON.stringify({ success: true, data: cloudData }), {
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
       });
     }
 
@@ -417,7 +528,9 @@ export default {
           history: [],
           deletedFavorites: {},
           deletedHistory: {},
-          historyClearedAt: 0
+          historyClearedAt: 0,
+          sourceProfiles: [],
+          sourceSnapshots: []
         };
 
         if (env && env.CHAT_KV) {
@@ -430,7 +543,9 @@ export default {
                 history: Array.isArray(stored.history) ? stored.history : [],
                 deletedFavorites: (typeof stored.deletedFavorites === 'object' && stored.deletedFavorites) ? stored.deletedFavorites : {},
                 deletedHistory: (typeof stored.deletedHistory === 'object' && stored.deletedHistory) ? stored.deletedHistory : {},
-                historyClearedAt: Number(stored.historyClearedAt || 0)
+                historyClearedAt: Number(stored.historyClearedAt || 0),
+                sourceProfiles: sanitizeSourceProfiles(stored.sourceProfiles),
+                sourceSnapshots: sanitizeSourceSnapshots(stored.sourceSnapshots)
               };
             }
           } catch (e) {}
@@ -445,6 +560,8 @@ export default {
         const nickname = (payload.nickname || existingData.nickname || '').trim().slice(0, 25);
         const mergedFavorites = mergeFavoritesList(existingData.favorites, payload.favorites, mergedDeletedFavs);
         const mergedHistory = mergeHistoryList(existingData.history, payload.history, mergedDeletedHist, mergedHistClearedAt);
+        const mergedSourceProfiles = mergeSourceProfiles(existingData.sourceProfiles, payload.sourceProfiles);
+        const mergedSourceSnapshots = mergeSourceSnapshots(existingData.sourceSnapshots, payload.sourceSnapshots);
 
         const resultData = {
           nickname,
@@ -453,6 +570,8 @@ export default {
           deletedFavorites: mergedDeletedFavs,
           deletedHistory: mergedDeletedHist,
           historyClearedAt: mergedHistClearedAt,
+          sourceProfiles: mergedSourceProfiles,
+          sourceSnapshots: mergedSourceSnapshots,
           lastSyncedAt: Date.now()
         };
 
@@ -464,7 +583,7 @@ export default {
         }
 
         return new Response(JSON.stringify({ success: true, data: resultData }), {
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
         });
       } catch (err) {
         return new Response(JSON.stringify({ success: false, error: err.message }), {
@@ -564,7 +683,9 @@ export default {
       
       // เพิ่มการแคชสำหรับ GET เพื่อความเร็ว
       if (request.method === "GET" && response.status === 200) {
-        headers.set("Cache-Control", "public, max-age=86400"); // แคชไว้ 1 วัน
+        const contentType = (headers.get("Content-Type") || "").toLowerCase();
+        const cacheSeconds = contentType.startsWith("image/") ? 86400 : 900;
+        headers.set("Cache-Control", `public, max-age=${cacheSeconds}`);
       }
 
       return new Response(response.body, {

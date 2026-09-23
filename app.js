@@ -8,6 +8,134 @@ let currentSearchQuery = '';    // ข้อความค้นหา
 let currentDisplayCount = 40;   // แสดงครั้งละ 40 เรื่อง
 let loadedPagesPerSource = 1;
 
+const USER_SOURCE_PROFILES_KEY = 'clean_manga_user_source_profiles_v1';
+const ALLOWED_SOURCE_PARSER_TYPES = new Set([
+  'autodetect', 'mangareader', 'madara', 'whytoon', 'readtoon', 'ntrnaja',
+  'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga'
+]);
+
+function isAllowedSourceUrl(value, originOnly = false) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+    if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return false;
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(':')) return false;
+    if (originOnly && parsed.origin !== value) return false;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function sanitizeUserSourceProfile(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  try {
+    const parsed = new URL(String(profile.url || ''));
+    const url = parsed.origin;
+    if (!isAllowedSourceUrl(url, true)) return null;
+    const id = String(profile.id || `custom-${parsed.hostname}`)
+      .toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 72);
+    const type = ALLOWED_SOURCE_PARSER_TYPES.has(profile.type) ? profile.type : 'autodetect';
+    const detectedParserType = ALLOWED_SOURCE_PARSER_TYPES.has(profile.detectedParserType)
+      ? profile.detectedParserType : '';
+    const listingUrl = isAllowedSourceUrl(String(profile.listingUrl || url))
+      && matchesSourceHost(String(profile.listingUrl || url), parsed.origin)
+      ? String(profile.listingUrl || url) : url;
+    const rawPageTemplate = String(profile.pageUrlTemplate || '');
+    const pageUrlTemplate = rawPageTemplate.startsWith('/') && !rawPageTemplate.startsWith('//') && !/[\r\n<>]/.test(rawPageTemplate)
+      ? rawPageTemplate.slice(0, 200) : '';
+    const status = ['active', 'pending', 'removed'].includes(profile.status) ? profile.status : 'pending';
+    return {
+      id: id.startsWith('custom-') ? id : `custom-${id}`,
+      name: String(profile.name || parsed.hostname.replace(/^www\./, '')).replace(/[<>]/g, '').trim().slice(0, 60),
+      url,
+      listingUrl,
+      type,
+      detectedParserType,
+      pageUrlTemplate,
+      icon: String(profile.icon || '🌐').replace(/[<>]/g, '').slice(0, 12),
+      readable: true,
+      isCoin: false,
+      lang: ['th', 'en', 'ja'].includes(profile.lang) ? profile.lang : 'th',
+      customSource: true,
+      status,
+      triedStrategies: Array.isArray(profile.triedStrategies)
+        ? profile.triedStrategies.map(x => String(x).slice(0, 40)).slice(0, 12) : [],
+      discoveredPageUrls: profile.discoveredPageUrls && typeof profile.discoveredPageUrls === 'object'
+        ? Object.fromEntries(Object.entries(profile.discoveredPageUrls).slice(0, 25).map(([page, href]) => {
+            let safeHref = '';
+            try {
+              const pageUrl = new URL(String(href), url);
+              if (matchesSourceHost(pageUrl.href, parsed.origin) && ['http:', 'https:'].includes(pageUrl.protocol)) safeHref = pageUrl.href;
+            } catch (e) {}
+            return [String(Number(page) || 0), safeHref];
+          }).filter(([page, href]) => Number(page) > 1 && href)) : {},
+      lastMessage: String(profile.lastMessage || '').replace(/[<>]/g, '').slice(0, 220),
+      createdAt: Number(profile.createdAt) || Date.now(),
+      updatedAt: Number(profile.updatedAt) || Date.now(),
+      lastVerifiedAt: Number(profile.lastVerifiedAt) || 0
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function loadUserSourceProfiles() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(USER_SOURCE_PROFILES_KEY) || '[]');
+    return Array.isArray(stored) ? stored.map(sanitizeUserSourceProfile).filter(Boolean) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+let userSourceProfiles = loadUserSourceProfiles();
+
+function saveUserSourceProfiles(sync = true) {
+  try {
+    localStorage.setItem(USER_SOURCE_PROFILES_KEY, JSON.stringify(userSourceProfiles));
+  } catch (e) {}
+  const added = applyUserSourceProfilesToConfig();
+  if (document.getElementById('sourceTabs')) renderSourceTabs();
+  if (typeof renderUserSourceProfileLists === 'function') renderUserSourceProfileLists();
+  if (typeof window.__loadNewCustomSources === 'function' && added.length) {
+    window.__loadNewCustomSources(added);
+  }
+  if (sync && typeof pushSyncData === 'function') pushSyncData();
+}
+
+function mergeUserSourceProfiles(incoming) {
+  if (!Array.isArray(incoming)) return false;
+  const merged = new Map(userSourceProfiles.map(p => [p.id, p]));
+  incoming.map(sanitizeUserSourceProfile).filter(Boolean).forEach(profile => {
+    const current = merged.get(profile.id);
+    if (!current || profile.updatedAt > current.updatedAt) merged.set(profile.id, profile);
+  });
+  const next = Array.from(merged.values()).slice(-50);
+  const changed = JSON.stringify(next) !== JSON.stringify(userSourceProfiles);
+  if (changed) {
+    userSourceProfiles = next;
+    saveUserSourceProfiles(false);
+  }
+  return changed;
+}
+
+function applyUserSourceProfilesToConfig() {
+  const before = new Set(CONFIG.SOURCES.filter(s => s.customSource).map(s => s.id));
+  const active = userSourceProfiles.filter(s => s.status === 'active');
+  CONFIG.SOURCES = CONFIG.SOURCES.filter(s => !s.customSource || active.some(p => p.id === s.id));
+  active.forEach(profile => {
+    const existingIndex = CONFIG.SOURCES.findIndex(s => s.id === profile.id);
+    const source = { ...profile };
+    if (existingIndex >= 0) CONFIG.SOURCES[existingIndex] = { ...CONFIG.SOURCES[existingIndex], ...source };
+    else CONFIG.SOURCES.push(source);
+  });
+  return active.filter(s => !before.has(s.id));
+}
+
+applyUserSourceProfilesToConfig();
+
 // ตัวช่วยสร้าง URL ผ่าน Proxy (รองรับการส่ง Referer ข้ามเว็บ เช่น webtoon168 ของ Ped-Manga)
 function getProxyUrl(targetUrl, referer = '') {
   if (!targetUrl) return '';
@@ -1619,7 +1747,7 @@ async function initSyncEngine() {
 
   // ดึงข้อมูลจากคลาวด์มาซิงก์กับในเครื่อง
   if (key) {
-    pullAndMergeSyncData();
+    await pullAndMergeSyncData();
   }
 }
 
@@ -1649,12 +1777,16 @@ function pushSyncData() {
           nickname,
           deletedFavorites,
           deletedHistory,
-          historyClearedAt
+          historyClearedAt,
+          sourceProfiles: userSourceProfiles,
+          sourceSnapshots: buildSyncSourceSnapshots()
         })
       });
       if (res.ok) {
         const result = await res.json();
         if (result.success && result.data) {
+          mergeUserSourceProfiles(result.data.sourceProfiles);
+          mergeSyncedSourceSnapshots(result.data.sourceSnapshots);
           const curDelFavs = getDeletedFavorites();
           const curDelHist = getDeletedHistory();
           const curClearedAt = getHistoryClearedAt();
@@ -1713,6 +1845,8 @@ async function pullAndMergeSyncData() {
     if (res.ok) {
       const result = await res.json();
       if (result.success && result.data) {
+        mergeUserSourceProfiles(result.data.sourceProfiles);
+        mergeSyncedSourceSnapshots(result.data.sourceSnapshots);
         // ผสานชื่อเล่นในห้องแชท
         if (result.data.nickname) {
           const cloudNick = result.data.nickname.trim();
@@ -2481,55 +2615,268 @@ function interleaveSources(arrays) {
 // ถ้าเว็บไหนไม่สามารถเชื่อมต่อได้ จะขึ้นสถานะสีแดงแจ้งเตือนให้ผู้ใช้ทราบ
 let sourceHealthStatus = {};
 
+function extractPageNumberFromUrl(href) {
+  try {
+    const url = new URL(href);
+    const pathMatch = url.pathname.match(/\/page\/(\d+)(?:\/|$)|\/p\/(\d+)(?:\/|$)/i);
+    if (pathMatch) return Number(pathMatch[1] || pathMatch[2]);
+    for (const key of ['page', 'paged', 'pagenum', 'pn']) {
+      const value = Number(url.searchParams.get(key));
+      if (value > 0) return value;
+    }
+    return 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function matchesSourceHost(left, right) {
+  try {
+    const normalize = value => new URL(value).hostname.toLowerCase().replace(/^www\./, '');
+    return normalize(left) === normalize(right);
+  } catch (e) {
+    return false;
+  }
+}
+
+function discoverSourcePageUrls(html, currentUrl, currentPage = 1) {
+  const found = {};
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const links = doc.querySelectorAll([
+      'a[rel~="next"]', '.pagination a', '.page-numbers', '.wp-pagenavi a',
+      '.nav-links a', '.pagination__list a', '.page-nav a', '.pages a',
+      '.pg a', '.pgbtn a', '.pgs a', '.page_select a'
+    ].join(','));
+    const baseOrigin = new URL(currentUrl).origin;
+    links.forEach(link => {
+      const href = (link.getAttribute('href') || '').trim();
+      if (!href || href === '#' || href.startsWith('javascript:')) return;
+      const target = new URL(href, currentUrl);
+      if (!matchesSourceHost(target.href, baseOrigin)) return;
+      const textValue = (link.textContent || '').trim();
+      let pageNumber = extractPageNumberFromUrl(target.href);
+      if (!pageNumber && /^\d+$/.test(textValue)) pageNumber = Number(textValue);
+      const isNext = link.rel === 'next' || /^(?:next|ถัดไป|หน้าถัดไป|»|›|→|下一页)$/i.test(textValue);
+      if (!pageNumber && isNext) pageNumber = currentPage + 1;
+      if (pageNumber > currentPage && pageNumber <= currentPage + 25) {
+        found[pageNumber] = target.href;
+      }
+    });
+  } catch (e) {}
+  return found;
+}
+
+function buildSourcePageUrl(source, page) {
+  if (page === 1) return source.listingUrl || source.url;
+  const discovered = source.discoveredPageUrls && source.discoveredPageUrls[page];
+  if (discovered) return discovered;
+  if (source.pageUrlTemplate) {
+    try {
+      const target = new URL(source.pageUrlTemplate.replace(/\{page\}/g, String(page)), source.url);
+      return matchesSourceHost(target.href, source.url) ? target.href : '';
+    } catch (e) { return ''; }
+  }
+  if (source.type === 'mangareader') return `${source.url.replace(/\/$/, '')}/page/${page}/`;
+  if (source.type === 'madara') return `${source.url.replace(/\/$/, '')}/manga/page/${page}/?m_orderby=latest`;
+  if (source.type === 'whytoon') return `${source.url.replace(/\/$/, '')}/browse/page/${page}`;
+  if (source.type === 'readtoon') return `${source.url.replace(/\/$/, '')}/discover/manga?page=${page}`;
+  if (source.type === 'ntrnaja') return `${source.url.replace(/\/$/, '')}/manga/page/${page}/?sort=update`;
+  if (source.type === 'mangatown') return `${source.url.replace(/\/$/, '')}/latest/${page}.htm`;
+  if (source.type === 'asurascans') return `${source.url.replace(/\/$/, '')}/comics?page=${page}`;
+  if (source.type === 'bullymanga') return `${source.url.replace(/\/$/, '')}/page/${page}`;
+  if (source.type === 'mangablackcat') return `${source.url.replace(/\/$/, '')}/latest?page=${page}`;
+  return '';
+}
+
+function parseGenericSourceHtml(html, sourceInfo, parserType = 'mangareader') {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const items = [];
+  const seen = new Set();
+  const cardSelector = '.bsx, .uta, .page-item-detail, .c-tabs-item__content, .manga-card, .series-card, .manga-item, .comic-item, article, .item, li';
+  const anchors = doc.querySelectorAll('a[href]');
+  anchors.forEach(anchor => {
+    let href = (anchor.getAttribute('href') || '').trim();
+    if (!href || href === '#' || href.startsWith('javascript:')) return;
+    let parsed;
+    try { parsed = new URL(href, sourceInfo.url); } catch (e) { return; }
+    if (!/^https?:$/.test(parsed.protocol) || !matchesSourceHost(parsed.href, sourceInfo.url)) return;
+    if (parsed.href === sourceInfo.url || /\/(?:page|tag|genre|category|search|login|register|author|feed)(?:\/|$)/i.test(parsed.pathname)) return;
+    const card = anchor.closest(cardSelector) || anchor.parentElement;
+    if (!card) return;
+    const img = card.querySelector('img');
+    const heading = card.querySelector('h1, h2, h3, h4, .title, .tt, [class*="title"]');
+    let title = (heading && heading.textContent || anchor.getAttribute('title') || (img && img.getAttribute('alt')) || anchor.textContent || '').trim().replace(/\s+/g, ' ');
+    title = title.replace(/(?:ตอนที่|chapter|ch\.?|episode|ep\.?)\s*\d+(?:\.\d+)?[\s\S]*$/i, '').trim();
+    if (title.length < 2 || title.length > 180 || seen.has(parsed.href)) return;
+    if (/^(อ่านเลย|อ่านต่อ|รายละเอียด|ดูทั้งหมด|หน้าแรก|ถัดไป|next)$/i.test(title)) return;
+
+    const cover = extractCoverUrl(img, sourceInfo.url);
+    const cardText = (card.textContent || '').replace(/\s+/g, ' ');
+    const chapterMatch = cardText.match(/(?:ตอนที่|chapter|ch\.?|episode|ep\.?)\s*\d+(?:\.\d+)?/i);
+    const typeMatch = cardText.match(/\b(manhwa|manhua|manga|comic|webtoon)\b/i);
+    seen.add(parsed.href);
+    items.push({
+      title,
+      mangaUrl: parsed.href,
+      cover,
+      latestEp: chapterMatch ? chapterMatch[0] : 'ตอนล่าสุด',
+      type: typeMatch ? typeMatch[1] : 'Manga',
+      sourceId: sourceInfo.id,
+      sourceName: sourceInfo.name,
+      sourceUrl: sourceInfo.url,
+      sourceType: parserType,
+      readable: sourceInfo.readable !== false,
+      isCoin: !!sourceInfo.isCoin,
+      icon: sourceInfo.icon || '🌐',
+      lang: sourceInfo.lang || 'th'
+    });
+  });
+  return items;
+}
+
+function parseDongMangaHtml(html, sourceInfo) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const items = [];
+  const seen = new Set();
+  const links = doc.querySelectorAll('a[href*="mod=forumdisplay"][href*="fid="], a[href*="forum.php"][href*="fid="]');
+  links.forEach(anchor => {
+    const href = (anchor.getAttribute('href') || '').trim();
+    if (!href) return;
+    let target;
+    try { target = new URL(href, sourceInfo.url); } catch (e) { return; }
+    if (!matchesSourceHost(target.href, sourceInfo.url) || seen.has(target.href)) return;
+    const card = anchor.closest('.bm, .fl_row, article, li, .item, .manga-card') || anchor.parentElement;
+    const image = card && card.querySelector('img');
+    const heading = card && card.querySelector('h1, h2, h3, h4, .title, .xs3, .xs2');
+    const title = (heading && heading.textContent || anchor.getAttribute('title') || anchor.textContent || (image && image.alt) || '').trim().replace(/\s+/g, ' ');
+    if (title.length < 2 || title.length > 180 || /^(คลังมังงะ|หน้าแรก|สุ่มเรื่องอ่าน)$/i.test(title)) return;
+    const text = (card && card.textContent || anchor.textContent || '').replace(/\s+/g, ' ');
+    const chapter = text.match(/(?:ตอนที่|ตอน|chapter|ch\.?|episode)\s*\d+(?:\.\d+)?/i);
+    const type = text.match(/\b(Manhwa|Manhua|Manga|Webtoon)\b/i);
+    seen.add(target.href);
+    items.push({
+      title,
+      mangaUrl: target.href,
+      cover: extractCoverUrl(image, sourceInfo.url),
+      latestEp: chapter ? chapter[0] : 'ตอนล่าสุด',
+      type: type ? type[1] : 'Manga',
+      sourceId: sourceInfo.id,
+      sourceName: sourceInfo.name,
+      sourceUrl: sourceInfo.url,
+      sourceType: 'dongmanga',
+      readable: true,
+      isCoin: false,
+      icon: sourceInfo.icon || '🍶',
+      lang: 'th'
+    });
+  });
+  return items.length ? items : parseGenericSourceHtml(html, sourceInfo, 'dongmanga');
+}
+
+function parseSourceListingHtml(html, source) {
+  if (source.type === 'dongmanga') return { items: parseDongMangaHtml(html, source), parserType: 'dongmanga' };
+  const parserMap = {
+    mangareader: parseMangaReaderHtml,
+    madara: parseMadaraHtml,
+    whytoon: parseWhyToonHtml,
+    readtoon: parseReadToonHtml,
+    ntrnaja: parseNtrNajaHtml,
+    kairew: parseKairewHtml,
+    mangatown: parseMangaTownHtml,
+    asurascans: parseAsuraScansHtml,
+    bullymanga: parseBullyMangaHtml,
+    mangablackcat: parseMangaBlackCatHtml,
+    dongmanga: parseDongMangaHtml
+  };
+  if (source.type !== 'autodetect') {
+    const parser = parserMap[source.type] || parseMangaReaderHtml;
+    return { items: parser(html, source), parserType: source.type || 'mangareader' };
+  }
+
+  const strategies = [source.detectedParserType, 'madara', 'mangareader', 'whytoon', 'readtoon', 'ntrnaja', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga']
+    .filter((type, index, all) => type && all.indexOf(type) === index && parserMap[type]);
+  for (const strategy of strategies) {
+    try {
+      const items = parserMap[strategy](html, { ...source, type: strategy });
+      if (Array.isArray(items) && items.length) {
+        source.detectedParserType = strategy;
+        return { items, parserType: strategy };
+      }
+    } catch (e) {}
+  }
+  const generic = parseGenericSourceHtml(html, source, 'mangareader');
+  if (generic.length) {
+    source.detectedParserType = 'mangareader';
+    return { items: generic, parserType: 'mangareader' };
+  }
+  return { items: [], parserType: source.detectedParserType || 'autodetect' };
+}
+
+function classifySourceHtml(html) {
+  const text = String(html || '').slice(0, 20000);
+  if (/just a moment|checking your browser|verify you are human|captcha|cloudflare ray id|access denied|security check/i.test(text)) {
+    return { state: 'blocked', message: 'เว็บต้นทางส่งหน้ากันบอทหรือ CAPTCHA กลับมา' };
+  }
+  return null;
+}
+
+function recordSourceResult(source, page, state, count, message = '') {
+  const previous = sourceHealthStatus[source.id] || { pages: {}, count: 0 };
+  const pages = { ...(previous.pages || {}), [page]: { state, count, message } };
+  const allCounts = Object.values(pages).reduce((sum, entry) => sum + (entry.count || 0), 0);
+  const hasSuccess = Object.values(pages).some(entry => entry.count > 0);
+  const hasFailure = Object.values(pages).some(entry => ['error', 'blocked', 'parse-miss'].includes(entry.state));
+  const aggregateState = hasSuccess ? (hasFailure ? 'partial' : 'ready') : state;
+  sourceHealthStatus[source.id] = {
+    ok: hasSuccess || aggregateState === 'end',
+    state: aggregateState,
+    count: allCounts,
+    pages,
+    error: message || previous.error || '',
+    message: message || (hasFailure ? Object.values(pages).find(entry => entry.message)?.message : '') || ''
+  };
+}
+
 // 9. ดึงข้อมูลมังงะเดี่ยวของแต่ละเว็บ พร้อม Timeout 15 วินาที
 async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
   try {
-    let targetUrl = source.url;
-    if (source.type === 'mangareader') {
-      targetUrl = page > 1 ? `${source.url}/page/${page}/` : source.url;
-    } else if (source.type === 'madara') {
-      targetUrl = page > 1 ? `${source.url}/manga/page/${page}/?m_orderby=latest` : `${source.url}/manga/?m_orderby=latest`;
-    } else if (source.type === 'whytoon') {
-      targetUrl = page > 1 ? `${source.url}/browse/page/${page}` : `${source.url}/browse`;
-    } else if (source.type === 'readtoon') {
-      targetUrl = page > 1 ? `${source.url}/discover/manga?page=${page}` : `${source.url}/discover/manga`;
-    } else if (source.type === 'ntrnaja') {
-      targetUrl = page > 1 ? `${source.url}/manga/page/${page}/?sort=update` : `${source.url}/manga/?sort=update`;
-    } else if (source.type === 'kairew') {
-      targetUrl = `${source.url}/manga`;
-    } else if (source.type === 'mangatown') {
-      targetUrl = page > 1 ? `${source.url}/latest/${page}.htm` : `${source.url}/latest/`;
-    } else if (source.type === 'asurascans') {
-      targetUrl = page > 1 ? `${source.url}/comics?page=${page}` : `${source.url}/`;
-    } else if (source.type === 'bullymanga') {
-      targetUrl = page > 1 ? `${source.url}/page/${page}` : `${source.url}/`;
-    } else if (source.type === 'mangablackcat') {
-      targetUrl = page > 1 ? `${source.url}/latest?page=${page}` : `${source.url}/latest`;
+    const targetUrl = buildSourcePageUrl(source, page);
+    if (!targetUrl) {
+      recordSourceResult(source, page, 'end', 0, 'ไม่พบลิงก์หน้าถัดไปของเว็บนี้');
+      return [];
     }
 
     const html = await fetchViaProxy(targetUrl, {}, timeoutMs);
-    let items = [];
-    if (source.type === 'whytoon') {
-      items = parseWhyToonHtml(html, source);
-    } else if (source.type === 'readtoon') {
-      items = parseReadToonHtml(html, source);
-    } else if (source.type === 'ntrnaja') {
-      items = parseNtrNajaHtml(html, source);
+    const blockedResult = classifySourceHtml(html);
+    if (blockedResult) {
+      recordSourceResult(source, page, blockedResult.state, 0, blockedResult.message);
+      return [];
+    }
+    source.discoveredPageUrls = { ...(source.discoveredPageUrls || {}), ...discoverSourcePageUrls(html, targetUrl, page) };
+    if (source.customSource) {
+      const profileIndex = userSourceProfiles.findIndex(profile => profile.id === source.id);
+      if (profileIndex >= 0) {
+        const oldLinks = JSON.stringify(userSourceProfiles[profileIndex].discoveredPageUrls || {});
+        const newLinks = JSON.stringify(source.discoveredPageUrls);
+        if (oldLinks !== newLinks) {
+          userSourceProfiles[profileIndex] = {
+            ...userSourceProfiles[profileIndex],
+            discoveredPageUrls: source.discoveredPageUrls,
+            updatedAt: Date.now()
+          };
+          saveUserSourceProfiles(false);
+        }
+      }
+    }
+    const parsedListing = parseSourceListingHtml(html, source);
+    let items = parsedListing.items;
+    if (source.type === 'autodetect' && parsedListing.parserType) {
+      source.detectedParserType = parsedListing.parserType;
+      items.forEach(item => { item.sourceType = parsedListing.parserType; });
+    }
+    if (source.type === 'ntrnaja' || parsedListing.parserType === 'ntrnaja') {
       probeNtrnajaChapters(items);
-    } else if (source.type === 'kairew') {
-      items = parseKairewHtml(html, source);
-    } else if (source.type === 'madara') {
-      items = parseMadaraHtml(html, source);
-    } else if (source.type === 'mangatown') {
-      items = parseMangaTownHtml(html, source);
-    } else if (source.type === 'asurascans') {
-      items = parseAsuraScansHtml(html, source);
-    } else if (source.type === 'bullymanga') {
-      items = parseBullyMangaHtml(html, source);
-    } else if (source.type === 'mangablackcat') {
-      items = parseMangaBlackCatHtml(html, source);
-    } else {
-      items = parseMangaReaderHtml(html, source);
     }
 
     // ดึงเรื่องยอดนิยม (Popular) ในเบื้องหลังเฉพาะตอนดึงหน้า 1 สำหรับเว็บที่แยกฟีด Latest และ Popular ชัดเจน
@@ -2548,7 +2895,7 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
             }
           });
         } catch (e) {}
-      } else if (source.type === 'madara') {
+      } else if (source.type === 'madara' || parsedListing.parserType === 'madara') {
         try {
           const popHtml = await fetchViaProxy(`${source.url}/manga/?m_orderby=trending`, {}, 6000);
           const popItems = parseMadaraHtml(popHtml, source);
@@ -2575,22 +2922,15 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
       }
     }
 
-    if (items.length > 0) {
-      sourceHealthStatus[source.id] = { ok: true, count: items.length };
-    } else {
-      if (!sourceHealthStatus[source.id]) {
-        sourceHealthStatus[source.id] = { ok: true };
-      }
-    }
+    const resultState = items.length ? 'ready' : 'parse-miss';
+    recordSourceResult(source, page, resultState, items.length, items.length ? '' : 'เว็บตอบกลับมาแต่ยังไม่พบรายการการ์ตูนที่รู้จัก');
     return items;
   } catch (e) {
     console.warn(`Fetch error for ${source.name} page ${page}:`, e.message);
-    const isOriginDead = /HTTP (?:404|500|502|503)|ENOTFOUND|getaddrinfo/i.test(e.message);
-    if (isOriginDead && !source.isCoin) {
-      sourceHealthStatus[source.id] = { ok: false, error: e.message };
-    } else {
-      sourceHealthStatus[source.id] = { ok: true };
-    }
+    const previous = sourceHealthStatus[source.id];
+    const state = /403|429|captcha|cloudflare/i.test(e.message) ? 'blocked' : /HTTP Error|Failed to fetch|abort|network/i.test(e.message) ? 'error' : 'error';
+    recordSourceResult(source, page, state, 0, /abort/i.test(e.name || '') ? 'หมดเวลารอเว็บต้นทาง' : e.message);
+    if (previous && previous.count > 0) sourceHealthStatus[source.id].ok = true;
     return [];
   }
 }
@@ -2910,15 +3250,21 @@ function initSourceBarToggle() {
 function updateSourceHealthUi() {
   const alertBar = document.getElementById('sourceAlertBar');
   const offlineSources = CONFIG.SOURCES.filter(s => !s.isCoin && sourceHealthStatus[s.id] && sourceHealthStatus[s.id].ok === false);
+  const partialSources = CONFIG.SOURCES.filter(s => sourceHealthStatus[s.id] && sourceHealthStatus[s.id].state === 'partial');
 
   if (alertBar) {
-    if (offlineSources.length > 0) {
-      const names = offlineSources.map(s => s.name).join(', ');
+    const problemSources = [...offlineSources, ...partialSources.filter(s => !offlineSources.some(o => o.id === s.id))];
+    if (problemSources.length > 0) {
+      const names = problemSources.map(s => {
+        const status = sourceHealthStatus[s.id];
+        const label = status && status.state === 'partial' ? 'ข้อมูลบางหน้า' : (status && status.state === 'parse-miss' ? 'อ่านโครงสร้างไม่พบ' : (status && status.state === 'blocked' ? 'ติดระบบป้องกัน' : 'เชื่อมต่อไม่ได้'));
+        return `${s.name} (${label})`;
+      }).join(', ');
       alertBar.style.display = 'block';
       alertBar.innerHTML = `
         <div class="source-alert-banner">
           <span class="source-alert-icon">⚠️</span>
-          <span><strong>ตรวจพบเว็บต้นทางขัดข้อง (${names}):</strong> ต้นทางอาจปิดปรับปรุง ล่มชั่วคราว หรือเปลี่ยนระบบรักษาความปลอดภัย คุณยังสามารถอ่านเรื่องจากเว็บอื่นๆ ได้ตามปกติ</span>
+          <span><strong>ตรวจพบแหล่งข้อมูลที่ต้องตรวจ (${names}):</strong> ป้ายแต่ละเว็บจะบอกสาเหตุที่พบ เพื่อแยกปัญหาการเชื่อมต่อออกจากปัญหาอ่านหน้าเว็บ</span>
         </div>
       `;
     } else {
@@ -2931,19 +3277,34 @@ function updateSourceHealthUi() {
   CONFIG.SOURCES.forEach(source => {
     const btn = document.querySelector(`.source-tag[data-source="${source.id}"]`);
     if (btn) {
-      const isOffline = !source.isCoin && sourceHealthStatus[source.id] && sourceHealthStatus[source.id].ok === false;
-      const existingBadge = btn.querySelector('.source-status-badge');
+      const status = sourceHealthStatus[source.id];
+      const isOffline = !source.isCoin && status && status.ok === false;
+      const isPartial = status && status.state === 'partial';
+      let existingBadge = btn.querySelector('.source-status-badge');
+      btn.title = status && (status.message || status.error)
+        ? `${status.message || status.error}${status.count ? ` — พบ ${status.count} เรื่อง` : ''}`
+        : source.url;
       if (isOffline) {
         btn.classList.add('offline');
         if (!existingBadge) {
           const badge = document.createElement('span');
           badge.className = 'source-status-badge error';
-          badge.textContent = '🔴 ขัดข้อง';
+          badge.textContent = status.state === 'parse-miss' ? '⚠️ อ่านไม่พบ' : (status.state === 'blocked' ? '🛡️ ถูกกัน' : '🔴 ขัดข้อง');
           btn.appendChild(badge);
+          existingBadge = badge;
+        } else {
+          existingBadge.textContent = status.state === 'parse-miss' ? '⚠️ อ่านไม่พบ' : (status.state === 'blocked' ? '🛡️ ถูกกัน' : '🔴 ขัดข้อง');
         }
       } else {
         btn.classList.remove('offline');
-        if (existingBadge) existingBadge.remove();
+        if (isPartial) {
+          if (!existingBadge) {
+            existingBadge = document.createElement('span');
+            existingBadge.className = 'source-status-badge warning';
+            btn.appendChild(existingBadge);
+          }
+          existingBadge.textContent = '⚠️ บางหน้า';
+        } else if (existingBadge) existingBadge.remove();
       }
     }
   });
@@ -3563,6 +3924,311 @@ async function importMangaByDirectUrl(urlStr) {
   }
 }
 
+function escapeHtmlText(value) {
+  return String(value || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+function normalizeSourceInput(value) {
+  let raw = String(value || '').trim();
+  if (!raw) throw new Error('กรุณาใส่ URL เว็บ');
+  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+  const parsed = new URL(raw);
+  if (!isAllowedSourceUrl(parsed.origin, true)) throw new Error('URL นี้ไม่ใช่เว็บสาธารณะที่รองรับ');
+  parsed.hash = '';
+  const requestedUrl = parsed.href;
+  return { origin: parsed.origin, requestedUrl };
+}
+
+function derivePageUrlTemplate(pageUrl, pageNumber = 2) {
+  if (!pageUrl) return '';
+  try {
+    const url = new URL(pageUrl);
+    const pageText = String(pageNumber);
+    let path = url.pathname.replace(new RegExp(`(\\/page\\/)${pageText}(?=\\/|$)`, 'i'), '$1{page}');
+    if (path === url.pathname) path = url.pathname.replace(new RegExp(`(\\/p\\/)${pageText}(?=\\/|$)`, 'i'), '$1{page}');
+    let query = url.search;
+    query = query.replace(new RegExp(`([?&](?:page|paged|pagenum|pn)=)${pageText}(?=&|$)`, 'i'), '$1{page}');
+    if (path === url.pathname && query === url.search) return '';
+    return `${path}${query}`;
+  } catch (e) {
+    return '';
+  }
+}
+
+function renderUserSourceProfileLists() {
+  const pendingList = document.getElementById('pendingSourceList');
+  const activeList = document.getElementById('activeCustomSourceList');
+  const renderList = (container, profiles, pending) => {
+    if (!container) return;
+    container.innerHTML = '';
+    if (!profiles.length) {
+      const empty = document.createElement('li');
+      empty.className = 'source-manager-empty';
+      empty.textContent = pending ? 'ยังไม่มีเว็บที่รอตรวจ' : 'ยังไม่มีเว็บที่เพิ่มเอง';
+      container.appendChild(empty);
+      return;
+    }
+    profiles.forEach(profile => {
+      const row = document.createElement('li');
+      row.className = 'source-manager-item';
+      const info = document.createElement('div');
+      info.className = 'source-manager-item-info';
+      const name = document.createElement('strong');
+      name.textContent = `${profile.icon || '🌐'} ${profile.name}`;
+      const details = document.createElement('small');
+      details.textContent = `${profile.url} · ${profile.lastMessage || (profile.detectedParserType ? `อ่านด้วย ${profile.detectedParserType}` : 'ยังไม่พบวิธีอ่าน')}`;
+      info.append(name, details);
+      const actions = document.createElement('div');
+      actions.className = 'source-manager-item-actions';
+      if (pending) {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'source-manager-action';
+        retry.textContent = 'ลองอีกครั้ง';
+        retry.addEventListener('click', () => probeCustomSource(profile.url, profile.id));
+        actions.appendChild(retry);
+      }
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'source-manager-action remove';
+      remove.textContent = 'ซ่อน';
+      remove.title = 'ซ่อนเว็บนี้จากเครื่องที่เชื่อมรหัสคลาวด์เดียวกัน';
+      remove.addEventListener('click', () => {
+        userSourceProfiles = userSourceProfiles.map(item => item.id === profile.id
+          ? { ...item, status: 'removed', updatedAt: Date.now(), lastMessage: 'ซ่อนจากรายการแล้ว' }
+          : item);
+        saveUserSourceProfiles(true);
+      });
+      actions.appendChild(remove);
+      row.append(info, actions);
+      container.appendChild(row);
+    });
+  };
+  renderList(pendingList, userSourceProfiles.filter(p => p.status === 'pending'), true);
+  renderList(activeList, userSourceProfiles.filter(p => p.status === 'active'), false);
+}
+
+async function probeCustomSource(rawUrl, existingProfileId = '') {
+  const statusEl = document.getElementById('sourceProbeStatus');
+  const addBtn = document.getElementById('btnAddSource');
+  let normalized;
+  try {
+    normalized = normalizeSourceInput(rawUrl);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = e.message;
+    return;
+  }
+  const { origin, requestedUrl } = normalized;
+  const known = CONFIG.SOURCES.find(source => {
+    try { return new URL(source.url).origin === origin; } catch (e) { return false; }
+  });
+  if (known && !known.customSource) {
+    if (statusEl) statusEl.textContent = `เว็บ ${known.name} อยู่ในรายการแล้ว กำลังลองดึงข้อมูลใหม่...`;
+    await fetchSingleSource(known, 1, 12000);
+    updateSourceHealthUi();
+    if (statusEl) statusEl.textContent = sourceHealthStatus[known.id]?.message || `เว็บ ${known.name} อยู่ในรายการแล้ว`;
+    return;
+  }
+
+  const now = Date.now();
+  const existing = userSourceProfiles.find(profile => profile.id === existingProfileId)
+    || userSourceProfiles.find(profile => profile.url === origin);
+  let profile = sanitizeUserSourceProfile(existing || {
+    id: `custom-${new URL(origin).hostname}`,
+    name: new URL(origin).hostname.replace(/^www\./, ''),
+    url: origin,
+    listingUrl: origin,
+    type: 'autodetect',
+    status: 'pending',
+    icon: '🌐',
+    lang: 'th',
+    createdAt: now,
+    updatedAt: now
+  });
+  profile = { ...profile, status: 'pending', updatedAt: now, triedStrategies: [], lastMessage: 'กำลังลองวิธีอ่านที่มี' };
+  userSourceProfiles = [...userSourceProfiles.filter(item => item.id !== profile.id), profile];
+  saveUserSourceProfiles(true);
+  if (addBtn) addBtn.disabled = true;
+
+  const parsedInput = new URL(requestedUrl);
+  const candidates = [
+    requestedUrl,
+    origin,
+    new URL('/latest/', origin).href,
+    new URL('/manga/?m_orderby=latest', origin).href,
+    new URL('/browse', origin).href,
+    new URL('/content', origin).href
+  ].filter((url, index, all) => all.indexOf(url) === index).slice(0, 5);
+  const triedStrategies = [];
+  let success = null;
+  let lastFailure = 'ยังไม่พบรายการเรื่องที่ระบบรู้จัก';
+
+  for (const candidateUrl of candidates) {
+    try {
+      if (statusEl) statusEl.textContent = `กำลังตรวจ ${new URL(candidateUrl).pathname || '/'} ...`;
+      const html = await fetchViaProxy(candidateUrl, {}, 9000);
+      const blocked = classifySourceHtml(html);
+      if (blocked) {
+        lastFailure = blocked.message;
+        triedStrategies.push(`blocked:${new URL(candidateUrl).pathname || '/'}`);
+        continue;
+      }
+      const pageLinks = discoverSourcePageUrls(html, candidateUrl, 1);
+      const candidateProfile = {
+        ...profile,
+        url: origin,
+        listingUrl: candidateUrl,
+        type: 'autodetect',
+        detectedParserType: '',
+        discoveredPageUrls: pageLinks
+      };
+      const parsed = parseSourceListingHtml(html, candidateProfile);
+      const validItems = parsed.items.filter(item => {
+        try { return matchesSourceHost(item.mangaUrl, origin) && item.title && item.mangaUrl; } catch (e) { return false; }
+      });
+      triedStrategies.push(`${parsed.parserType}:${new URL(candidateUrl).pathname || '/'}`);
+      if (validItems.length >= 2) {
+        success = { candidateProfile, parserType: parsed.parserType, items: validItems, pageLinks };
+        break;
+      }
+      lastFailure = validItems.length === 1
+        ? 'พบเพียงหนึ่งรายการ ยังไม่พอให้ยืนยันว่าอ่านโครงสร้างเว็บถูกต้อง'
+        : 'เว็บตอบกลับมา แต่ยังแยกรายการมังงะไม่พบ';
+    } catch (e) {
+      lastFailure = /403|429/i.test(e.message) ? 'เว็บปฏิเสธคำขอจาก Cloudflare Proxy' : (/abort/i.test(e.name || '') ? 'หมดเวลารอเว็บต้นทาง' : e.message);
+      triedStrategies.push(`fetch:${new URL(candidateUrl).pathname || '/'}`);
+    }
+  }
+
+  const finishedAt = Date.now();
+  if (success) {
+    const pageTwoUrl = success.pageLinks[2] || '';
+    const newProfile = sanitizeUserSourceProfile({
+      ...profile,
+      listingUrl: success.candidateProfile.listingUrl,
+      type: 'autodetect',
+      detectedParserType: success.parserType,
+      discoveredPageUrls: success.pageLinks,
+      pageUrlTemplate: derivePageUrlTemplate(pageTwoUrl, 2) || profile.pageUrlTemplate,
+      status: 'active',
+      triedStrategies,
+      lastMessage: `ยืนยันแล้ว · อ่าน ${success.items.length} รายการด้วย ${success.parserType}`,
+      lastVerifiedAt: finishedAt,
+      updatedAt: finishedAt
+    });
+    userSourceProfiles = [...userSourceProfiles.filter(item => item.id !== newProfile.id), newProfile];
+    if (statusEl) statusEl.textContent = newProfile.lastMessage;
+  } else {
+    const newProfile = sanitizeUserSourceProfile({
+      ...profile,
+      status: 'pending',
+      triedStrategies,
+      lastMessage: lastFailure,
+      updatedAt: finishedAt
+    });
+    userSourceProfiles = [...userSourceProfiles.filter(item => item.id !== newProfile.id), newProfile];
+    if (statusEl) statusEl.textContent = `เก็บไว้ในรายการรอตรวจแล้ว: ${lastFailure}`;
+  }
+  saveUserSourceProfiles(true);
+  if (addBtn) addBtn.disabled = false;
+  const input = document.getElementById('newSourceUrl');
+  if (input && success) input.value = '';
+}
+
+function initSourceManager() {
+  const dialog = document.getElementById('sourceManagerDialog');
+  const openButton = document.getElementById('btnManageSources');
+  const closeButton = document.getElementById('btnCloseSourceManager');
+  const form = document.getElementById('sourceManagerForm');
+  const input = document.getElementById('newSourceUrl');
+  if (openButton && dialog && !openButton.dataset.bound) {
+    openButton.dataset.bound = '1';
+    openButton.addEventListener('click', () => {
+      renderUserSourceProfileLists();
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+      else dialog.setAttribute('open', '');
+      if (input) input.focus();
+    });
+  }
+  if (closeButton && dialog && !closeButton.dataset.bound) {
+    closeButton.dataset.bound = '1';
+    closeButton.addEventListener('click', () => dialog.close());
+  }
+  if (form && !form.dataset.bound) {
+    form.dataset.bound = '1';
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      probeCustomSource(input ? input.value : '');
+    });
+  }
+  renderUserSourceProfileLists();
+}
+
+function buildSyncSourceSnapshots() {
+  const grouped = new Map();
+  const addItem = item => {
+    if (!item || !item.sourceId || !item.mangaUrl || !item.title) return;
+    try {
+      const mangaUrl = new URL(item.mangaUrl);
+      if (!['http:', 'https:'].includes(mangaUrl.protocol)) return;
+    } catch (e) { return; }
+    const items = grouped.get(item.sourceId) || [];
+    if (items.some(existing => existing.mangaUrl === item.mangaUrl)) return;
+    items.push({
+      title: String(item.title).slice(0, 180),
+      mangaUrl: String(item.mangaUrl).slice(0, 1800),
+      cover: String(item.cover || '').slice(0, 1800),
+      latestEp: String(item.latestEp || '').slice(0, 100),
+      type: String(item.type || 'Manga').slice(0, 40),
+      sourceId: String(item.sourceId).slice(0, 72),
+      sourceName: String(item.sourceName || '').slice(0, 80),
+      sourceUrl: String(item.sourceUrl || '').slice(0, 300),
+      sourceType: String(item.sourceType || 'mangareader').slice(0, 40),
+      readable: item.readable !== false,
+      isCoin: !!item.isCoin,
+      icon: String(item.icon || '🌐').slice(0, 12),
+      lang: ['th', 'en', 'ja', 'ko'].includes(item.lang) ? item.lang : 'th'
+    });
+    grouped.set(item.sourceId, items);
+  };
+  allMangaList.forEach(item => {
+    addItem(item);
+    (Array.isArray(item.altSources) ? item.altSources : []).forEach(addItem);
+  });
+  return Array.from(grouped.entries()).slice(0, 60).map(([sourceId, items]) => ({
+    sourceId,
+    updatedAt: Date.now(),
+    items: items.slice(0, 80)
+  }));
+}
+
+function mergeSyncedSourceSnapshots(snapshots) {
+  if (!Array.isArray(snapshots)) return false;
+  const activeSourceIds = new Set(CONFIG.SOURCES.map(source => source.id));
+  if (CONFIG.MANGADEX && CONFIG.MANGADEX.id) activeSourceIds.add(CONFIG.MANGADEX.id);
+  const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+  const received = [];
+  snapshots.forEach(snapshot => {
+    if (!snapshot || !activeSourceIds.has(snapshot.sourceId) || Number(snapshot.updatedAt) < cutoff || !Array.isArray(snapshot.items)) return;
+    snapshot.items.slice(0, 80).forEach(raw => {
+      if (!raw || raw.sourceId !== snapshot.sourceId || !raw.title || !raw.mangaUrl) return;
+      try {
+        const mangaUrl = new URL(raw.mangaUrl);
+        if (!['http:', 'https:'].includes(mangaUrl.protocol)) return;
+        if (raw.cover && !['http:', 'https:'].includes(new URL(raw.cover).protocol)) return;
+      } catch (e) { return; }
+      received.push({ ...raw, altSources: [] });
+    });
+  });
+  if (!received.length) return false;
+  allMangaList = mergeAndDeduplicate([...allMangaList, ...received]);
+  try { sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList)); } catch (e) {}
+  filteredList = [...allMangaList];
+  updateSourceCounts();
+  if (document.getElementById('mangaGrid')) applyFilters();
+  return true;
+}
+
 // 11. หน้าแรก Aggregator (Progressive Background Streaming)
 async function initAggregatorPage() {
   const statusEl = document.getElementById('statusMsg');
@@ -3574,11 +4240,13 @@ async function initAggregatorPage() {
   const bgText = document.getElementById('bgLoadingText');
 
   // ฟังก์ชันแสดงความคืบหน้าการดึงข้อมูลเบื้องหลัง
+  let bgHideTimer = 0;
   const updateBgProgress = (done, total) => {
     if (!bgBadge || !bgText) return;
+    clearTimeout(bgHideTimer);
     if (done >= total) {
       bgText.textContent = `✓ อัปเดตครบ ${total} เว็บ`;
-      setTimeout(() => {
+      bgHideTimer = setTimeout(() => {
         bgBadge.style.display = 'none';
       }, 2500);
     } else {
@@ -3732,6 +4400,7 @@ async function initAggregatorPage() {
           sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
         } catch (e) {}
         applyFilters();
+        pushSyncData();
         loadMoreBtn.disabled = false;
         loadMoreBtn.querySelector('span').textContent = 'โหลดเรื่องเพิ่มเติม';
       }
@@ -3755,7 +4424,26 @@ async function initAggregatorPage() {
   // สร้างแท็บแหล่งเว็บและอัปเดตตัวเลข
   renderSourceTabs();
   initSourceBarToggle();
+  initSourceManager();
   updateHistoryAndFavCounts();
+
+  window.__loadNewCustomSources = async (sources) => {
+    const validSources = (Array.isArray(sources) ? sources : []).filter(source => source && source.customSource && source.status === 'active');
+    for (const source of validSources) {
+      const pageOne = await fetchSingleSource(source, 1, 15000);
+      const pageTwo = await fetchSingleSource(source, 2, 15000);
+      const fetched = [...pageOne, ...pageTwo];
+      if (fetched.length) {
+        allMangaList = mergeAndDeduplicate([...allMangaList, ...fetched]);
+        filteredList = [...allMangaList];
+        try { sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList)); } catch (e) {}
+        updateSourceCounts();
+        updateSourceHealthUi();
+        applyFilters();
+        pushSyncData();
+      }
+    }
+  };
 
   // เริ่มต้นระบบ Private Sync Key ข้ามอุปกรณ์
   initSyncEngine();
@@ -3822,7 +4510,7 @@ async function initAggregatorPage() {
 
         // นำทุกเว็บที่ดึงเสร็จแล้วมาสลับไขว้แบบ Round-Robin
         const interleaved = interleaveSources(Array.from(loadedSourceMap.values()));
-        allMangaList = mergeAndDeduplicate(interleaved);
+        allMangaList = mergeAndDeduplicate([...allMangaList, ...interleaved]);
 
         if (notifyFirstSourceReady) {
           notifyFirstSourceReady();
@@ -3873,11 +4561,11 @@ async function initAggregatorPage() {
   }
 
   // ปล่อยให้ทุกเว็บที่เหลือทำงานในเบื้องหลังต่อไปอย่างเงียบๆ โดยไม่บล็อกผู้ใช้
-  Promise.allSettled(fetchPromises).then(() => {
+  Promise.allSettled(fetchPromises).then(async () => {
     updateBgProgress(totalSources, totalSources);
     if (loadedSourceMap.size > 0) {
       const finalInterleaved = interleaveSources(Array.from(loadedSourceMap.values()));
-      allMangaList = mergeAndDeduplicate(finalInterleaved);
+      allMangaList = mergeAndDeduplicate([...allMangaList, ...finalInterleaved]);
       try {
         sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
       } catch (e) {}
@@ -3886,6 +4574,49 @@ async function initAggregatorPage() {
       if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) {
         applyFilters();
       }
+    }
+
+    const secondPageSources = CONFIG.SOURCES.filter(source => !!buildSourcePageUrl(source, 2));
+    if (!secondPageSources.length) {
+      loadedPagesPerSource = 2;
+      pushSyncData();
+      return;
+    }
+    loadedPagesPerSource = 2;
+    clearTimeout(bgHideTimer);
+    if (bgBadge && bgText) {
+      bgBadge.style.display = 'inline-flex';
+      bgText.textContent = `กำลังดึงหน้า 2 (0/${secondPageSources.length} เว็บ)...`;
+    }
+    let pageTwoDone = 0;
+    let nextSourceIndex = 0;
+    const pageTwoResults = new Map();
+    const workerCount = Math.min(4, secondPageSources.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (nextSourceIndex < secondPageSources.length) {
+        const source = secondPageSources[nextSourceIndex++];
+        const items = await fetchSingleSource(source, 2, 15000);
+        if (items.length) pageTwoResults.set(source.id, items);
+        pageTwoDone++;
+        if (bgBadge && bgText) bgText.textContent = `กำลังดึงหน้า 2 (${pageTwoDone}/${secondPageSources.length} เว็บ)...`;
+      }
+    }));
+    pageTwoResults.forEach((items, sourceId) => {
+      const previous = loadedSourceMap.get(sourceId) || [];
+      loadedSourceMap.set(sourceId, mergeAndDeduplicate([...previous, ...items]));
+    });
+    if (pageTwoResults.size) {
+      const finalInterleaved = interleaveSources(Array.from(loadedSourceMap.values()));
+      allMangaList = mergeAndDeduplicate([...allMangaList, ...finalInterleaved]);
+      try { sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList)); } catch (e) {}
+      updateSourceCounts();
+      updateSourceHealthUi();
+      if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) applyFilters();
+    }
+    pushSyncData();
+    if (bgBadge && bgText) {
+      bgText.textContent = `✓ ดึงหน้า 1–2 ครบแล้ว (${pageTwoResults.size} เว็บมีข้อมูลเพิ่ม)`;
+      bgHideTimer = setTimeout(() => { bgBadge.style.display = 'none'; }, 3000);
     }
   });
 }
@@ -4328,6 +5059,29 @@ function parseChaptersFromHtml(html, baseUrl, sourceType) {
           sourceType: 'ntrnaja'
         });
       }
+    });
+  } else if (sourceType === 'dongmanga') {
+    const links = doc.querySelectorAll('a[href*="mod=viewthread"][href*="tid="], a[href*="forum.php"][href*="tid="]');
+    links.forEach(a => {
+      const rawHref = (a.getAttribute('href') || '').trim();
+      if (!rawHref || /mod=forumdisplay|mod=redirect/i.test(rawHref)) return;
+      let url;
+      try { url = new URL(rawHref, baseUrl).href; } catch (e) { return; }
+      const text = (a.textContent || a.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+      if (text.length < 2 || /^(?:ตอบกลับ|ดู|อ่านเพิ่มเติม|next|previous|ถัดไป|ก่อนหน้า)$/i.test(text)) return;
+      const numMatch = text.match(/(?:ตอนที่|ตอน|chapter|ch\.?|ep\.?)[\s#]*(\d+(?:\.\d+)?)/i) ||
+        url.match(/chapter[-_ ]?(\d+(?:\.\d+)?)/i);
+      const title = numMatch ? `ตอนที่ ${numMatch[1]}` : text.slice(0, 120);
+      if (seenUrls.has(url)) return;
+      seenUrls.add(url);
+      chapters.push({
+        title,
+        url,
+        num: numMatch ? parseFloat(numMatch[1]) : undefined,
+        isLocked: false,
+        badge: '✨ ฟรี',
+        sourceType: 'dongmanga'
+      });
     });
   } else if (sourceType === 'madara') {
     const links = doc.querySelectorAll('.wp-manga-chapter a, li.wp-manga-chapter a');
@@ -5286,6 +6040,37 @@ function parseReaderData(html, currentUrl = '') {
   const jqPrev = html.match(/(?:jQuery|\$)\(["']a\.ch-prev-btn["']\)[^;]*?attr\(["']href["'],\s*["']([^"']+)["']\)/i);
   if (jqPrev && jqPrev[1]) {
     scriptPrevUrl = cleanChapterNavUrl(jqPrev[1], currentUrl);
+  }
+
+  if (/dongmanga\.com/i.test(currentUrl)) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const imageNodes = doc.querySelectorAll([
+      '#postlist .t_f img', '#postlist .pcb img', '.t_fsz img', '.t_f img',
+      '.message-content img', '.reader-area img', '.chapter-content img',
+      '.wp-content img', '.entry-content img'
+    ].join(','));
+    const images = [];
+    imageNodes.forEach(img => {
+      let src = img.getAttribute('data-original') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('src') || '';
+      src = src.replace(/&amp;/g, '&').trim();
+      if (!src || /avatar|smilies|emoji|logo|icon/i.test(src)) return;
+      try {
+        const imageUrl = new URL(src, currentUrl);
+        if (!['http:', 'https:'].includes(imageUrl.protocol) || images.includes(imageUrl.href)) return;
+        images.push(getProxyUrl(imageUrl.href, 'https://dongmanga.com/'));
+      } catch (e) {}
+    });
+    const prevAnchor = doc.querySelector('a[rel="prev"], a.prev, a#prev, a[title*="ก่อน"]');
+    const nextAnchor = doc.querySelector('a[rel="next"], a.next, a#next, a[title*="ถัดไป"]');
+    const pageUrl = anchor => anchor ? cleanChapterNavUrl(anchor.getAttribute('href'), currentUrl) : '';
+    if (images.length) {
+      return {
+        prevUrl: pageUrl(prevAnchor) || scriptPrevUrl,
+        nextUrl: pageUrl(nextAnchor) || scriptNextUrl,
+        images
+      };
+    }
   }
 
   // 1. ลองหา ts_reader.run (Go, Fin, Dark, Up, Slow, NTR-Manga, Ecchi)
