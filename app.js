@@ -3778,23 +3778,7 @@ async function fetchChatMessages() {
     const res = await fetch(apiUrl);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    const messages = (data.messages || []).filter(msg => {
-      const isBot = /bot|บอท/i.test(String(msg?.nickname || ''));
-      if (!isBot) return true;
-
-      const title = String(msg?.mangaTitle || '').trim();
-      const titleIsChapterOnly = /^(?:chapter|ch\.?|episode|ep\.?|ตอนที่)\s*#?\s*\d+(?:\.\d+)?\b/i.test(title);
-      let urlIsChapter = false;
-      try {
-        const path = new URL(String(msg?.mangaUrl || ''), window.location.href).pathname;
-        urlIsChapter = /\/manga\/\d+\/\d+(?:\.\d+)?\/?$/i.test(path) ||
-          /\/(?:chapter|chapters|episode|episodes)\/?[^/]*\d+(?:\.\d+)?\/?$/i.test(path) ||
-          /(?:^|\/)[^/]*(?:[-_](?:ch|chapter|ep|episode)[-_]?\d+(?:\.\d+)?)(?:\/|$)/i.test(path);
-      } catch (e) {}
-
-      // Hide legacy bot recommendations that point directly to an episode.
-      return !titleIsChapterOnly && !urlIsChapter;
-    });
+    const messages = data.messages || [];
 
     if (countEl) countEl.textContent = `${messages.length} ข้อความล่าสุด`;
 
