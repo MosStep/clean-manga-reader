@@ -3356,6 +3356,7 @@ async function ensureMangaDexLoaded(lang = 'en') {
     } catch (e) {}
 
     const combined = [];
+    const hasCachedLanguage = allMangaList.some(m => m.sourceId === 'mangadex' && m.lang === lang);
     const seenUrls = new Set(allMangaList.map(m => m.mangaUrl));
     
     // 1. เพิ่มเรื่องอัปเดตล่าสุดขึ้นก่อน
@@ -3380,13 +3381,15 @@ async function ensureMangaDexLoaded(lang = 'en') {
 
     if (combined.length > 0) {
       allMangaList = [...allMangaList, ...combined];
-      mangadexLoadedLangs.add(lang);
-      updateSourceCounts();
       try {
         sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
       } catch (e) {}
+    }
+    if (combined.length > 0 || hasCachedLanguage) {
+      mangadexLoadedLangs.add(lang);
+      updateSourceCounts();
       if (currentSourceFilter === 'mangadex' || selectedLanguages.has(lang)) applyFilters();
-      pushSyncData();
+      if (combined.length > 0) pushSyncData();
     }
   } catch (err) {
     console.warn("Error loading MangaDex items for " + lang + ":", err);
