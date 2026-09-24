@@ -1066,7 +1066,7 @@ const KNOWN_MANGA_ALIASES = [
 // ==========================================================
 // การตั้งค่าและจัดการข้อมูลจาก MangaDex (ภาษาอังกฤษ, ญี่ปุ่น, เกาหลี)
 // ==========================================================
-let mangadexLoading = false;
+const mangadexLoadingLangs = new Set();
 const mangadexLoadedLangs = new Set();
 
 // 1. ดึงรายการมังงะยอดนิยม/อัปเดตล่าสุดจาก MangaDex (รองรับ en, ja, ko)
@@ -1665,6 +1665,8 @@ const SYNC_STORAGE_KEY = 'clean_manga_sync_key';
 
 let currentSyncKey = localStorage.getItem(SYNC_STORAGE_KEY) || '';
 let syncDebounceTimer = null;
+let syncPullInFlight = false;
+let lastSeenCloudRevision = null;
 
 // ดึงรายการที่ถูกลบ (Tombstones) เพื่อป้องกันการฟื้นคืนชีพจากการซิงก์
 function getDeletedFavorites() {
@@ -1775,8 +1777,48 @@ async function initSyncEngine() {
 
   // ดึงข้อมูลจากคลาวด์มาซิงก์กับในเครื่อง
   if (key) {
-    await pullAndMergeSyncData();
+    await pullAndMergeSyncData({ pushMerged: true });
   }
+  bindAutomaticCloudSync();
+}
+
+// ตรวจข้อมูลใหม่จากคลาวด์ระหว่างเปิดหน้าอยู่ เพื่อให้เครื่องอื่นเห็นการเปลี่ยนแปลงโดยไม่ต้องรีเฟรช
+function bindAutomaticCloudSync() {
+  if (window.__automaticCloudSyncBound) return;
+  window.__automaticCloudSyncBound = true;
+
+  const pullIfVisible = () => {
+    if (document.visibilityState !== 'visible' || !getSyncKey()) return;
+    pullAndMergeSyncData({ pushMerged: false });
+  };
+
+  window.setInterval(pullIfVisible, 60 * 1000);
+  window.addEventListener('focus', pullIfVisible);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') pullIfVisible();
+  });
+}
+
+// สร้างลายเซ็นขนาดเล็กจากข้อมูลบนคลาวด์ เพื่อข้ามการวาดหน้าใหม่เมื่อข้อมูลยังเหมือนเดิม
+function getCloudSyncRevision(data) {
+  const stableJson = value => JSON.stringify(value);
+  const revisionData = {
+    nickname: data.nickname || '',
+    favorites: (data.favorites || []).map(item => [item.mangaUrl || item.title || '', item.savedAt || 0]).sort((a, b) => stableJson(a).localeCompare(stableJson(b))),
+    history: (data.history || []).map(item => [item.mangaUrl || item.title || '', item.updatedAt || 0, Array.isArray(item.readChapters) ? item.readChapters.slice().sort() : (item.readChapters || '')]).sort((a, b) => stableJson(a).localeCompare(stableJson(b))),
+    deletedFavorites: Object.entries(data.deletedFavorites || {}).sort(([a], [b]) => a.localeCompare(b)),
+    deletedHistory: Object.entries(data.deletedHistory || {}).sort(([a], [b]) => a.localeCompare(b)),
+    historyClearedAt: Number(data.historyClearedAt) || 0,
+    sourceProfiles: (data.sourceProfiles || []).map(profile => [profile.id, profile.updatedAt || 0, profile.status || '', profile.type || '']).sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    sourceSnapshots: (data.sourceSnapshots || []).map(snapshot => [snapshot.sourceId, snapshot.updatedAt || 0, (snapshot.items || []).map(item => item.mangaUrl).sort()]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+  };
+  const serialized = JSON.stringify(revisionData);
+  let hash = 2166136261;
+  for (let i = 0; i < serialized.length; i++) {
+    hash ^= serialized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${serialized.length}:${(hash >>> 0).toString(16)}`;
 }
 
 // ส่งข้อมูลประวัติและเรื่องโปรดไปซิงก์บนคลาวด์ (Debounced 500ms) พร้อมส่ง Tombstones
@@ -1813,6 +1855,7 @@ function pushSyncData() {
       if (res.ok) {
         const result = await res.json();
         if (result.success && result.data) {
+          lastSeenCloudRevision = getCloudSyncRevision(result.data);
           mergeUserSourceProfiles(result.data.sourceProfiles);
           mergeSyncedSourceSnapshots(result.data.sourceSnapshots);
           const curDelFavs = getDeletedFavorites();
@@ -1864,15 +1907,21 @@ function pushSyncData() {
 }
 
 // ดึงข้อมูลจากคลาวด์และรวมกับข้อมูลในเครื่องอย่างชาญฉลาด (Smart Multi-Device Merge พร้อมเคารพการลบ)
-async function pullAndMergeSyncData() {
+async function pullAndMergeSyncData(options = {}) {
   const key = getSyncKey();
-  if (!key) return;
+  if (!key || syncPullInFlight) return;
+  syncPullInFlight = true;
+  const pushMerged = options.pushMerged !== false;
 
   try {
     const res = await fetch(getSyncApiUrl(`/data?key=${encodeURIComponent(key)}`));
     if (res.ok) {
       const result = await res.json();
       if (result.success && result.data) {
+        const cloudRevision = getCloudSyncRevision(result.data);
+        if (lastSeenCloudRevision !== null && cloudRevision === lastSeenCloudRevision) return;
+        lastSeenCloudRevision = cloudRevision;
+
         mergeUserSourceProfiles(result.data.sourceProfiles);
         mergeSyncedSourceSnapshots(result.data.sourceSnapshots);
         // ผสานชื่อเล่นในห้องแชท
@@ -1969,7 +2018,7 @@ async function pullAndMergeSyncData() {
         localStorage.setItem(STORAGE_HISTORY, JSON.stringify(mergedHist.slice(0, 500)));
 
         updateHistoryAndFavCounts();
-        pushSyncData(); // อัปโหลดข้อมูลล่าสุดกลับไปยืนยันบน KV
+        if (pushMerged) pushSyncData(); // ส่งข้อมูลรวมกลับเมื่อเชื่อมรหัสคลาวด์ครั้งแรก
 
         if (currentTagFilter === 'favorites' || currentTagFilter === 'history') {
           applyFilters();
@@ -1978,6 +2027,8 @@ async function pullAndMergeSyncData() {
     }
   } catch (e) {
     console.warn("Pull sync data error:", e);
+  } finally {
+    syncPullInFlight = false;
   }
 }
 
@@ -2008,10 +2059,11 @@ async function switchSyncKey(newKey) {
     // บันทึกรหัสใหม่ลงเครื่องนี้ถาวร
     currentSyncKey = cleanKey;
     localStorage.setItem(SYNC_STORAGE_KEY, cleanKey);
+    lastSeenCloudRevision = null;
     updateSyncKeyUI();
 
     // ดึงข้อมูลจากรหัสใหม่มาซิงก์ทันที
-    await pullAndMergeSyncData();
+    await pullAndMergeSyncData({ pushMerged: false });
     // ส่งข้อมูลรวมกลับขึ้นคลาวด์
     pushSyncData();
 
@@ -3294,8 +3346,8 @@ function updateLanguageFilterUI() {
 }
 
 async function ensureMangaDexLoaded(lang = 'en') {
-  if (mangadexLoadedLangs.has(lang) || mangadexLoading) return;
-  mangadexLoading = true;
+  if (mangadexLoadedLangs.has(lang) || mangadexLoadingLangs.has(lang)) return;
+  mangadexLoadingLangs.add(lang);
   try {
     const mdLatest = await fetchMangaDexBatch(24, 1, lang, 'latest');
     let mdPopular = [];
@@ -3333,11 +3385,13 @@ async function ensureMangaDexLoaded(lang = 'en') {
       try {
         sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
       } catch (e) {}
+      if (currentSourceFilter === 'mangadex' || selectedLanguages.has(lang)) applyFilters();
+      pushSyncData();
     }
   } catch (err) {
     console.warn("Error loading MangaDex items for " + lang + ":", err);
   } finally {
-    mangadexLoading = false;
+    mangadexLoadingLangs.delete(lang);
   }
 }
 
@@ -4833,11 +4887,15 @@ async function initAggregatorPage() {
         filteredList = [...allMangaList];
         setupHeroSpotlight(allMangaList);
         renderMangaCards();
+        updateSourceCounts();
         if (statusEl) statusEl.style.display = 'none';
         hasRenderedFromCache = true;
       }
     }
   } catch (e) {}
+
+  // ดึง MangaDex ภาษาอังกฤษตั้งแต่เปิดหน้า เพื่อให้จำนวนเว็บและรายการเริ่มต้นไม่ค้างเป็นศูนย์จนกว่าจะกดเลือก
+  ensureMangaDexLoaded('en');
 
   if (!hasRenderedFromCache && statusEl) {
     statusEl.style.display = 'block';
