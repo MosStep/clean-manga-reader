@@ -1068,6 +1068,7 @@ const KNOWN_MANGA_ALIASES = [
 // ==========================================================
 const mangadexLoadingLangs = new Set();
 const mangadexLoadedLangs = new Set();
+const mangadexLoadPromises = new Map();
 
 // 1. ดึงรายการมังงะยอดนิยม/อัปเดตล่าสุดจาก MangaDex (รองรับ en, ja, ko)
 async function fetchMangaDexBatch(limit = 24, page = 1, lang = 'en', orderType = 'latest') {
@@ -3345,57 +3346,64 @@ function updateLanguageFilterUI() {
   if (btnAll) btnAll.classList.toggle('active', isAll);
 }
 
-async function ensureMangaDexLoaded(lang = 'en') {
-  if (mangadexLoadedLangs.has(lang) || mangadexLoadingLangs.has(lang)) return;
+function ensureMangaDexLoaded(lang = 'en') {
+  if (mangadexLoadedLangs.has(lang)) return Promise.resolve();
+  if (mangadexLoadPromises.has(lang)) return mangadexLoadPromises.get(lang);
   mangadexLoadingLangs.add(lang);
-  try {
-    const mdLatest = await fetchMangaDexBatch(24, 1, lang, 'latest');
-    let mdPopular = [];
+  const loadPromise = (async () => {
     try {
-      mdPopular = await fetchMangaDexBatch(24, 1, lang, 'popular');
-    } catch (e) {}
-
-    const combined = [];
-    const hasCachedLanguage = allMangaList.some(m => m.sourceId === 'mangadex' && m.lang === lang);
-    const seenUrls = new Set(allMangaList.map(m => m.mangaUrl));
-    
-    // 1. เพิ่มเรื่องอัปเดตล่าสุดขึ้นก่อน
-    if (Array.isArray(mdLatest)) {
-      mdLatest.forEach(m => {
-        if (!seenUrls.has(m.mangaUrl)) {
-          seenUrls.add(m.mangaUrl);
-          combined.push(m);
-        }
-      });
-    }
-
-    // 2. เพิ่มเรื่องยอดนิยมต่อท้าย
-    if (Array.isArray(mdPopular)) {
-      mdPopular.forEach(m => {
-        if (!seenUrls.has(m.mangaUrl)) {
-          seenUrls.add(m.mangaUrl);
-          combined.push(m);
-        }
-      });
-    }
-
-    if (combined.length > 0) {
-      allMangaList = [...allMangaList, ...combined];
+      if (window.__mangaPriorityFeedReady) await window.__mangaPriorityFeedReady;
+      const mdLatest = await fetchMangaDexBatch(24, 1, lang, 'latest');
+      let mdPopular = [];
       try {
-        sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+        mdPopular = await fetchMangaDexBatch(24, 1, lang, 'popular');
       } catch (e) {}
+
+      const combined = [];
+      const hasCachedLanguage = allMangaList.some(m => m.sourceId === 'mangadex' && m.lang === lang);
+      const seenUrls = new Set(allMangaList.map(m => m.mangaUrl));
+
+      // 1. เพิ่มเรื่องอัปเดตล่าสุดขึ้นก่อน
+      if (Array.isArray(mdLatest)) {
+        mdLatest.forEach(m => {
+          if (!seenUrls.has(m.mangaUrl)) {
+            seenUrls.add(m.mangaUrl);
+            combined.push(m);
+          }
+        });
+      }
+
+      // 2. เพิ่มเรื่องยอดนิยมต่อท้าย
+      if (Array.isArray(mdPopular)) {
+        mdPopular.forEach(m => {
+          if (!seenUrls.has(m.mangaUrl)) {
+            seenUrls.add(m.mangaUrl);
+            combined.push(m);
+          }
+        });
+      }
+
+      if (combined.length > 0) {
+        allMangaList = [...allMangaList, ...combined];
+        try {
+          sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+        } catch (e) {}
+      }
+      if (combined.length > 0 || hasCachedLanguage) {
+        mangadexLoadedLangs.add(lang);
+        updateSourceCounts();
+        if (currentSourceFilter === 'mangadex' || selectedLanguages.has(lang)) applyFilters();
+        if (combined.length > 0) pushSyncData();
+      }
+    } catch (err) {
+      console.warn("Error loading MangaDex items for " + lang + ":", err);
+    } finally {
+      mangadexLoadingLangs.delete(lang);
+      mangadexLoadPromises.delete(lang);
     }
-    if (combined.length > 0 || hasCachedLanguage) {
-      mangadexLoadedLangs.add(lang);
-      updateSourceCounts();
-      if (currentSourceFilter === 'mangadex' || selectedLanguages.has(lang)) applyFilters();
-      if (combined.length > 0) pushSyncData();
-    }
-  } catch (err) {
-    console.warn("Error loading MangaDex items for " + lang + ":", err);
-  } finally {
-    mangadexLoadingLangs.delete(lang);
-  }
+  })();
+  mangadexLoadPromises.set(lang, loadPromise);
+  return loadPromise;
 }
 
 function setupLanguageFilter() {
@@ -4897,9 +4905,6 @@ async function initAggregatorPage() {
     }
   } catch (e) {}
 
-  // ดึง MangaDex ภาษาอังกฤษตั้งแต่เปิดหน้า เพื่อให้จำนวนเว็บและรายการเริ่มต้นไม่ค้างเป็นศูนย์จนกว่าจะกดเลือก
-  ensureMangaDexLoaded('en');
-
   if (!hasRenderedFromCache && statusEl) {
     statusEl.style.display = 'block';
     statusEl.innerHTML = `<div class="spinner"></div>กำลังรวบรวมเรื่องอัปเดตล่าสุดจาก ${CONFIG.SOURCES.length} เว็บชั้นนำ...`;
@@ -4912,15 +4917,22 @@ async function initAggregatorPage() {
   let isUiInitialized = hasRenderedFromCache;
   let completedSources = 0;
   const totalSources = CONFIG.SOURCES.length;
+  const prioritySources = CONFIG.SOURCES.filter(source => source.id !== 'nekopost');
+  const delayedSources = CONFIG.SOURCES.filter(source => source.id === 'nekopost');
   const loadedSourceMap = new Map();
   updateBgProgress(completedSources, totalSources);
+
+  let resolvePriorityFeedReady = null;
+  window.__mangaPriorityFeedReady = new Promise(resolve => {
+    resolvePriorityFeedReady = resolve;
+  });
 
   let notifyFirstSourceReady = null;
   const firstSourceReadyPromise = new Promise(resolve => {
     notifyFirstSourceReady = resolve;
   });
 
-  const fetchPromises = mapSourceQueue(CONFIG.SOURCES, async (source) => {
+  const fetchPromises = mapSourceQueue(prioritySources, async (source) => {
     try {
       const items = await fetchSingleSource(source, 1, 15000); // 15 วิในเบื้องหลัง
       completedSources++;
@@ -4966,7 +4978,144 @@ async function initAggregatorPage() {
       return [];
     }
   });
-  window.__mangaFeedReady = fetchPromises;
+
+  const allFeedPromise = fetchPromises.then(async () => {
+    const sourcesWithAdditionalData = new Set();
+    const refreshLoadedFeed = () => {
+      const finalInterleaved = interleaveSources(Array.from(loadedSourceMap.values()));
+      allMangaList = interleaveSources([mergeAndDeduplicate([...finalInterleaved, ...allMangaList])]);
+      try { sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList)); } catch (e) {}
+      updateSourceCounts();
+      updateSourceHealthUi();
+      if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) {
+        applyFilters();
+      }
+    };
+    const loadAdditionalPages = async sources => {
+      let sourcesWithMorePages = sources.filter(source => {
+        const firstPage = sourceHealthStatus[source.id]?.pages?.['1'];
+        return firstPage && firstPage.count > 0 && !!buildSourcePageUrl(source, 2);
+      });
+
+      for (let page = 2; page <= INITIAL_SOURCE_PAGES && sourcesWithMorePages.length; page++) {
+        let pageDone = 0;
+        const pageSources = sourcesWithMorePages.filter(source => !!buildSourcePageUrl(source, page));
+        if (!pageSources.length) break;
+        const pageResults = new Map();
+        if (bgBadge && bgText) {
+          bgBadge.style.display = 'inline-flex';
+          bgText.textContent = `กำลังดึงหน้า ${page} (0/${pageSources.length} เว็บ)...`;
+        }
+        await mapSourceQueue(pageSources, async source => {
+          const items = await fetchSingleSource(source, page, 15000);
+          if (items.length) {
+            pageResults.set(source.id, items);
+            sourcesWithAdditionalData.add(source.id);
+          }
+          pageDone++;
+          if (bgBadge && bgText) bgText.textContent = `กำลังดึงหน้า ${page} (${pageDone}/${pageSources.length} เว็บ)...`;
+          return items;
+        });
+
+        pageResults.forEach((items, sourceId) => {
+          const previous = loadedSourceMap.get(sourceId) || [];
+          loadedSourceMap.set(sourceId, mergeAndDeduplicate([...previous, ...items]));
+        });
+        sourcesWithMorePages = pageSources.filter(source => pageResults.has(source.id));
+        loadedPagesPerSource = Math.max(loadedPagesPerSource, page);
+
+        if (pageResults.size) refreshLoadedFeed();
+      }
+    };
+
+    try {
+      updateBgProgress(completedSources, totalSources);
+      if (loadedSourceMap.size > 0) refreshLoadedFeed();
+
+      clearTimeout(bgHideTimer);
+      if (bgBadge && bgText) bgBadge.style.display = 'inline-flex';
+
+      // ดึงหน้าถัดไปของเว็บหลักให้เสร็จก่อน เพื่อไม่ให้ Nekopost/MangaDex แย่งช่องคำขอ
+      await loadAdditionalPages(prioritySources);
+
+      if (delayedSources.length && bgBadge && bgText) {
+        bgBadge.style.display = 'inline-flex';
+        bgText.textContent = 'กำลังดึง Nekopost ต่อท้ายเว็บอื่น...';
+      }
+      await mapSourceQueue(delayedSources, async source => {
+        try {
+          const items = await fetchSingleSource(source, 1, 15000);
+          completedSources++;
+          updateBgProgress(completedSources, totalSources);
+          if (items.length) {
+            loadedSourceMap.set(source.id, items);
+            const interleaved = interleaveSources(Array.from(loadedSourceMap.values()), false);
+            allMangaList = interleaveSources([mergeAndDeduplicate([...interleaved, ...allMangaList])]);
+            try { sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList)); } catch (e) {}
+            if (!isUiInitialized) {
+              isUiInitialized = true;
+              if (statusEl) statusEl.style.display = 'none';
+              setupHeroSpotlight(allMangaList);
+              applyFilters();
+            } else {
+              updateSourceCounts();
+              updateSourceHealthUi();
+              if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) {
+                applyFilters();
+              }
+            }
+          } else {
+            updateSourceHealthUi();
+          }
+          return items;
+        } catch (e) {
+          completedSources++;
+          updateBgProgress(completedSources, totalSources);
+          updateSourceHealthUi();
+          return [];
+        }
+      });
+
+      await loadAdditionalPages(delayedSources);
+      if (resolvePriorityFeedReady) {
+        resolvePriorityFeedReady();
+        resolvePriorityFeedReady = null;
+      }
+
+      if (bgBadge && bgText) {
+        clearTimeout(bgHideTimer);
+        bgBadge.style.display = 'inline-flex';
+        bgText.textContent = 'กำลังดึง MangaDex ต่อท้ายเว็บอื่น...';
+      }
+      await ensureMangaDexLoaded('en');
+      if (!isUiInitialized && allMangaList.length > 0) {
+        isUiInitialized = true;
+        if (statusEl) statusEl.style.display = 'none';
+        setupHeroSpotlight(allMangaList);
+        applyFilters();
+      }
+
+      pushSyncData();
+      if (bgBadge && bgText) {
+        bgText.textContent = `✓ ดึงเว็บหลักหน้า 1–${loadedPagesPerSource} ครบ แล้วต่อด้วย Nekopost และ MangaDex (${sourcesWithAdditionalData.size} เว็บมีข้อมูลหน้าเพิ่ม)`;
+        bgHideTimer = setTimeout(() => { bgBadge.style.display = 'none'; }, 3000);
+      }
+    } catch (error) {
+      console.error('Initial source pagination failed:', error);
+    }
+  }).finally(() => {
+    if (resolvePriorityFeedReady) {
+      resolvePriorityFeedReady();
+      resolvePriorityFeedReady = null;
+    }
+    isInitialSourceLoadBusy = false;
+    initAutomaticFeedRefresh();
+    if (loadMoreBtn) {
+      loadMoreBtn.disabled = false;
+      loadMoreBtn.querySelector('span').textContent = 'โหลดเรื่องเพิ่มเติม';
+    }
+  });
+  window.__mangaFeedReady = allFeedPromise;
 
   // รอสูงสุด 1 วินาที หรือจนกว่าเว็บแรกจะตอบกลับ เพื่อปลด Spinner และเปิดหน้าแรกให้เร็วที่สุด
   await Promise.race([
@@ -4982,81 +5131,6 @@ async function initAggregatorPage() {
     applyFilters();
   }
 
-  // ปล่อยให้ทุกเว็บที่เหลือทำงานในเบื้องหลังต่อไปอย่างเงียบๆ โดยไม่บล็อกผู้ใช้
-  fetchPromises.then(async () => {
-    updateBgProgress(totalSources, totalSources);
-    if (loadedSourceMap.size > 0) {
-      const finalInterleaved = interleaveSources(Array.from(loadedSourceMap.values()));
-      allMangaList = interleaveSources([mergeAndDeduplicate([...finalInterleaved, ...allMangaList])]);
-      try {
-        sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
-      } catch (e) {}
-      updateSourceCounts();
-      updateSourceHealthUi();
-      if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) {
-        applyFilters();
-      }
-    }
-
-    clearTimeout(bgHideTimer);
-    if (bgBadge && bgText) {
-      bgBadge.style.display = 'inline-flex';
-    }
-    let sourcesWithMorePages = CONFIG.SOURCES.filter(source => {
-      const firstPage = sourceHealthStatus[source.id]?.pages?.['1'];
-      return firstPage && firstPage.count > 0 && !!buildSourcePageUrl(source, 2);
-    });
-    const sourcesWithAdditionalData = new Set();
-
-    for (let page = 2; page <= INITIAL_SOURCE_PAGES && sourcesWithMorePages.length; page++) {
-      let pageDone = 0;
-      const pageSources = sourcesWithMorePages.filter(source => !!buildSourcePageUrl(source, page));
-      if (!pageSources.length) break;
-      const pageResults = new Map();
-      if (bgBadge && bgText) bgText.textContent = `กำลังดึงหน้า ${page} (0/${pageSources.length} เว็บ)...`;
-      await mapSourceQueue(pageSources, async source => {
-        const items = await fetchSingleSource(source, page, 15000);
-        if (items.length) {
-          pageResults.set(source.id, items);
-          sourcesWithAdditionalData.add(source.id);
-        }
-        pageDone++;
-        if (bgBadge && bgText) bgText.textContent = `กำลังดึงหน้า ${page} (${pageDone}/${pageSources.length} เว็บ)...`;
-        return items;
-      });
-
-      pageResults.forEach((items, sourceId) => {
-        const previous = loadedSourceMap.get(sourceId) || [];
-        loadedSourceMap.set(sourceId, mergeAndDeduplicate([...previous, ...items]));
-      });
-      sourcesWithMorePages = pageSources.filter(source => pageResults.has(source.id));
-      loadedPagesPerSource = page;
-
-      if (pageResults.size) {
-        const finalInterleaved = interleaveSources(Array.from(loadedSourceMap.values()));
-        allMangaList = interleaveSources([mergeAndDeduplicate([...finalInterleaved, ...allMangaList])]);
-        try { sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList)); } catch (e) {}
-        updateSourceCounts();
-        updateSourceHealthUi();
-        if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) applyFilters();
-      }
-    }
-
-    pushSyncData();
-    if (bgBadge && bgText) {
-      bgText.textContent = `✓ ดึงหน้า 1–${loadedPagesPerSource} แล้ว (${sourcesWithAdditionalData.size} เว็บมีข้อมูลเพิ่ม)`;
-      bgHideTimer = setTimeout(() => { bgBadge.style.display = 'none'; }, 3000);
-    }
-  }).catch(error => {
-    console.error('Initial source pagination failed:', error);
-  }).finally(() => {
-    isInitialSourceLoadBusy = false;
-    initAutomaticFeedRefresh();
-    if (loadMoreBtn) {
-      loadMoreBtn.disabled = false;
-      loadMoreBtn.querySelector('span').textContent = 'โหลดเรื่องเพิ่มเติม';
-    }
-  });
 }
 
 // ฟังก์ชันคืนค่าหน้าต่างเลือกตอน (Restore Chapter Modal) เมื่อกลับมาจากหน้า Reader
