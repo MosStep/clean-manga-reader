@@ -497,53 +497,85 @@ function parseNtrNajaHtml(html, sourceInfo) {
   const doc = parser.parseFromString(html, 'text/html');
   const items = [];
   const seenUrls = new Set();
+  const ntrCache = getNtrChapterCache();
+  const cards = new Set(doc.querySelectorAll('a.ntr-genre-card, .ntr-genre-card, a[href*="/manga/m-"]'));
 
-  const cards = doc.querySelectorAll('a.ntr-genre-card, .ntr-genre-card, a[href*="/manga/m-"]');
-  cards.forEach(card => {
-    let mangaUrl = card.getAttribute('href') || '';
-    if (!mangaUrl || seenUrls.has(mangaUrl)) return;
-    seenUrls.add(mangaUrl);
-
-    let title = card.getAttribute('data-title') || '';
-    const titleEl = card.querySelector('.ntr-genre-card__title, h2, h3');
-    if (titleEl && !title) title = titleEl.textContent.trim();
-
-    const metaEl = card.querySelector('.ntr-genre-card__meta');
-    const ntrCache = getNtrChapterCache();
-    let latestEp = ntrCache[mangaUrl] || 'ตอนล่าสุด';
-    if (!latestEp || latestEp === 'ตอนล่าสุด') {
-      if (metaEl) {
-        const metaText = metaEl.textContent.trim();
-        // หากเป็นวันที่ เช่น "อัปเดต 2026-09-18" ห้ามนำมาเป็นชื่อตอน ให้ใช้ "ตอนล่าสุด"
-        if (!/อัปเดต|อัพเดต|\b\d{4}-\d{2}-\d{2}\b/i.test(metaText)) {
-          latestEp = metaText;
-        }
+  // Some listing versions keep the same manga URLs but no longer use the NTR card class.
+  // Accept only one-segment manga detail links; this excludes listing, paging and taxonomy URLs.
+  doc.querySelectorAll('a[href*="/manga/"]').forEach(anchor => {
+    try {
+      const target = new URL(anchor.getAttribute('href'), sourceInfo.url);
+      const slug = target.pathname.match(/^\/manga\/([^/]+)\/?$/i)?.[1] || '';
+      if (matchesSourceHost(target.href, sourceInfo.url) && slug && !/^(?:page|genre|tag|category|search)$/i.test(slug)) {
+        cards.add(anchor);
       }
-    }
-
-    const imgEl = card.querySelector('img.ntr-genre-thumb__img, img');
-    let cover = extractCoverUrl(imgEl, sourceInfo.url);
-
-    if (mangaUrl.startsWith('/')) mangaUrl = sourceInfo.url + mangaUrl;
-
-    if (title) {
-      items.push({
-        title,
-        mangaUrl,
-        cover,
-        latestEp,
-        type: 'Manhwa',
-        sourceId: sourceInfo.id,
-        sourceName: sourceInfo.name,
-        sourceUrl: sourceInfo.url,
-        sourceType: 'ntrnaja',
-        readable: sourceInfo.readable !== false,
-        isCoin: !!sourceInfo.isCoin,
-        icon: sourceInfo.icon || '🔒'
-      });
-    }
+    } catch (e) {}
   });
 
+  cards.forEach(candidate => {
+    const link = candidate.matches('a[href]')
+      ? candidate
+      : candidate.querySelector('a[href*="/manga/"]');
+    if (!link) return;
+
+    let target;
+    try { target = new URL(link.getAttribute('href'), sourceInfo.url); } catch (e) { return; }
+    const slug = target.pathname.match(/^\/manga\/([^/]+)\/?$/i)?.[1] || '';
+    if (!matchesSourceHost(target.href, sourceInfo.url) || !slug || /^(?:page|genre|tag|category|search)$/i.test(slug)) return;
+    const mangaUrl = target.href;
+    if (seenUrls.has(mangaUrl)) return;
+
+    const card = candidate.matches('a[href]')
+      ? (candidate.closest('.ntr-genre-card, article, li, .manga-card, .series-card, .item') || candidate)
+      : candidate;
+    const titleEl = card.querySelector('.ntr-genre-card__title, h1, h2, h3, h4, [class*="title"], [class*="name"]');
+    const imgEl = card.querySelector('img.ntr-genre-thumb__img, img');
+    const title = [
+      card.getAttribute('data-title'),
+      link.getAttribute('data-title'),
+      titleEl?.textContent,
+      link.getAttribute('title'),
+      link.getAttribute('aria-label'),
+      imgEl?.getAttribute('alt'),
+      link.textContent
+    ].map(value => (value || '').trim().replace(/\s+/g, ' '))
+      .find(value => value.length >= 2 && value.length <= 180 && !/^(อ่านเลย|อ่านต่อ|รายละเอียด|ดูทั้งหมด)$/i.test(value));
+    if (!title) return;
+
+    const metaEl = card.querySelector('.ntr-genre-card__meta, [class*="episode"], [class*="meta"], small');
+    const metaText = (metaEl?.textContent || '').trim().replace(/\s+/g, ' ');
+    // Never use a date/update label as a chapter number.
+    const metaIsDate = /อัปเดต|อัพเดต|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/i.test(metaText);
+    const latestEp = ntrCache[mangaUrl] || ntrCache[link.getAttribute('href')] ||
+      (!metaIsDate && metaText ? metaText : 'ตอนล่าสุด');
+
+    seenUrls.add(mangaUrl);
+    items.push({
+      title,
+      mangaUrl,
+      cover: extractCoverUrl(imgEl, sourceInfo.url),
+      latestEp,
+      type: 'Manhwa',
+      sourceId: sourceInfo.id,
+      sourceName: sourceInfo.name,
+      sourceUrl: sourceInfo.url,
+      sourceType: 'ntrnaja',
+      readable: sourceInfo.readable !== false,
+      isCoin: !!sourceInfo.isCoin,
+      icon: sourceInfo.icon || '🔒'
+    });
+  });
+
+  // Last-resort shared card parser for layout changes, while retaining NTR coin/source flags.
+  if (!items.length) {
+    return parseGenericSourceHtml(html, sourceInfo, 'ntrnaja').map(item => ({
+      ...item,
+      type: 'Manhwa',
+      readable: sourceInfo.readable !== false,
+      isCoin: !!sourceInfo.isCoin,
+      icon: sourceInfo.icon || '🔒'
+    }));
+  }
   return items;
 }
 
