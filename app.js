@@ -2963,7 +2963,7 @@ function buildSourcePageUrl(source, page) {
   if (source.type === 'madara') return `${source.url.replace(/\/$/, '')}/manga/page/${page}/?m_orderby=latest`;
   if (source.type === 'whytoon') return `${source.url.replace(/\/$/, '')}/browse/page/${page}`;
   if (source.type === 'readtoon') return `${source.url.replace(/\/$/, '')}/discover/manga?page=${page}`;
-  if (source.type === 'ntrnaja') return `${source.url.replace(/\/$/, '')}/manga/page/${page}/?sort=update`;
+  if (source.type === 'ntrnaja') return `${source.url.replace(/\/$/, '')}/manga/page/${page}/`;
   if (source.type === 'mangatown') return `${source.url.replace(/\/$/, '')}/latest/${page}.htm`;
   if (source.type === 'asurascans') return `${source.url.replace(/\/$/, '')}/comics?page=${page}`;
   if (source.type === 'bullymanga') return `${source.url.replace(/\/$/, '')}/page/${page}`;

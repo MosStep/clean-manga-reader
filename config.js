@@ -35,7 +35,7 @@ const CONFIG = {
     { id: 'chibi-manga', name: 'Chibi-Manga', url: 'https://chibi-manga.com', type: 'mangareader', icon: '🧸', readable: true, isCoin: false, lang: 'th' },
     { id: 'nano-manga', name: 'Nano-Manga', url: 'https://nano-manga.com', type: 'madara', icon: '🧬', readable: true, isCoin: false, lang: 'th' },
     { id: 'ecchi-doujin', name: 'Ecchi-Doujin', url: 'https://ecchi-doujin.com', type: 'mangareader', icon: '🔞', readable: true, isCoin: false, lang: 'th' },
-    { id: 'ntrnaja', name: 'NTRnaja', url: 'https://ntrnaja.com', listingUrl: 'https://ntrnaja.com/manga/?sort=update', type: 'ntrnaja', icon: '🔥', readable: false, isCoin: true, lang: 'th' },
+    { id: 'ntrnaja', name: 'NTRnaja', url: 'https://ntrnaja.com', listingUrl: 'https://ntrnaja.com/manga/', type: 'ntrnaja', icon: '🔥', readable: false, isCoin: true, lang: 'th' },
     { id: 'bully-manga', name: 'Bully Manga', url: 'https://bully-manga.com', type: 'bullymanga', icon: '🐂', readable: true, isCoin: false, lang: 'th' },
     { id: 'six-manga', name: 'SixManga', url: 'https://www.sixmanga.com', type: 'madara', icon: '6️⃣', readable: true, isCoin: false, lang: 'th' },
     { id: 'mangablackcat', name: 'MangaBlackCat', url: 'https://mangablackcat.com', type: 'mangablackcat', icon: '🐈‍⬛', readable: true, isCoin: false, lang: 'th' },

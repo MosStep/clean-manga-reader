@@ -25,7 +25,7 @@
 | Manga-LC | Madara | `.wp-manga-chapter` และ `.reading-content` | หน้าเพิ่มใช้ pagination ของ Madara |
 | Nano-Manga | Madara | `.wp-manga-chapter` และ `.reading-content` | หน้าเพิ่มใช้ pagination ของ Madara |
 | SixManga | Madara | วิธีพิเศษ: แกะสคริปต์จัดเรียงภาพ `sovleImage` / `displayImage` ก่อนแสดงภาพ | หน้าเพิ่มใช้ pagination ของ Madara |
-| NTRnaja | หน้ารายการเริ่มที่ `/manga/?sort=update`; parser การ์ดเฉพาะและ fallback การ์ดทั่วไป โดยยืนยันลิงก์เรื่องใน host/path `/manga/{slug}` | อ่าน `chapter_preloaded_images`; สถานะล็อก/ฟรีดูจาก badge และข้อความแต้ม; ไม่ใช้วันที่อัปเดตแทนเลขตอน | หน้าแรก `/manga/?sort=update`; หน้าถัดไป `/manga/page/{n}/?sort=update` |
+| NTRnaja | หน้ารายการเริ่มที่ `/manga/`; parser การ์ดเฉพาะและ fallback การ์ดทั่วไป โดยยืนยันลิงก์เรื่องใน host/path `/manga/{slug}` | อ่าน `chapter_preloaded_images`; สถานะล็อก/ฟรีดูจาก badge และข้อความแต้ม; ไม่ใช้วันที่อัปเดตแทนเลขตอน | หน้าแรก `/manga/`; หน้าถัดไป `/manga/page/{n}/` |
 | Bully Manga | parser เฉพาะการ์ด `.mc-card`, `.m2-card` และลิงก์ตอน | แกะ `IMAGE_MAP`; สำรองด้วย `.manga-img`, `.entry-content` และรูป lazy-load | หน้าเพิ่ม `/page/{n}/` |
 | MangaBlackCat | parser เฉพาะข้อมูล Alpine/JSON และการ์ดเรื่อง; อ่านฟีดล่าสุดและยอดนิยม | แกะ `boot: JSON.parse(...)` และ URL ภาพ `cdn.mangablackcat.com` | หน้าเพิ่ม `/latest?page={n}`; ส่ง Referer ให้ CDN |
 | Asura Scans | parser เฉพาะการ์ดรายการ Comics | หา WebP จาก `cdn.asurascans.com/asura-images/chapters/` | หน้าเพิ่ม `/comics?page={n}`; ภาษาอังกฤษ |
