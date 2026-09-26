@@ -363,6 +363,10 @@ function parseMangaReaderHtml(html, sourceInfo) {
       latestEp = latestEp.replace(/\s*\d+\s*(?:ชั่วโมง|นาที|วัน|วินาที|ชม\.|วัน|เดือน|ปี|hours?|mins?|days?|ago)\s*(?:ที่แล้ว|ago)?/gi, '').trim() || latestEp;
 
       let type = typeEl ? typeEl.textContent.trim() : (sourceInfo.name.includes('Doujin') || sourceInfo.name.includes('Ecchi') ? '18+ / Doujin' : 'Manga');
+      let tags = [];
+      if (sourceInfo.name.includes('Doujin') || sourceInfo.name.includes('Ecchi') || sourceInfo.id === 'ecchi-doujin') {
+        tags.push('18+', 'Doujin', 'Ecchi');
+      }
       let cover = extractCoverUrl(imgEl, sourceInfo.url);
 
       if (mangaUrl.startsWith('/')) mangaUrl = sourceInfo.url + mangaUrl;
@@ -375,6 +379,7 @@ function parseMangaReaderHtml(html, sourceInfo) {
           cover,
           latestEp,
           type,
+          tags,
           sourceId: sourceInfo.id,
           sourceName: sourceInfo.name,
           sourceUrl: sourceInfo.url,
@@ -565,7 +570,8 @@ function parseNtrNajaHtml(html, sourceInfo) {
       mangaUrl,
       cover: extractCoverUrl(imgEl, sourceInfo.url),
       latestEp,
-      type: 'Manhwa',
+      type: '18+ Manhwa',
+      tags: ['18+', 'Doujin', 'Adult'],
       sourceId: sourceInfo.id,
       sourceName: sourceInfo.name,
       sourceUrl: sourceInfo.url,
@@ -580,7 +586,8 @@ function parseNtrNajaHtml(html, sourceInfo) {
   if (!items.length) {
     return parseGenericSourceHtml(html, sourceInfo, 'ntrnaja').map(item => ({
       ...item,
-      type: 'Manhwa',
+      type: '18+ Manhwa',
+      tags: ['18+', 'Doujin', 'Adult'],
       readable: sourceInfo.readable !== false,
       isCoin: !!sourceInfo.isCoin,
       icon: sourceInfo.icon || '🔒'
@@ -2929,6 +2936,10 @@ function mergeAndDeduplicate(list) {
       if (!existing.cover && m.cover) existing.cover = m.cover;
       if (m._searchQuery) existing._searchQuery = m._searchQuery;
       if (existing.isPopular && !m.isPopular) existing.isPopular = false;
+      if (m.genreTag) existing.genreTag = m.genreTag;
+      if (Array.isArray(m.tags) && m.tags.length > 0) {
+        existing.tags = Array.from(new Set([...(existing.tags || []), ...m.tags]));
+      }
 
       const isNewFree = m.readable !== false;
       const isExistingFree = existing.readable !== false;
@@ -2949,6 +2960,10 @@ function mergeAndDeduplicate(list) {
         m.altSources = mergedAlts;
         if (existing._searchQuery && !m._searchQuery) {
           m._searchQuery = existing._searchQuery;
+        }
+        if (existing.genreTag && !m.genreTag) m.genreTag = existing.genreTag;
+        if (Array.isArray(existing.tags) && existing.tags.length > 0) {
+          m.tags = Array.from(new Set([...(m.tags || []), ...existing.tags]));
         }
 
         // เชื่อมคีย์ทั้งหมดไปยังตัวหลักใหม่
@@ -3799,6 +3814,100 @@ function setupLanguageFilter() {
   updateLanguageFilterUI();
 }
 
+function is18PlusManga(m) {
+  if (!m) return false;
+  const sId = (m.sourceId || '').toLowerCase();
+  const sName = (m.sourceName || '').toLowerCase();
+  if (sId === 'ecchi-doujin' || sName.includes('ecchi') || sName.includes('doujin') || sId === 'ntrnaja') return true;
+
+  const typeLower = (m.type || '').toLowerCase();
+  if (typeLower.includes('doujin') || typeLower.includes('18+') || typeLower.includes('ecchi') || typeLower.includes('hentai')) return true;
+
+  const tagsLower = Array.isArray(m.tags) ? m.tags.map(t => String(t).toLowerCase()) : [];
+  if (tagsLower.some(t => t.includes('doujin') || t.includes('18+') || t.includes('ecchi') || t.includes('hentai') || t.includes('erotica') || t.includes('adult') || t.includes('mature'))) return true;
+
+  if (Array.isArray(m.altSources) && m.altSources.some(alt => is18PlusManga(alt))) return true;
+  return false;
+}
+
+function isRomanceManga(m) {
+  if (!m) return false;
+  // กฎเหล็ก: ต้องไม่เป็น 18+ หรือมาจากเว็บ 18+ เด็ดขาด
+  if (is18PlusManga(m)) return false;
+
+  if (m.genreTag === 'romance') return true;
+
+  const tagsLower = Array.isArray(m.tags) ? m.tags.map(t => String(t).toLowerCase()) : [];
+  if (tagsLower.some(t => t.includes('romance') || t.includes('โรแมนติก'))) return true;
+
+  if (Array.isArray(m.altSources) && m.altSources.some(alt => isRomanceManga(alt))) return true;
+  return false;
+}
+
+let isRomanceFeedLoading = false;
+let isRomanceFeedLoaded = false;
+
+async function ensureRomanceFeedLoaded() {
+  if (isRomanceFeedLoaded || isRomanceFeedLoading) return;
+  isRomanceFeedLoading = true;
+
+  const romanceSources = [
+    { id: 'go-manga', url: 'https://www.go-manga.com/genres/romance/', name: 'Go-Manga', icon: '⚡' },
+    { id: 'slow-manga', url: 'https://www.slow-manga.net/genres/romance/', name: 'Slow-Manga', icon: '🐢' },
+    { id: 'mangastep', url: 'https://mangastep.com/genres/romance/', name: 'MangaStep', icon: '🐾' },
+    { id: 'fin-manga', url: 'https://www.fin-manga.com/genres/romance/', name: 'Fin-Manga', icon: '🌸' },
+    { id: 'manga-kimi', url: 'https://www.mangakimi.com/genres/romance/', name: 'MangaKimi', icon: '🌷' }
+  ];
+
+  const bgBadge = document.getElementById('bgLoadingBadge');
+  const bgText = document.getElementById('bgLoadingText');
+  if (bgBadge && bgText) {
+    bgBadge.style.display = 'inline-flex';
+    bgText.textContent = 'กำลังดึงหมวดโรแมนติกจากต้นทาง...';
+  }
+
+  try {
+    const fetchPromises = romanceSources.map(async (rs) => {
+      try {
+        const html = await fetchViaProxy(rs.url, {}, 10000);
+        const parsed = parseMangaReaderHtml(html, {
+          id: rs.id,
+          name: rs.name,
+          url: new URL(rs.url).origin,
+          icon: rs.icon,
+          readable: true,
+          lang: 'th'
+        });
+        return (parsed || []).map(item => ({
+          ...item,
+          tags: ['Romance', 'โรแมนติก'],
+          genreTag: 'romance',
+          lang: 'th'
+        }));
+      } catch (err) {
+        return [];
+      }
+    });
+
+    const results = await Promise.all(fetchPromises);
+    const flatItems = results.flat();
+    if (flatItems.length > 0) {
+      allMangaList = mergeAndDeduplicate([...flatItems, ...allMangaList]);
+      isRomanceFeedLoaded = true;
+      saveCachedMangaFeed();
+      updateSourceCounts();
+      if (currentTagFilter === 'romance') {
+        applyFilters();
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load romance genre feed:', e);
+  } finally {
+    isRomanceFeedLoading = false;
+    if (bgBadge) bgBadge.style.display = 'none';
+  }
+}
+
 // 10. ระบบกรองข้อมูล (Filter Engine)
 function applyFilters() {
   const historyToolbar = document.getElementById('historyToolbar');
@@ -3842,7 +3951,7 @@ function applyFilters() {
     // 2. Tag filter (หมวดหมู่ทั่วไป)
     if (currentTagFilter !== 'all' && currentTagFilter !== 'history' && currentTagFilter !== 'favorites') {
       const typeLower = (m.type || '').toLowerCase();
-      const tagsLower = Array.isArray(m.tags) ? m.tags.map(t => t.toLowerCase()) : [];
+      const tagsLower = Array.isArray(m.tags) ? m.tags.map(t => String(t).toLowerCase()) : [];
       if (currentTagFilter === 'manhwa') {
         if (!typeLower.includes('manhwa') && !m.title.includes('เกาหลี') && !tagsLower.includes('manhwa')) return false;
       } else if (currentTagFilter === 'manhua') {
@@ -3850,11 +3959,11 @@ function applyFilters() {
       } else if (currentTagFilter === 'manga') {
         if (!typeLower.includes('manga') && !tagsLower.includes('manga')) return false;
       } else if (currentTagFilter === 'romance') {
-        if (!m.sourceName.includes('Fin') && !m.title.includes('รัก') && !m.title.includes('สาว') && !m.title.includes('ภรรยา') && !tagsLower.includes('romance')) return false;
+        if (!isRomanceManga(m)) return false;
       } else if (currentTagFilter === 'action') {
         if (!m.title.includes('เทพ') && !m.title.includes('จุติ') && !m.title.includes('เลเวล') && !m.title.includes('ดาบ') && !m.title.includes('ราชา') && !m.title.includes('ยุทธ') && !tagsLower.includes('action')) return false;
       } else if (currentTagFilter === 'doujin') {
-        if (!m.sourceName.includes('Ecchi') && !m.sourceName.includes('Doujin') && !typeLower.includes('doujin') && !typeLower.includes('18+') && !tagsLower.includes('doujinshi')) return false;
+        if (!is18PlusManga(m)) return false;
       }
     }
 
@@ -5121,6 +5230,9 @@ async function initAggregatorPage() {
         btn.classList.add('active');
         currentTagFilter = btn.getAttribute('data-filter') || 'all';
         applyFilters();
+        if (currentTagFilter === 'romance') {
+          ensureRomanceFeedLoaded();
+        }
       });
     }
   });
@@ -6661,6 +6773,19 @@ async function openChapterModal(manga, activeSource = null) {
           console.warn('Failed to resolve MangaKimi series URL:', e);
         }
       }
+
+      // ดึงแท็ก Genre จากหน้ารายละเอียดของเรื่อง เพื่อจัดหมวดหมู่ให้แม่นยำ 100%
+      try {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const genreNodes = doc.querySelectorAll('.mgen a, .genres-content a, .seriestugenre a, .genres a, .s-desc [href*="/genre/"], [class*="genre"] a');
+        if (genreNodes.length > 0) {
+          const extractedTags = Array.from(genreNodes).map(a => a.textContent.trim()).filter(Boolean);
+          if (extractedTags.length > 0) {
+            manga.tags = Array.from(new Set([...(manga.tags || []), ...extractedTags]));
+            currentSource.tags = manga.tags;
+          }
+        }
+      } catch (e) {}
 
       // สำหรับ MangaBlackCat: ตรวจสอบการแบ่งหน้าตอน (Pagination) เช่น หน้า 1 - 6
       if (currentSource.sourceType === 'mangablackcat') {
