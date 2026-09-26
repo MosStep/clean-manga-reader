@@ -645,6 +645,8 @@ export default {
         refererHeader = "https://www.sixmanga.com/";
       } else if (origin.includes("mangablackcat") || targetUrl.includes("mangablackcat")) {
         refererHeader = "https://mangablackcat.com/";
+      } else if (origin.includes("oremanga") || targetUrl.includes("oremanga")) {
+        refererHeader = "https://www.oremanga.net/";
       }
 
       const fetchOptions = {

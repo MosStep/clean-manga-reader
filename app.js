@@ -1131,6 +1131,68 @@ function parseMangaBlackCatHtml(html, sourceInfo, isPopular = false) {
   return items;
 }
 
+// 11. แกะข้อมูลจาก Oremanga (.flexbox4-item / .flexbox-item) พร้อมดึงภาพปกแม่นยำ 100%
+function parseOreMangaHtml(html, sourceInfo) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const items = [];
+  const seenUrls = new Set();
+
+  const cards = doc.querySelectorAll('.flexbox4-item, .flexbox-item');
+  cards.forEach(card => {
+    try {
+      const link = card.querySelector('.title a, .flexbox-title a, a[href*="/series/"], .flexbox4-thumb a');
+      if (!link) return;
+
+      let mangaUrl = (link.getAttribute('href') || '').trim();
+      if (!mangaUrl || mangaUrl === '#' || mangaUrl.includes('/genre/') || mangaUrl.includes('/tag/')) return;
+      if (mangaUrl.startsWith('/')) mangaUrl = sourceInfo.url.replace(/\/$/, '') + mangaUrl;
+      if (seenUrls.has(mangaUrl)) return;
+
+      const titleEl = card.querySelector('.title a, .flexbox-title a, .title, .flexbox-title, h2, h3');
+      let title = (titleEl ? titleEl.textContent : (link.getAttribute('title') || '')).trim().replace(/\s+/g, ' ');
+      if (!title || title.length < 2) return;
+
+      const imgEl = card.querySelector('.flexbox4-thumb img, .flexbox-thumb img, img');
+      let cover = extractCoverUrl(imgEl, sourceInfo.url);
+
+      const epEl = card.querySelector('ul.chapter li a, .chapter a, .flexch-infoz a, .flexbox-number');
+      let latestEp = 'ตอนล่าสุด';
+      if (epEl) {
+        const epText = epEl.textContent.trim().replace(/\s+/g, ' ');
+        const epMatch = epText.match(/(?:ตอนที่|ch\.?|ep\.?)\s*(\d+(?:\.\d+)?)/i) || epText.match(/^(\d+(?:\.\d+)?)$/);
+        if (epMatch) {
+          latestEp = `ตอนที่ ${epMatch[1]}`;
+        } else if (epText && !/^\d+$/.test(epText)) {
+          latestEp = epText;
+        }
+      }
+
+      const typeEl = card.querySelector('.type, span.type');
+      const type = typeEl ? typeEl.textContent.trim() : 'Manga';
+
+      seenUrls.add(mangaUrl);
+      items.push({
+        title,
+        mangaUrl,
+        cover,
+        latestEp,
+        type,
+        sourceId: sourceInfo.id,
+        sourceName: sourceInfo.name,
+        sourceUrl: sourceInfo.url,
+        sourceType: 'oremanga',
+        readable: true,
+        isCoin: false,
+        icon: sourceInfo.icon || '🗡️',
+        lang: sourceInfo.lang || 'th'
+      });
+    } catch (e) {}
+  });
+
+  return items;
+}
+
 // รายชื่อจับคู่เรื่องข้ามเว็บที่เป็นเรื่องเดียวกันแต่ชื่อต่างกัน (Aliases Map)
 const KNOWN_MANGA_ALIASES = [
   {
@@ -2968,6 +3030,7 @@ function buildSourcePageUrl(source, page) {
   if (source.type === 'asurascans') return `${source.url.replace(/\/$/, '')}/comics?page=${page}`;
   if (source.type === 'bullymanga') return `${source.url.replace(/\/$/, '')}/page/${page}`;
   if (source.type === 'mangablackcat') return `${source.url.replace(/\/$/, '')}/latest?page=${page}`;
+  if (source.type === 'oremanga') return `${source.url.replace(/\/$/, '')}/page/${page}/`;
   return '';
 }
 
@@ -2975,7 +3038,7 @@ function parseGenericSourceHtml(html, sourceInfo, parserType = 'mangareader') {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const items = [];
   const seen = new Set();
-  const cardSelector = '.bsx, .uta, .page-item-detail, .c-tabs-item__content, .manga-card, .series-card, .manga-item, .comic-item, article, .item, li';
+  const cardSelector = '.bsx, .uta, .page-item-detail, .c-tabs-item__content, .manga-card, .series-card, .manga-item, .comic-item, .flexbox4-item, .flexbox-item, article, .item, li';
   const anchors = doc.querySelectorAll('a[href]');
   anchors.forEach(anchor => {
     let href = (anchor.getAttribute('href') || '').trim();
@@ -3272,6 +3335,7 @@ function parseSourceListingHtml(html, source) {
     asurascans: parseAsuraScansHtml,
     bullymanga: parseBullyMangaHtml,
     mangablackcat: parseMangaBlackCatHtml,
+    oremanga: parseOreMangaHtml,
     dongmanga: parseDongMangaHtml,
     nekopost: parseNekopostHtml
   };
@@ -3280,7 +3344,7 @@ function parseSourceListingHtml(html, source) {
     return { items: parser(html, source), parserType: source.type || 'mangareader' };
   }
 
-  const strategies = [source.detectedParserType, 'madara', 'mangareader', 'whytoon', 'readtoon', 'ntrnaja', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost']
+  const strategies = [source.detectedParserType, 'oremanga', 'madara', 'mangareader', 'whytoon', 'readtoon', 'ntrnaja', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost']
     .filter((type, index, all) => type && all.indexOf(type) === index && parserMap[type]);
   for (const strategy of strategies) {
     try {
@@ -5969,7 +6033,7 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
     // MangaReader (Go, Fin, Dark, Up, Slow, NTR-Manga, Ped-Manga, MangaStep, Ecchi, Speed)
     doc.querySelectorAll('#series-history, #series-history-tpl, [id*="history"]').forEach(el => el.remove());
 
-    const links = doc.querySelectorAll('.eph-num a, .clstyle li a, #chapterlist li a, .bxcl ul li a, .chlist li a, .ntr-upd-ep');
+    const links = doc.querySelectorAll('.eph-num a, .clstyle li a, #chapterlist li a, .bxcl ul li a, .chlist li a, .ntr-upd-ep, .series-chapterlist li a, .series-chapterlist a, .flexch-infoz a');
     links.forEach(a => {
       let url = (a.getAttribute('href') || '').trim();
 
@@ -6022,7 +6086,7 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
           num: parsedNum,
           isLocked: false,
           badge: '✨ ฟรี',
-          sourceType: 'mangareader'
+          sourceType: sourceType === 'oremanga' ? 'oremanga' : 'mangareader'
         });
       }
     });
@@ -7296,10 +7360,10 @@ function parseReaderData(html, currentUrl = '') {
     }
   }
 
-  // 5. Fallback สำหรับเว็บทั่วไปที่ดึงจากแท็ก img ในเนื้อหา
-  const fallbackPrevLink = doc.querySelector('.nav-previous a:not(.disabled), a.prev_page:not(.disabled), .ch-prev-btn:not(.disabled), .nextprev .prev:not(.disabled)');
-  const fallbackNextLink = doc.querySelector('.nav-next a:not(.disabled), a.next_page:not(.disabled), .ch-next-btn:not(.disabled), .nextprev .next:not(.disabled)');
-  const imgEls = doc.querySelectorAll('#readerarea img, .readerarea img, .entry-content img, #ch-images img, .read-container img');
+  // 5. Fallback สำหรับเว็บทั่วไปที่ดึงจากแท็ก img ในเนื้อหา (รวม Oremanga .reader-area-main)
+  const fallbackPrevLink = doc.querySelector('.nav-previous a:not(.disabled), a.prev_page:not(.disabled), .ch-prev-btn:not(.disabled), .nextprev .prev:not(.disabled), a[rel="prev"]:not(.disabled)');
+  const fallbackNextLink = doc.querySelector('.nav-next a:not(.disabled), a.next_page:not(.disabled), .ch-next-btn:not(.disabled), .nextprev .next:not(.disabled), a[rel="next"]:not(.disabled)');
+  const imgEls = doc.querySelectorAll('#readerarea img, .readerarea img, .reader-area-main img, .entry-content img, #ch-images img, .read-container img');
   const imgs = [];
   imgEls.forEach(img => {
     let src = img.getAttribute('data-wpfc-original-src') || 

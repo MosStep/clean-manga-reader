@@ -44,7 +44,7 @@ const CONFIG = {
     { id: 'manga-kimi', name: 'MangaKimi', url: 'https://www.mangakimi.com', type: 'autodetect', listingUrl: 'https://www.mangakimi.com/', pageUrlTemplate: '/page/{page}/', icon: '🌷', readable: true, isCoin: false, lang: 'th' },
     { id: 'dongmanga', name: 'Dongmanga', url: 'https://dongmanga.com', type: 'dongmanga', listingUrl: 'https://dongmanga.com/', icon: '🍶', readable: true, isCoin: false, lang: 'th' },
     { id: 'whytoon', name: 'WhyToon', url: 'https://whytoon.com', type: 'whytoon', listingUrl: 'https://whytoon.com/browse', icon: '📱', readable: true, isCoin: false, lang: 'th' },
-    { id: 'oremanga', name: 'Oremanga', url: 'https://www.oremanga.net', type: 'autodetect', listingUrl: 'https://www.oremanga.net/', pageUrlTemplate: '/page/{page}/', icon: '🗡️', readable: true, isCoin: false, lang: 'th' },
+    { id: 'oremanga', name: 'Oremanga', url: 'https://www.oremanga.net', type: 'oremanga', listingUrl: 'https://www.oremanga.net/', pageUrlTemplate: '/page/{page}/', icon: '🗡️', readable: true, isCoin: false, lang: 'th' },
     { id: 'manga-neko', name: 'Manga-Neko', url: 'https://manga-neko.com', type: 'autodetect', listingUrl: 'https://manga-neko.com/manga/?order=update', pageUrlTemplate: '/manga/page/{page}/?order=update', icon: '🐈', readable: true, isCoin: false, lang: 'th' },
     { id: 'nekopost', name: 'Nekopost', url: 'https://www.nekopost.net', type: 'nekopost', listingUrl: 'https://www.nekopost.net/manga', icon: '🐱', readable: true, isCoin: false, lang: 'th' }
   ],
