@@ -82,7 +82,7 @@ while ($listener.IsListening) {
             $safeTargetUrl = $uriObj.AbsoluteUri
             $origin = "$($uriObj.Scheme)://$($uriObj.Host)/"
             $customReferer = $req.QueryString["referer"]
-            $referer = if ($customReferer) { $customReferer } elseif ($safeTargetUrl -match "webtoon168") { "https://ped-manga.com/" } elseif ($safeTargetUrl -match "chibi-manga") { "https://chibi-manga.com/" } elseif ($safeTargetUrl -match "mangablackcat") { "https://mangablackcat.com/" } elseif ($safeTargetUrl -match "oremanga") { "https://www.oremanga.net/" } elseif ($safeTargetUrl -match "duketoon") { "https://duketoon.com/" } else { $origin }
+            $referer = if ($customReferer) { $customReferer } elseif ($safeTargetUrl -match "webtoon168") { "https://ped-manga.com/" } elseif ($safeTargetUrl -match "chibi-manga") { "https://chibi-manga.com/" } elseif ($safeTargetUrl -match "mangablackcat") { "https://mangablackcat.com/" } elseif ($safeTargetUrl -match "oremanga") { "https://www.oremanga.net/" } elseif ($safeTargetUrl -match "duketoon") { "https://duketoon.com/" } elseif ($safeTargetUrl -match "mangakimi") { "https://www.mangakimi.com/" } else { $origin }
 
             $bytes = $null
             $contentType = $null
@@ -99,7 +99,8 @@ while ($listener.IsListening) {
                     $reader = New-Object System.IO.StreamReader($req.InputStream, $req.ContentEncoding)
                     $bodyStr = $reader.ReadToEnd()
                     $reader.Close()
-                    $httpReq.Content = New-Object System.Net.Http.StringContent($bodyStr, [System.Text.Encoding]::UTF8, "application/x-www-form-urlencoded")
+                    $postCt = if ($req.ContentType) { $req.ContentType } else { "application/x-www-form-urlencoded" }
+                    $httpReq.Content = New-Object System.Net.Http.StringContent($bodyStr, [System.Text.Encoding]::UTF8, $postCt)
                 }
 
                 $httpRes = $httpClient.SendAsync($httpReq).GetAwaiter().GetResult()

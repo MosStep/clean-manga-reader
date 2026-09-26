@@ -649,6 +649,8 @@ export default {
         refererHeader = "https://www.oremanga.net/";
       } else if (origin.includes("duketoon") || targetUrl.includes("duketoon")) {
         refererHeader = "https://duketoon.com/";
+      } else if (origin.includes("mangakimi") || targetUrl.includes("mangakimi")) {
+        refererHeader = "https://www.mangakimi.com/";
       }
 
       const fetchOptions = {

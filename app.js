@@ -252,6 +252,8 @@ function getProxyUrl(targetUrl, referer = '') {
     url += `&referer=${encodeURIComponent('https://mangablackcat.com/')}`;
   } else if (targetUrl.includes('nekopost')) {
     url += `&referer=${encodeURIComponent('https://www.nekopost.net/')}`;
+  } else if (targetUrl.includes('mangakimi')) {
+    url += `&referer=${encodeURIComponent('https://www.mangakimi.com/')}`;
   }
   return url;
 }
@@ -318,6 +320,12 @@ function extractCoverUrl(imgEl, baseUrl) {
     src = 'https://nvme.duketoon.com/' + src.replace(/^\/+/, '');
   } else if (src.startsWith('/')) {
     src = baseUrl.replace(/\/$/, '') + src;
+  } else if (baseUrl && !src.startsWith('http://') && !src.startsWith('https://')) {
+    try {
+      src = new URL(src, baseUrl).href;
+    } catch (e) {
+      src = baseUrl.replace(/\/$/, '') + '/' + src;
+    }
   }
 
   return src;
@@ -3100,6 +3108,7 @@ function buildSourcePageUrl(source, page) {
   if (source.type === 'mangablackcat') return `${source.url.replace(/\/$/, '')}/latest?page=${page}`;
   if (source.type === 'oremanga') return `${source.url.replace(/\/$/, '')}/page/${page}/`;
   if (source.type === 'duketoon') return `${source.url.replace(/\/$/, '')}/browse?page=${page}`;
+  if (source.id === 'manga-kimi') return `${source.url.replace(/\/$/, '')}/manga/page/${page}/?order=update`;
   return '';
 }
 
@@ -3261,7 +3270,7 @@ function parseNekopostLatestFeed(payload, sourceInfo) {
       mangaUrl: `${sourceInfo.url.replace(/\/$/, '')}/project/${pid}`,
       chapterIndexUrl,
       cover: `https://www.osemocphoto.com/collectManga/${pid}/${pid}_cover.jpg?ver=${coverVersion}`,
-      latestEp: String(chapter.chapterName || (chapterNo ? `Ch.${chapterNo}` : 'ตอนล่าสุด')),
+      latestEp: chapterNo ? `ตอนที่ ${chapterNo}${chapter.chapterName ? ' - ' + chapter.chapterName : ''}` : String(chapter.chapterName || 'ตอนล่าสุด'),
       type: 'Manga',
       sourceId: sourceInfo.id,
       sourceName: sourceInfo.name,
@@ -3475,7 +3484,7 @@ async function fetchSingleSource(source, page = 1, timeoutMs = 15000) {
       const payloadText = await fetchViaProxy(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'm', paging: { pageNo: page, pageSize: 20 } })
+        body: JSON.stringify({ type: 'm', paging: { pageNo: page, pageSize: 80 } })
       }, timeoutMs);
       parsedListing = { items: parseNekopostLatestFeed(payloadText, source), parserType: 'nekopost' };
     } else {
@@ -5354,7 +5363,14 @@ async function initAggregatorPage() {
       }
       await mapSourceQueue(delayedSources, async source => {
         try {
-          const items = await fetchSingleSource(source, 1, 15000);
+          const p1 = await fetchSingleSource(source, 1, 15000);
+          let items = p1 || [];
+          try {
+            const p2 = await fetchSingleSource(source, 2, 15000);
+            if (p2 && p2.length) {
+              items = mergeAndDeduplicate([...items, ...p2]);
+            }
+          } catch (e2) {}
           completedSources++;
           updateBgProgress(completedSources, totalSources);
           if (items.length) {
@@ -6626,6 +6642,25 @@ async function openChapterModal(manga, activeSource = null) {
         : currentSource.mangaUrl;
       let html = await fetchViaProxy(chapterListingUrl);
       chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
+
+      // สำหรับ MangaKimi: หาก card เดิมเป็นลิงก์ไปยังตอนเดี่ยว (ไม่ใช่หน้ามังงะรวม) หรือไม่พบตอน ให้ดึงหน้าหลักของมังงะจาก breadcrumb
+      if (chapters.length === 0 && (currentSource.sourceId === 'manga-kimi' || (currentSource.mangaUrl && currentSource.mangaUrl.includes('mangakimi.com')) || /mangakimi/i.test(currentSource.sourceUrl || ''))) {
+        try {
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const seriesLink = doc.querySelector('.ts-breadcrumb a[href*="/manga/"], .allc a[href*="/manga/"], a[href*="/manga/"]');
+          if (seriesLink && seriesLink.getAttribute('href')) {
+            const resolvedSeriesUrl = new URL(seriesLink.getAttribute('href'), currentSource.sourceUrl || 'https://www.mangakimi.com').href;
+            if (resolvedSeriesUrl && resolvedSeriesUrl !== chapterListingUrl) {
+              currentSource.mangaUrl = resolvedSeriesUrl;
+              if (manga) manga.mangaUrl = resolvedSeriesUrl;
+              const seriesHtml = await fetchViaProxy(resolvedSeriesUrl);
+              chapters = parseChaptersFromHtml(seriesHtml, currentSource.sourceUrl, currentSource.sourceType, resolvedSeriesUrl);
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to resolve MangaKimi series URL:', e);
+        }
+      }
 
       // สำหรับ MangaBlackCat: ตรวจสอบการแบ่งหน้าตอน (Pagination) เช่น หน้า 1 - 6
       if (currentSource.sourceType === 'mangablackcat') {

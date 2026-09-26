@@ -41,7 +41,7 @@ const CONFIG = {
     { id: 'mangablackcat', name: 'MangaBlackCat', url: 'https://mangablackcat.com', type: 'mangablackcat', icon: '🐈‍⬛', readable: true, isCoin: false, lang: 'th' },
     { id: 'asura-scans', name: 'Asura Scans', url: 'https://asurascans.com', type: 'asurascans', icon: '⚔️', readable: true, isCoin: false, lang: 'en' },
     { id: 'manga-town', name: 'MangaTown', url: 'https://www.mangatown.com', type: 'mangatown', icon: '🏙️', readable: true, isCoin: false, lang: 'en' },
-    { id: 'manga-kimi', name: 'MangaKimi', url: 'https://www.mangakimi.com', type: 'autodetect', listingUrl: 'https://www.mangakimi.com/', pageUrlTemplate: '/page/{page}/', icon: '🌷', readable: true, isCoin: false, lang: 'th' },
+    { id: 'manga-kimi', name: 'MangaKimi', url: 'https://www.mangakimi.com', type: 'autodetect', listingUrl: 'https://www.mangakimi.com/manga/?order=update', pageUrlTemplate: '/manga/page/{page}/?order=update', icon: '🌷', readable: true, isCoin: false, lang: 'th' },
     { id: 'dongmanga', name: 'Dongmanga', url: 'https://dongmanga.com', type: 'dongmanga', listingUrl: 'https://dongmanga.com/', icon: '🍶', readable: true, isCoin: false, lang: 'th' },
     { id: 'whytoon', name: 'WhyToon', url: 'https://whytoon.com', type: 'whytoon', listingUrl: 'https://whytoon.com/browse', icon: '📱', readable: true, isCoin: false, lang: 'th' },
     { id: 'oremanga', name: 'Oremanga', url: 'https://www.oremanga.net', type: 'oremanga', listingUrl: 'https://www.oremanga.net/', pageUrlTemplate: '/page/{page}/', icon: '🗡️', readable: true, isCoin: false, lang: 'th' },
