@@ -49,7 +49,7 @@ export default {
 
     const syncSourceTypes = new Set([
       'autodetect', 'mangareader', 'madara', 'whytoon', 'readtoon', 'ntrnaja',
-      'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost', 'mangadex'
+      'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost', 'duketoon', 'mangadex'
     ]);
     const safePublicUrl = (value) => {
       try {
@@ -647,6 +647,8 @@ export default {
         refererHeader = "https://mangablackcat.com/";
       } else if (origin.includes("oremanga") || targetUrl.includes("oremanga")) {
         refererHeader = "https://www.oremanga.net/";
+      } else if (origin.includes("duketoon") || targetUrl.includes("duketoon")) {
+        refererHeader = "https://duketoon.com/";
       }
 
       const fetchOptions = {

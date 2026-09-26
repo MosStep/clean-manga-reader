@@ -106,7 +106,7 @@ async function mapSourceQueue(sources, task, onComplete = null) {
 const USER_SOURCE_PROFILES_KEY = 'clean_manga_user_source_profiles_v1';
 const ALLOWED_SOURCE_PARSER_TYPES = new Set([
   'autodetect', 'mangareader', 'madara', 'whytoon', 'readtoon', 'ntrnaja',
-  'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost'
+  'kairew', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost', 'duketoon'
 ]);
 let showUnavailableSources = false;
 
@@ -314,6 +314,8 @@ function extractCoverUrl(imgEl, baseUrl) {
     src = 'https://gd.whytoon.com/' + src.replace(/^\/+/, '');
   } else if (baseUrl && baseUrl.includes('readtoon') && (src.startsWith('content/') || src.startsWith('/content/'))) {
     src = 'https://w.nobuild.pro/' + src.replace(/^\/+/, '');
+  } else if (baseUrl && baseUrl.includes('duketoon') && (src.startsWith('content/') || src.startsWith('/content/'))) {
+    src = 'https://nvme.duketoon.com/' + src.replace(/^\/+/, '');
   } else if (src.startsWith('/')) {
     src = baseUrl.replace(/\/$/, '') + src;
   }
@@ -1185,6 +1187,72 @@ function parseOreMangaHtml(html, sourceInfo) {
         readable: true,
         isCoin: false,
         icon: sourceInfo.icon || '🗡️',
+        lang: sourceInfo.lang || 'th'
+      });
+    } catch (e) {}
+  });
+
+  return items;
+}
+
+// แกะข้อมูลจาก DukeToon (Next.js App Router Webtoon)
+function parseDukeToonHtml(html, sourceInfo) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const items = [];
+  const seenUrls = new Set();
+
+  const cards = doc.querySelectorAll('a[href*="/content/"]');
+  cards.forEach(a => {
+    try {
+      let href = (a.getAttribute('href') || '').trim();
+      if (!href || href === '/content' || href.match(/\/content\/[^/]+\/\d+/) || href.includes('/browse/')) return;
+      if (href.startsWith('/')) href = sourceInfo.url.replace(/\/$/, '') + href;
+      if (seenUrls.has(href)) return;
+
+      const imgEl = a.querySelector('img');
+      const altTitle = imgEl ? (imgEl.getAttribute('alt') || '').trim() : '';
+      const titleEl = a.querySelector('p.line-clamp-2, h3, .font-semibold');
+      let title = (titleEl ? titleEl.textContent.trim() : '') || altTitle;
+
+      if (!title) {
+        const slugMatch = href.match(/\/content\/([^/?#]+)/);
+        if (slugMatch) title = slugMatch[1].replace(/-/g, ' ');
+      }
+
+      let cover = extractCoverUrl(imgEl, sourceInfo.url);
+      if (!cover) {
+        const slugMatch = href.match(/\/content\/([^/?#]+)/);
+        if (slugMatch) {
+          const slug = slugMatch[1];
+          const rscMatch = html.match(new RegExp(`"slug":"${slug}"[^{}]*?"thumbnailImage":"([^"]+)"`));
+          if (rscMatch) {
+            cover = 'https://nvme.duketoon.com/' + rscMatch[1].replace(/^\/+/, '');
+          }
+        }
+      }
+
+      // ตอนล่าสุด
+      let latestEp = 'ตอนล่าสุด';
+      const epMatch = a.textContent.match(/ตอนที่\s*(?:<!--\s*-->)?\s*(\d+(?:\.\d+)?)/);
+      if (epMatch) {
+        latestEp = `ตอนที่ ${epMatch[1]}`;
+      }
+
+      seenUrls.add(href);
+      items.push({
+        title,
+        mangaUrl: href,
+        cover,
+        latestEp,
+        type: 'Webtoon',
+        sourceId: sourceInfo.id,
+        sourceName: sourceInfo.name,
+        sourceUrl: sourceInfo.url,
+        sourceType: 'duketoon',
+        readable: sourceInfo.readable !== false,
+        isCoin: !!sourceInfo.isCoin,
+        icon: sourceInfo.icon || '👑',
         lang: sourceInfo.lang || 'th'
       });
     } catch (e) {}
@@ -3031,6 +3099,7 @@ function buildSourcePageUrl(source, page) {
   if (source.type === 'bullymanga') return `${source.url.replace(/\/$/, '')}/page/${page}`;
   if (source.type === 'mangablackcat') return `${source.url.replace(/\/$/, '')}/latest?page=${page}`;
   if (source.type === 'oremanga') return `${source.url.replace(/\/$/, '')}/page/${page}/`;
+  if (source.type === 'duketoon') return `${source.url.replace(/\/$/, '')}/browse?page=${page}`;
   return '';
 }
 
@@ -3324,6 +3393,7 @@ async function fetchNekopostReaderData(chapterUrl) {
 function parseSourceListingHtml(html, source) {
   if (source.type === 'dongmanga') return { items: parseDongMangaHtml(html, source), parserType: 'dongmanga' };
   if (source.type === 'nekopost') return { items: parseNekopostHtml(html, source), parserType: 'nekopost' };
+  if (source.type === 'duketoon') return { items: parseDukeToonHtml(html, source), parserType: 'duketoon' };
   const parserMap = {
     mangareader: parseMangaReaderHtml,
     madara: parseMadaraHtml,
@@ -3337,14 +3407,15 @@ function parseSourceListingHtml(html, source) {
     mangablackcat: parseMangaBlackCatHtml,
     oremanga: parseOreMangaHtml,
     dongmanga: parseDongMangaHtml,
-    nekopost: parseNekopostHtml
+    nekopost: parseNekopostHtml,
+    duketoon: parseDukeToonHtml
   };
   if (source.type !== 'autodetect') {
     const parser = parserMap[source.type] || parseMangaReaderHtml;
     return { items: parser(html, source), parserType: source.type || 'mangareader' };
   }
 
-  const strategies = [source.detectedParserType, 'oremanga', 'madara', 'mangareader', 'whytoon', 'readtoon', 'ntrnaja', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost']
+  const strategies = [source.detectedParserType, 'oremanga', 'madara', 'mangareader', 'whytoon', 'readtoon', 'ntrnaja', 'mangatown', 'asurascans', 'bullymanga', 'mangablackcat', 'dongmanga', 'nekopost', 'duketoon']
     .filter((type, index, all) => type && all.indexOf(type) === index && parserMap[type]);
   for (const strategy of strategies) {
     try {
@@ -5820,6 +5891,31 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
         }
       }
     });
+  } else if (sourceType === 'duketoon') {
+    const links = doc.querySelectorAll('a[href*="/content/"]');
+    links.forEach(a => {
+      const href = (a.getAttribute('href') || '').trim();
+      if (href && href.match(/\/content\/[^/]+\/\d+/)) {
+        const fullUrl = baseUrl.replace(/\/$/, '') + href;
+        const numMatch = href.match(/\/content\/[^/]+\/(\d+)/);
+        const epNum = numMatch ? numMatch[1] : '';
+        const title = epNum ? `ตอนที่ ${epNum}` : (a.textContent.trim().replace(/\s+/g, ' ') || 'อ่านตอนนี้');
+        const text = a.textContent || '';
+        const isCoin = text.includes('เหรียญ');
+        const badge = isCoin ? '🪙 ใช้เหรียญ' : '✨ ฟรี';
+        if (!seenUrls.has(fullUrl)) {
+          seenUrls.add(fullUrl);
+          chapters.push({
+            title,
+            url: fullUrl,
+            num: epNum ? parseFloat(epNum) : undefined,
+            isLocked: isCoin,
+            badge: badge,
+            sourceType: 'duketoon'
+          });
+        }
+      }
+    });
   } else if (sourceType === 'ntrnaja') {
     // ดึงเฉพาะลิงก์ตอนใน .ss-chlist หรือ .ss-ch เพื่อไม่ให้ไปโดนปุ่ม header/hero (ss-btn)
     let links = doc.querySelectorAll('.ss-chlist .ss-ch a, ul.ss-chlist a, .ss-ch a');
@@ -6991,6 +7087,20 @@ function parseReaderData(html, currentUrl = '') {
       prevUrl: prevMatch ? cleanChapterNavUrl(`${baseUrl}${prevMatch[1]}`, currentUrl) : '',
       nextUrl: nextMatch ? cleanChapterNavUrl(`${baseUrl}${nextMatch[1]}`, currentUrl) : '',
       images: uniquePaths.map(p => getProxyUrl(`https://gd.whytoon.com/${p}`))
+    };
+  }
+
+  // 2.5 ตรวจสอบ DukeToon (Next.js App Router Webtoon)
+  const duketoonMatches = [...html.matchAll(/(?:https:\/\/nvme\.duketoon\.com\/)?content\/[a-zA-Z0-9_\-]+\/[a-f0-9\-]+\.webp/g)];
+  if (duketoonMatches.length > 0) {
+    const uniquePaths = [...new Set(duketoonMatches.map(m => m[0]))];
+    const prevMatch = html.match(/href="(\/content\/[^/]+\/[^"]+)"[^>]*>.*?ก่อนหน้า/i);
+    const nextMatch = html.match(/href="(\/content\/[^/]+\/[^"]+)"[^>]*>.*?ถัดไป/i);
+    const baseUrl = 'https://duketoon.com';
+    return {
+      prevUrl: prevMatch ? cleanChapterNavUrl(`${baseUrl}${prevMatch[1]}`, currentUrl) : '',
+      nextUrl: nextMatch ? cleanChapterNavUrl(`${baseUrl}${nextMatch[1]}`, currentUrl) : '',
+      images: uniquePaths.map(p => getProxyUrl(p.startsWith('http') ? p : `https://nvme.duketoon.com/${p.replace(/^\/+/, '')}`))
     };
   }
 
