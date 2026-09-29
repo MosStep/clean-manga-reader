@@ -4664,7 +4664,80 @@ async function performGlobalLiveSearch(query) {
 }
 
 // ==========================================================
+// ตัวช่วยแปลงลิงก์ตอนเดี่ยว -> ลิงก์หน้าหลักของเรื่อง (Parent Series URL)
+// ==========================================================
+function resolveSeriesUrlFromHtml(doc, currentUrl) {
+  if (!doc || !currentUrl) return '';
+  try {
+    const origin = new URL(currentUrl).origin;
+    // 1. ตรวจสอบ Breadcrumbs และลิงก์ย้อนกลับไปยังหน้าเรื่องหลัก
+    const seriesSelectors = [
+      '.ts-breadcrumb a[href*="/manga/"]',
+      '.ts-breadcrumb a[href*="/series/"]',
+      '.ts-breadcrumb a[href*="/comic/"]',
+      '.ts-breadcrumb a[href*="/project/"]',
+      '.allc a',
+      'a.allc',
+      'a.back-to-series',
+      'a.series-link',
+      '.breadcrumb-item a[href*="/manga/"]',
+      '.breadcrumb-item a[href*="/series/"]',
+      '.c-breadcrumb a[href*="/manga/"]',
+      '.c-breadcrumb a[href*="/series/"]',
+      'ol.breadcrumb a[href*="/manga/"]',
+      'ol.breadcrumb a[href*="/series/"]',
+      'nav.breadcrumb a[href*="/manga/"]',
+      'nav.breadcrumb a[href*="/series/"]',
+      '.breadcrumb a[href*="/manga/"]',
+      '.breadcrumb a[href*="/series/"]',
+      'a[href*="/manga/"]:not([href*="chapter"]):not([href*="ตอน"]):not([href*="-ch-"]):not([href*="/ch-"])',
+      'a[href*="/series/"]:not([href*="chapter"]):not([href*="ตอน"]):not([href*="-ch-"]):not([href*="/ch-"])',
+      'a[href*="/project/"]:not([href*="chapter"]):not([href*="ตอน"]):not([href*="-ch-"]):not([href*="/ch-"])'
+    ];
+    for (const sel of seriesSelectors) {
+      const el = doc.querySelector(sel);
+      if (el && el.getAttribute('href')) {
+        let href = el.getAttribute('href').trim();
+        if (href && href !== '#' && !href.startsWith('javascript:')) {
+          const resolved = new URL(href, currentUrl).href;
+          if (resolved !== currentUrl && resolved !== origin && resolved !== origin + '/') {
+            return resolved;
+          }
+        }
+      }
+    }
+
+    // 2. แกะตามโครงสร้าง Path ของเว็บต่างๆ
+    const parsed = new URL(currentUrl);
+    // WhyToon / DukeToon: /content/slug/id -> /content/slug
+    const contentMatch = parsed.pathname.match(/^(\/content\/[a-zA-Z0-9_\-]+)\/\d+/);
+    if (contentMatch) return `${origin}${contentMatch[1]}`;
+
+    // Nekopost: /manga/id/chapter -> /manga/id
+    const nekoMatch = parsed.pathname.match(/^(\/manga\/\d+)\/\d+/);
+    if (nekoMatch) return `${origin}${nekoMatch[1]}`;
+
+    // MangaBlackCat: /manga/slug/num -> /manga/slug
+    const blackcatMatch = parsed.pathname.match(/^(\/manga\/[a-zA-Z0-9_\-]+)\/\d+/);
+    if (blackcatMatch) return `${origin}${blackcatMatch[1]}`;
+
+    // MangaTown: /manga/slug/c... -> /manga/slug/
+    const townMatch = parsed.pathname.match(/^(\/manga\/[a-zA-Z0-9_\-]+)\/c\d+/);
+    if (townMatch) return `${origin}${townMatch[1]}/`;
+
+    // ตัดส่วนท้ายที่เป็นเลขตอน เช่น /manga/slug/chapter-1/ -> /manga/slug/
+    const chapterPathMatch = parsed.pathname.match(/^(\/manga\/[a-zA-Z0-9_\-]+)\/(?:chapter|ch|ep|ตอนที่)[-_ ]?\d+/i);
+    if (chapterPathMatch) return `${origin}${chapterPathMatch[1]}/`;
+
+  } catch (e) {
+    console.warn('resolveSeriesUrlFromHtml error:', e);
+  }
+  return '';
+}
+
+// ==========================================================
 // นำเข้ามังงะโดยตรงจากลิงก์เว็บอื่น (Direct URL Import)
+// รองรับทั้งลิงก์หน้ารวมเรื่อง และลิงก์ตอนอ่านเดี่ยว (เปิดอ่านได้ทันที 100%)
 // ==========================================================
 async function importMangaByDirectUrl(urlStr) {
   if (!urlStr) return;
@@ -4688,6 +4761,16 @@ async function importMangaByDirectUrl(urlStr) {
 
     // รองรับลิงก์ตรงจาก MangaDex ทันที 100%
     if (domain.includes('mangadex.org')) {
+      const chMatch = rawUrl.match(/\/chapter\/([a-f0-9-]+)/i);
+      if (chMatch) {
+        if (input) input.value = '';
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = origBtnText;
+        }
+        window.location.href = `reader.html?url=${encodeURIComponent('mangadex://' + chMatch[1])}&sourceId=mangadex&sourceName=MangaDex&sourceType=mangadex`;
+        return;
+      }
       const mdResults = await searchMangaDex(rawUrl, 1);
       if (mdResults && mdResults.length > 0) {
         if (input) input.value = '';
@@ -4712,19 +4795,24 @@ async function importMangaByDirectUrl(urlStr) {
 
     let sourceId = matchedSource ? matchedSource.id : ('ext-' + domain.replace(/[^a-z0-9]/gi, '-'));
     let sourceName = matchedSource ? matchedSource.name : domain;
-    let sourceType = matchedSource ? matchedSource.type : 'mangareader';
+    let sourceType = matchedSource ? matchedSource.type : 'autodetect';
     let sourceUrl = matchedSource ? matchedSource.url : parsedUrl.origin;
 
     let mangaTitle = '';
     let mangaCover = '';
-    try {
-      const html = await fetchViaProxy(rawUrl, {}, 10000);
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
+    let html = '';
+    let doc = null;
 
-      if (!matchedSource) {
+    try {
+      html = await fetchViaProxy(rawUrl, {}, 12000);
+      const parser = new DOMParser();
+      doc = parser.parseFromString(html, 'text/html');
+
+      if (!matchedSource || sourceType === 'autodetect') {
         if (doc.querySelector('.wp-manga-chapter, .listing-chapters_sub-head') || html.includes('wp-manga')) {
           sourceType = 'madara';
+        } else if (doc.querySelector('.eph-num, #chapterlist, .bxcl') || html.includes('ts_reader')) {
+          sourceType = 'mangareader';
         }
       }
 
@@ -4749,6 +4837,107 @@ async function importMangaByDirectUrl(urlStr) {
       mangaTitle = decodeURIComponent(mangaTitle).replace(/[-_]/g, ' ');
     }
 
+    // ตรวจสอบว่าลิงก์ที่ผู้ใช้ใส่ เป็นหน้าตอนอ่านการ์ตูน (Chapter Reader Page) หรือไม่
+    let isChapterPage = false;
+    let readerData = null;
+    if (html) {
+      try {
+        readerData = parseReaderData(html, rawUrl);
+        if (readerData && Array.isArray(readerData.images) && readerData.images.length > 0) {
+          isChapterPage = true;
+        }
+      } catch (e) {}
+      if (!isChapterPage) {
+        if (html.includes('ts_reader.run') || html.includes('chapter_preloaded_images') || html.includes('IMAGE_MAP') ||
+            /(?:content|read)\/[a-zA-Z0-9_\-]+\/\d+/i.test(rawUrl) ||
+            /(?:ตอนที่|chapter|ch|ep)[-_/ ]?\d+/i.test(rawUrl)) {
+          isChapterPage = true;
+        }
+      }
+    }
+
+    if (isChapterPage) {
+      // 1. ลองหาหน้าเรื่องหลัก (Parent Series URL) จาก breadcrumb เพื่อดึงรายการตอนและปกเรื่องที่ถูกต้อง
+      let resolvedSeriesUrl = doc ? resolveSeriesUrlFromHtml(doc, rawUrl) : '';
+      let chapters = [];
+      let parentTitle = mangaTitle;
+      let parentCover = mangaCover;
+
+      if (resolvedSeriesUrl && resolvedSeriesUrl !== rawUrl) {
+        try {
+          const seriesHtml = await fetchViaProxy(resolvedSeriesUrl, {}, 10000);
+          const seriesDoc = new DOMParser().parseFromString(seriesHtml, 'text/html');
+          const pTitleEl = seriesDoc.querySelector('h1.entry-title, h1, .post-title h1, .series-title, title');
+          if (pTitleEl) {
+            parentTitle = pTitleEl.textContent.trim().replace(/\s*-\s*.*$/, '').replace(/\|.*$/, '').trim();
+          }
+          const pCoverEl = seriesDoc.querySelector('.thumb img, .summary_image img, .series-thumb img, img');
+          if (pCoverEl) {
+            parentCover = extractCoverUrl(pCoverEl, sourceUrl);
+          }
+          chapters = parseChaptersFromHtml(seriesHtml, sourceUrl, sourceType, resolvedSeriesUrl);
+          // แคชรายการตอนไว้ใน sessionStorage เพื่อให้ปุ่มตอนต่อไป/ก่อนหน้า/เลือกตอนใน reader ทำงานได้ทันที
+          if (chapters.length > 0) {
+            try {
+              sessionStorage.setItem('cached_chapters_' + resolvedSeriesUrl, JSON.stringify(chapters));
+              sessionStorage.setItem('cached_chapters_title_' + parentTitle, JSON.stringify(chapters));
+            } catch (e) {}
+          }
+        } catch (e) {
+          console.warn("Could not pre-fetch parent series:", e);
+        }
+      }
+
+      // ดึงเลขตอน
+      const epMatch = rawUrl.match(/(?:ตอนที่|chapter|ch|ep)[-_/ ]?(\d+(?:\.\d+)?)/i) || 
+                      mangaTitle.match(/(?:ตอนที่|chapter|ch|ep)[-_/ ]?(\d+(?:\.\d+)?)/i);
+      const epNum = epMatch ? epMatch[1] : '';
+      const epTitle = epNum ? `ตอนที่ ${epNum}` : (mangaTitle || 'ตอนที่อ่าน');
+
+      const fullReaderTitle = parentTitle ? `${parentTitle} - ${epTitle}` : epTitle;
+      const targetSeriesUrl = resolvedSeriesUrl || rawUrl;
+
+      // บันทึก currentManga ลง sessionStorage
+      const mangaObj = {
+        title: parentTitle || mangaTitle,
+        mangaUrl: targetSeriesUrl,
+        sourceId,
+        sourceName,
+        sourceUrl,
+        sourceType,
+        readable: true,
+        cover: parentCover || '',
+        type: 'Manga',
+        latestEp: epTitle
+      };
+      try {
+        sessionStorage.setItem('currentManga', JSON.stringify(mangaObj));
+        sessionStorage.setItem('currentSource', JSON.stringify(mangaObj));
+      } catch (e) {}
+
+      if (input) input.value = '';
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = origBtnText;
+      }
+
+      // เปิดไปยังหน้าอ่าน reader.html ทันที!
+      const p = new URLSearchParams();
+      p.set('url', rawUrl);
+      p.set('title', fullReaderTitle);
+      p.set('mangaTitle', parentTitle || mangaTitle);
+      p.set('mangaUrl', targetSeriesUrl);
+      p.set('sourceId', sourceId);
+      p.set('sourceName', sourceName);
+      p.set('source', sourceUrl);
+      p.set('sourceType', sourceType);
+      if (parentCover) p.set('cover', parentCover);
+
+      window.location.href = `reader.html?${p.toString()}`;
+      return;
+    }
+
+    // กรณีเป็นหน้าข้อมูลเรื่องหลัก (Series Overview Page)
     const mangaObj = {
       title: mangaTitle,
       mangaUrl: rawUrl,
@@ -5175,7 +5364,11 @@ async function initAggregatorPage() {
       if (e.key === 'Enter') {
         e.preventDefault();
         if (currentSearchQuery) {
-          performGlobalLiveSearch(currentSearchQuery);
+          if (currentSearchQuery.startsWith('http://') || currentSearchQuery.startsWith('https://')) {
+            importMangaByDirectUrl(currentSearchQuery);
+          } else {
+            performGlobalLiveSearch(currentSearchQuery);
+          }
         }
       }
     });
@@ -5198,7 +5391,11 @@ async function initAggregatorPage() {
   if (btnGlobalSearch && !btnGlobalSearch.dataset.bound) {
     btnGlobalSearch.dataset.bound = "1";
     btnGlobalSearch.addEventListener('click', () => {
-      performGlobalLiveSearch(currentSearchQuery);
+      if (currentSearchQuery && (currentSearchQuery.startsWith('http://') || currentSearchQuery.startsWith('https://'))) {
+        importMangaByDirectUrl(currentSearchQuery);
+      } else {
+        performGlobalLiveSearch(currentSearchQuery);
+      }
     });
   }
 
@@ -6316,6 +6513,109 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
     });
   }
 
+  // หากยังไม่พบตอน (chapters.length === 0) ให้เรียกใช้ระบบ Multi-Engine Auto Fallback ค้นหาทุกรูปแบบ
+  if (chapters.length === 0) {
+    // 1. ลองตัวดึงของ Madara (.wp-manga-chapter a)
+    const madaraLinks = doc.querySelectorAll('.wp-manga-chapter a, li.wp-manga-chapter a, .listing-chapters_sub-head a, .sub-chap a');
+    madaraLinks.forEach(a => {
+      let url = (a.getAttribute('href') || '').trim();
+      if (!url || url.startsWith('#') || url.startsWith('javascript:') || url.includes('/genre') || url.includes('/tag')) return;
+      if (url.startsWith('//')) url = 'https:' + url;
+      else if (url.startsWith('/')) url = baseUrl.replace(/\/$/, '') + url;
+      else if (!url.startsWith('http')) url = baseUrl.replace(/\/$/, '') + '/' + url;
+      const text = a.textContent.trim().replace(/\s+/g, ' ');
+      const numMatch = text.match(/(?:ตอนที่|chapter|ch\.?|ep\.?)\s*(\d+(?:\.\d+)?)/i) || url.match(/(?:ตอนที่|chapter|ch|ep)[-_ ]?(\d+(?:\.\d+)?)/i);
+      const epNum = numMatch ? parseFloat(numMatch[1]) : undefined;
+      const title = epNum !== undefined ? `ตอนที่ ${epNum}` : (text || 'อ่านตอนนี้');
+      if (!seenUrls.has(url)) {
+        seenUrls.add(url);
+        chapters.push({ title, url, num: epNum, isLocked: false, badge: '✨ ฟรี', sourceType: 'madara' });
+      }
+    });
+  }
+
+  if (chapters.length === 0) {
+    // 2. ลองตัวดึงของ MangaReader (.eph-num a, #chapterlist li a, etc.)
+    const mrLinks = doc.querySelectorAll('.eph-num a, .clstyle li a, #chapterlist li a, .bxcl ul li a, .chlist li a, .ntr-upd-ep, .series-chapterlist li a, .series-chapterlist a, .flexch-infoz a');
+    mrLinks.forEach(a => {
+      let url = (a.getAttribute('href') || '').trim();
+      if (!url || url.startsWith('#') || url.startsWith('javascript:') || url.includes('/genre') || url.includes('/tag') || url.includes('/page/')) return;
+      if (url.startsWith('//')) url = 'https:' + url;
+      else if (url.startsWith('/')) url = baseUrl.replace(/\/$/, '') + url;
+      else if (!url.startsWith('http')) url = baseUrl.replace(/\/$/, '') + '/' + url;
+      const text = a.textContent.trim().replace(/\s+/g, ' ');
+      const numMatch = text.match(/(?:ตอนที่|chapter|ch\.?|ep\.?)\s*(\d+(?:\.\d+)?)/i) || url.match(/(?:ตอนที่|chapter|ch|ep)[-_ ]?(\d+(?:\.\d+)?)/i);
+      const epNum = numMatch ? parseFloat(numMatch[1]) : undefined;
+      const title = epNum !== undefined ? `ตอนที่ ${epNum}` : (text || 'อ่านตอนนี้');
+      if (!seenUrls.has(url)) {
+        seenUrls.add(url);
+        chapters.push({ title, url, num: epNum, isLocked: false, badge: '✨ ฟรี', sourceType: 'mangareader' });
+      }
+    });
+  }
+
+  if (chapters.length === 0) {
+    // 3. ลองตัวดึง Next.js / Content Webtoon (WhyToon, DukeToon, ReadToon)
+    const contentLinks = doc.querySelectorAll('a[href*="/content/"], a[href*="/read/"]');
+    contentLinks.forEach(a => {
+      let url = (a.getAttribute('href') || '').trim();
+      if (!url || !url.match(/\/(?:content|read)\/[^/]+\/\d+/)) return;
+      if (url.startsWith('/')) url = baseUrl.replace(/\/$/, '') + url;
+      const numMatch = url.match(/\/(?:content|read)\/[^/]+\/(\d+)/);
+      const epNum = numMatch ? parseFloat(numMatch[1]) : undefined;
+      const title = epNum !== undefined ? `ตอนที่ ${epNum}` : (a.textContent.trim() || 'อ่านตอนนี้');
+      if (!seenUrls.has(url)) {
+        seenUrls.add(url);
+        chapters.push({ title, url, num: epNum, isLocked: false, badge: '✨ ฟรี', sourceType: 'whytoon' });
+      }
+    });
+  }
+
+  if (chapters.length === 0) {
+    // 4. ลองตัวดึง Generic Dropdown <select> (พบบ่อยในหน้ามังงะหลายค่าย)
+    const selectOptions = doc.querySelectorAll('select option[value]');
+    selectOptions.forEach(opt => {
+      let val = (opt.value || '').trim();
+      if (!val || val === '#' || val.startsWith('javascript:')) return;
+      if (val.startsWith('/')) val = baseUrl.replace(/\/$/, '') + val;
+      else if (!val.startsWith('http')) {
+        try { val = new URL(val, baseUrl).href; } catch(e) { return; }
+      }
+      const optText = (opt.textContent || '').trim().replace(/\s+/g, ' ');
+      const match = optText.match(/(?:ตอนที่|chapter|ch\.?|ep\.?)\s*(\d+(?:\.\d+)?)/i) || val.match(/(?:ตอนที่|chapter|ch|ep)[-_/ ]?(\d+(?:\.\d+)?)/i);
+      if (match) {
+        const epNum = parseFloat(match[1]);
+        if (!seenUrls.has(val)) {
+          seenUrls.add(val);
+          chapters.push({ title: `ตอนที่ ${epNum}`, url: val, num: epNum, isLocked: false, badge: '✨ ฟรี', sourceType: 'generic' });
+        }
+      }
+    });
+  }
+
+  if (chapters.length === 0) {
+    // 5. ลองตัวดึง Generic Links ในรายการหรือเนื้อหาทั้งหมด
+    const candidateNodes = doc.querySelectorAll('.chapter-list a, #chapter-list a, .chapters a, .chapter_list a, .list-chapter a, .chapter-list-items a, ul.chapters a, .episodes a, .table-chapters a, .sub-ch a, .box-chapter a, a[href*="chapter"], a[href*="ตอนที่"], a[href*="-ch-"], a[href*="/ch-"], a[href*="/ep-"]');
+    candidateNodes.forEach(a => {
+      let url = (a.getAttribute('href') || '').trim();
+      if (!url || url.startsWith('#') || url.startsWith('javascript:') || url.includes('/genre') || url.includes('/tag') || url.includes('/author')) return;
+      if (url.startsWith('//')) url = 'https:' + url;
+      else if (url.startsWith('/')) url = baseUrl.replace(/\/$/, '') + url;
+      else if (!url.startsWith('http')) {
+        try { url = new URL(url, baseUrl).href; } catch (e) { return; }
+      }
+      const text = a.textContent.trim().replace(/\s+/g, ' ');
+      const match = text.match(/(?:ตอนที่|chapter|ch\.?|ep\.?)\s*(\d+(?:\.\d+)?)/i) || url.match(/(?:ตอนที่|chapter|ch|ep)[-_/ ]?(\d+(?:\.\d+)?)/i);
+      if (match) {
+        const epNum = parseFloat(match[1]);
+        if (!seenUrls.has(url)) {
+          seenUrls.add(url);
+          chapters.push({ title: `ตอนที่ ${epNum}`, url, num: epNum, isLocked: false, badge: '✨ ฟรี', sourceType: 'generic' });
+        }
+      }
+    });
+  }
+
   return sortChaptersDescending(chapters);
 }
 
@@ -6654,73 +6954,65 @@ async function openChapterModal(manga, activeSource = null) {
     if (btnApplyCustomLink && customLinkInput) {
       btnApplyCustomLink.onclick = () => {
         const url = customLinkInput.value.trim();
-        if (!url) return;
-
-        let srcId = 'other';
-        let srcName = 'เว็บอื่น';
-        let icon = '🌐';
-        let srcType = 'mangareader';
-        let isReadable = true;
-
-        if (url.includes('whytoon.com')) {
-          srcId = 'whytoon';
-          srcName = 'WhyToon';
-          icon = '📱';
-          srcType = 'whytoon';
-        } else if (url.includes('slow-manga')) {
-          srcId = 'slow-manga';
-          srcName = 'Slow-Manga';
-          icon = '🐢';
-        } else if (url.includes('ntr-manga')) {
-          srcId = 'ntr-manga';
-          srcName = 'NTR-Manga';
-          icon = '🔥';
-        } else if (url.includes('ped-manga')) {
-          srcId = 'ped-manga';
-          srcName = 'Ped-Manga';
-          icon = '🦆';
-        } else if (url.includes('mangastep')) {
-          srcId = 'manga-step';
-          srcName = 'MangaStep';
-          icon = '🐾';
-        } else if (url.includes('go-manga')) {
-          srcId = 'go-manga';
-          srcName = 'Go-Manga';
-          icon = '⚡';
-        } else if (url.includes('ntrnaja')) {
-          srcId = 'ntrnaja';
-          srcName = 'NTRnaja';
-          icon = '🔒';
-          srcType = 'ntrnaja';
-          isReadable = false;
-        } else if (url.includes('readtoon')) {
-          srcId = 'readtoon';
-          srcName = 'ReadToon';
-          icon = '🔒';
-          srcType = 'readtoon';
-          isReadable = false;
+        if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+          alert('กรุณากรอก URL ที่ถูกต้อง (เช่น https://...)');
+          return;
         }
+
+        let parsedOrigin = '';
+        let uDomain = '';
+        try {
+          const parsed = new URL(url);
+          parsedOrigin = parsed.origin;
+          uDomain = parsed.hostname.toLowerCase().replace(/^www\./, '');
+        } catch (e) {
+          alert('รูปแบบ URL ไม่ถูกต้อง');
+          return;
+        }
+
+        // ค้นหาใน CONFIG.SOURCES ทั้งหมด
+        const matched = CONFIG.SOURCES.find(s => {
+          try {
+            const sDomain = new URL(s.url).hostname.toLowerCase().replace(/^www\./, '');
+            return uDomain.includes(sDomain) || sDomain.includes(uDomain);
+          } catch (e) { return false; }
+        });
+
+        let srcId = matched ? matched.id : ('ext-' + uDomain.replace(/[^a-z0-9]/gi, '-'));
+        let srcName = matched ? matched.name : uDomain;
+        let icon = matched ? (matched.icon || '🌐') : '🌐';
+        let srcType = matched ? matched.type : 'autodetect';
+        let isReadable = matched ? matched.readable : true;
+        let isCoin = matched ? !!matched.isCoin : false;
 
         const newSrc = {
           title: manga.title,
           mangaUrl: url,
           sourceId: srcId,
           sourceName: srcName,
-          sourceUrl: new URL(url).origin,
+          sourceUrl: parsedOrigin,
           sourceType: srcType,
           readable: isReadable,
-          isCoin: !isReadable,
+          isCoin: isCoin,
           icon: icon
         };
 
         if (!manga.altSources) manga.altSources = [];
-        manga.altSources.push(newSrc);
+        // ป้องกันเพิ่มซ้ำ
+        const existingIdx = manga.altSources.findIndex(s => s.mangaUrl === url || s.sourceId === srcId);
+        if (existingIdx >= 0) {
+          manga.altSources[existingIdx] = newSrc;
+        } else {
+          manga.altSources.push(newSrc);
+        }
 
         // บันทึกลง localStorage
         try {
           const store = JSON.parse(localStorage.getItem('custom_manga_sources') || '{}');
           if (!store[manga.title]) store[manga.title] = [];
-          store[manga.title].push(newSrc);
+          const curList = store[manga.title].filter(s => s.mangaUrl !== url && s.sourceId !== srcId);
+          curList.push(newSrc);
+          store[manga.title] = curList;
           localStorage.setItem('custom_manga_sources', JSON.stringify(store));
         } catch (e) {}
 
@@ -6755,22 +7047,20 @@ async function openChapterModal(manga, activeSource = null) {
       let html = await fetchViaProxy(chapterListingUrl);
       chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
 
-      // สำหรับ MangaKimi: หาก card เดิมเป็นลิงก์ไปยังตอนเดี่ยว (ไม่ใช่หน้ามังงะรวม) หรือไม่พบตอน ให้ดึงหน้าหลักของมังงะจาก breadcrumb
-      if (chapters.length === 0 && (currentSource.sourceId === 'manga-kimi' || (currentSource.mangaUrl && currentSource.mangaUrl.includes('mangakimi.com')) || /mangakimi/i.test(currentSource.sourceUrl || ''))) {
+      // หากไม่พบตอน ให้ตรวจสอบว่าหน้านี้เป็นลิงก์ไปยังตอนเดี่ยว (ไม่ใช่หน้ามังงะรวม) หรือไม่ โดยดึงหน้าหลักของมังงะจาก breadcrumb / url
+      if (chapters.length === 0) {
         try {
           const doc = new DOMParser().parseFromString(html, 'text/html');
-          const seriesLink = doc.querySelector('.ts-breadcrumb a[href*="/manga/"], .allc a[href*="/manga/"], a[href*="/manga/"]');
-          if (seriesLink && seriesLink.getAttribute('href')) {
-            const resolvedSeriesUrl = new URL(seriesLink.getAttribute('href'), currentSource.sourceUrl || 'https://www.mangakimi.com').href;
-            if (resolvedSeriesUrl && resolvedSeriesUrl !== chapterListingUrl) {
-              currentSource.mangaUrl = resolvedSeriesUrl;
-              if (manga) manga.mangaUrl = resolvedSeriesUrl;
-              const seriesHtml = await fetchViaProxy(resolvedSeriesUrl);
-              chapters = parseChaptersFromHtml(seriesHtml, currentSource.sourceUrl, currentSource.sourceType, resolvedSeriesUrl);
-            }
+          const resolvedSeriesUrl = resolveSeriesUrlFromHtml(doc, chapterListingUrl);
+          if (resolvedSeriesUrl && resolvedSeriesUrl !== chapterListingUrl) {
+            currentSource.mangaUrl = resolvedSeriesUrl;
+            if (manga) manga.mangaUrl = resolvedSeriesUrl;
+            const seriesHtml = await fetchViaProxy(resolvedSeriesUrl);
+            chapters = parseChaptersFromHtml(seriesHtml, currentSource.sourceUrl, currentSource.sourceType, resolvedSeriesUrl);
+            html = seriesHtml; // ใช้อัปเดต tag genre ต่อไป
           }
         } catch (e) {
-          console.warn('Failed to resolve MangaKimi series URL:', e);
+          console.warn('Failed to resolve series URL from chapter page:', e);
         }
       }
 
@@ -6847,17 +7137,17 @@ async function openChapterModal(manga, activeSource = null) {
         }
       }
 
-      // สำหรับเว็บตระกูล Madara (เช่น Du-Manga) หากหน้าแรกไม่ได้ใส่รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที
-      if (currentSource.sourceType === 'madara' && chapters.length === 0) {
+      // สำหรับเว็บตระกูล Madara หรือเว็บที่โหลดตอนผ่าน AJAX หากยังไม่ได้รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที
+      if (chapters.length === 0 && (currentSource.sourceType === 'madara' || html.includes('wp-manga') || html.includes('ajax/chapters') || html.includes('manga_get_chapters'))) {
         try {
           const ajaxUrl = currentSource.mangaUrl.replace(/\/$/, '') + '/ajax/chapters/';
           const ajaxHtml = await fetchViaProxy(ajaxUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: 'action=manga_get_chapters'
-          });
+          }, 10000);
           if (ajaxHtml) {
-            const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
+            const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, 'madara', currentSource.mangaUrl);
             if (ajaxChapters.length > 0) {
               chapters = ajaxChapters;
             }
@@ -6866,7 +7156,29 @@ async function openChapterModal(manga, activeSource = null) {
           console.warn("Madara ajax chapters fetch:", errAjax);
         }
       }
-    }
+
+      // หากยังคงได้ 0 ตอน ให้ตรวจสอบว่าหน้านี้ (currentSource.mangaUrl) เป็นหน้าอ่านตอนที่มีรูปการ์ตูนพร้อมอ่านได้เลยหรือไม่!
+      if (chapters.length === 0) {
+        try {
+          const readerCheck = parseReaderData(html, currentSource.mangaUrl);
+          if (readerCheck && Array.isArray(readerCheck.images) && readerCheck.images.length > 0) {
+            const epMatch = currentSource.mangaUrl.match(/(?:ตอนที่|chapter|ch|ep)[-_/ ]?(\d+(?:\.\d+)?)/i) || 
+                            (manga && manga.title ? manga.title.match(/(?:ตอนที่|chapter|ch|ep)[-_/ ]?(\d+(?:\.\d+)?)/i) : null);
+            const epNum = epMatch ? parseFloat(epMatch[1]) : undefined;
+            const singleTitle = epNum !== undefined ? `ตอนที่ ${epNum}` : (manga?.title ? `${manga.title} (อ่านตอนนี้)` : 'อ่านตอนนี้ (ตอนจากลิงก์)');
+            chapters = [{
+              title: singleTitle,
+              url: currentSource.mangaUrl,
+              num: epNum,
+              isLocked: false,
+              badge: '✨ พร้อมอ่านทันที',
+              sourceType: currentSource.sourceType
+            }];
+          }
+        } catch (errReader) {
+          console.warn("Single chapter reader check error:", errReader);
+        }
+      }
 
     if (!chapterList) return;
 
@@ -6878,14 +7190,19 @@ async function openChapterModal(manga, activeSource = null) {
 
       chapterList.innerHTML = `
         <div style="text-align: center; padding: 24px 16px; background: rgba(255,211,106,0.06); border-radius: 12px; border: 1px solid rgba(255,211,106,0.24); margin: 10px 0;">
-          <div style="font-size: 2rem; margin-bottom: 8px;">🔎</div>
-          <h4 style="color: #ffd36a; margin-bottom: 6px; font-size: 1rem;">อุปกรณ์นี้ยังอ่านรายการตอนของ ${currentSource.sourceName} ไม่ได้</h4>
+          <div style="font-size: 2rem; margin-bottom: 8px;">📖</div>
+          <h4 style="color: #ffd36a; margin-bottom: 6px; font-size: 1rem;">ยังดึงรายการตอนอัตโนมัติไม่พบ</h4>
           <p style="color:#aaa; margin-bottom:14px; font-size: 0.88rem;">
-            ${isCurrentFree ? 'อาจเป็นรูปแบบหน้าเว็บหรือ Proxy ที่ใช้อยู่ ข้อความนี้ไม่ได้ยืนยันว่าเว็บต้นทางล่ม คุณสามารถเปิดดูผ่านเว็บต้นทางได้' : `การดึงข้อมูลจาก ${currentSource.sourceName} รอบนี้ไม่สำเร็จ คุณสามารถเปิดเว็บต้นทางได้`}
+            คุณสามารถกด <strong>"เปิดอ่านใน Reader ทันที"</strong> เพื่อให้ระบบลองแกะภาพและเปิดอ่านในหน้าจออ่านมังงะ หรือเปิดดูผ่านเว็บต้นทางได้
           </p>
-          <a href="${currentSource.mangaUrl}" target="_blank" class="btn-primary" style="padding: 10px 20px; display: inline-flex; align-items: center; gap: 8px;">
-            🌐 เปิดอ่านที่ ${currentSource.sourceName} ↗
-          </a>
+          <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+            <a href="reader.html?url=${encodeURIComponent(currentSource.mangaUrl)}&title=${encodeURIComponent(manga.title || 'อ่านการ์ตูน')}&mangaTitle=${encodeURIComponent(manga.title || '')}&mangaUrl=${encodeURIComponent(currentSource.mangaUrl)}&sourceId=${encodeURIComponent(currentSource.sourceId || '')}&sourceName=${encodeURIComponent(currentSource.sourceName || '')}&source=${encodeURIComponent(currentSource.sourceUrl || '')}&sourceType=${encodeURIComponent(currentSource.sourceType || '')}" class="btn-primary" style="padding: 10px 18px; display: inline-flex; align-items: center; gap: 6px; background: #00e676; color: #000; font-weight: bold;">
+              📖 บังคับเปิดอ่านใน Reader ทันที
+            </a>
+            <a href="${currentSource.mangaUrl}" target="_blank" class="btn-secondary" style="padding: 10px 18px; display: inline-flex; align-items: center; gap: 6px;">
+              🌐 เปิดดูที่ ${currentSource.sourceName} ↗
+            </a>
+          </div>
         </div>
       `;
       return;
@@ -7630,11 +7947,21 @@ function parseReaderData(html, currentUrl = '') {
     }
   }
 
-  // 5. Fallback สำหรับเว็บทั่วไปที่ดึงจากแท็ก img ในเนื้อหา (รวม Oremanga .reader-area-main)
+  // 5. Fallback สำหรับเว็บทั่วไปที่ดึงจากแท็ก img ในเนื้อหา (รวม Oremanga, MangaReader, และ Custom Webtoon ทุกค่าย)
   const fallbackPrevLink = doc.querySelector('.nav-previous a:not(.disabled), a.prev_page:not(.disabled), .ch-prev-btn:not(.disabled), .nextprev .prev:not(.disabled), a[rel="prev"]:not(.disabled)');
   const fallbackNextLink = doc.querySelector('.nav-next a:not(.disabled), a.next_page:not(.disabled), .ch-next-btn:not(.disabled), .nextprev .next:not(.disabled), a[rel="next"]:not(.disabled)');
-  const imgEls = doc.querySelectorAll('#readerarea img, .readerarea img, .reader-area-main img, .entry-content img, #ch-images img, .read-container img');
+  
+  const readerSelectors = [
+    '#readerarea img', '.readerarea img', '.reader-area-main img', '.reader-area img',
+    '.reading-content img', '.page-break img', '.wp-manga-chapter-img', '.entry-content img',
+    '#ch-images img', '.read-container img', '.chapter-content img', '.chapter-image img',
+    '.chapter-images img', '#chapter-images img', '.viewer img', '#viewer img', '.viewer-cnt img',
+    '.comic-view img', '.comic-container img', '#comic-images img', '#image-container img',
+    '.post-content img', 'article img', 'main img'
+  ].join(', ');
+  const imgEls = doc.querySelectorAll(readerSelectors);
   const imgs = [];
+  const seenImgUrls = new Set();
   imgEls.forEach(img => {
     let src = img.getAttribute('data-wpfc-original-src') || 
               img.getAttribute('data-src') || 
@@ -7644,11 +7971,55 @@ function parseReaderData(html, currentUrl = '') {
               img.getAttribute('data-cfsrc') ||
               img.getAttribute('src') || '';
     src = src.replace(/&amp;/g, '&').trim();
-    if (src && !src.includes('data:image') && !src.includes('blank.gif')) {
+    if (src && !src.startsWith('data:image') && !src.includes('blank.gif') && !/avatar|logo|banner|icon|emoji/i.test(src)) {
       if (src.startsWith('//')) src = 'https:' + src;
-      imgs.push(getProxyUrl(src));
+      else if (src.startsWith('/') && currentUrl) {
+        try { src = new URL(src, currentUrl).href; } catch(e) {}
+      }
+      if (!seenImgUrls.has(src)) {
+        seenImgUrls.add(src);
+        imgs.push(getProxyUrl(src, currentUrl));
+      }
     }
   });
+
+  // หากใน DOM ยังไม่พบรูป ให้ค้นหาภาพจาก Script arrays (JSON / JS)
+  if (imgs.length === 0) {
+    const scriptImageMatches = [...html.matchAll(/https?:\/\/[^\s"'<>\\]+?\.(?:jpg|jpeg|png|webp|avif)(?:\?[^\s"'<>\\]*)?/gi)];
+    if (scriptImageMatches.length > 0) {
+      scriptImageMatches.forEach(m => {
+        let clean = m[0].replace(/\\/g, '');
+        if (!seenImgUrls.has(clean) && !/avatar|logo|icon|banner|thumb|default|placeholder|cover|emoji|gravatar/i.test(clean)) {
+          seenImgUrls.add(clean);
+          imgs.push(getProxyUrl(clean, currentUrl));
+        }
+      });
+    }
+  }
+
+  // หากยังไม่พบรูป ให้สแกน img ทั้งหมดในหน้าเว็บ (กรอง avatar, icon, logo ออก)
+  if (imgs.length === 0) {
+    doc.querySelectorAll('img').forEach(img => {
+      let src = img.getAttribute('data-wpfc-original-src') || 
+                img.getAttribute('data-src') || 
+                img.getAttribute('data-lazy-src') || 
+                img.getAttribute('data-original') || 
+                img.getAttribute('data-orig-file') || 
+                img.getAttribute('data-cfsrc') || 
+                img.getAttribute('src') || '';
+      src = src.replace(/&amp;/g, '&').trim();
+      if (!src || src.startsWith('data:image') || src.includes('blank.gif')) return;
+      if (/avatar|logo|icon|banner|thumb|default|placeholder|cover|emoji|gravatar/i.test(src)) return;
+      if (src.startsWith('//')) src = 'https:' + src;
+      else if (src.startsWith('/') && currentUrl) {
+        try { src = new URL(src, currentUrl).href; } catch(e) {}
+      }
+      if (!seenImgUrls.has(src)) {
+        seenImgUrls.add(src);
+        imgs.push(getProxyUrl(src, currentUrl));
+      }
+    });
+  }
 
   return {
     prevUrl: scriptPrevUrl || cleanChapterNavUrl(fallbackPrevLink ? fallbackPrevLink.getAttribute('href') : '', currentUrl),
@@ -7902,8 +8273,11 @@ async function initReaderPage() {
             อาจเกิดจากรูปแบบหน้าตอน, Proxy หรือข้อจำกัดของอุปกรณ์ ข้อความนี้ไม่ได้ยืนยันว่าเว็บต้นทางล่มหรือใช้ระบบเหรียญ คุณสามารถเปิดอ่านที่เว็บต้นทางได้
           </p>
           <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-            <a href="${directUrl}" target="_blank" class="btn-primary" style="padding: 11px 22px; font-size: 0.9rem;">
-              เปิดอ่านที่เว็บต้นทาง ↗
+            <button onclick="window.location.reload()" class="btn-primary" style="padding: 11px 22px; font-size: 0.9rem; background: #00e676; color: #000; font-weight: bold;">
+              🔄 ลองโหลดใหม่อีกครั้ง
+            </button>
+            <a href="${directUrl}" target="_blank" class="btn-secondary" style="padding: 11px 22px; font-size: 0.9rem;">
+              เปิดดูที่เว็บต้นทาง ↗
             </a>
             <button onclick="window.history.back()" class="btn-secondary" style="padding: 11px 22px; font-size: 0.9rem;">
               ← เลือกตอนอื่น
