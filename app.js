@@ -7179,6 +7179,7 @@ async function openChapterModal(manga, activeSource = null) {
           console.warn("Single chapter reader check error:", errReader);
         }
       }
+    }
 
     if (!chapterList) return;
 
