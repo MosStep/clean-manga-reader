@@ -5827,6 +5827,11 @@ function setupHeroSpotlight(list) {
     posterImg.style.display = 'block';
     posterImg.onclick = () => openChapterModal(spotlight);
     posterImg.style.cursor = 'pointer';
+    posterImg.onerror = function() {
+      this.onerror = null;
+      this.removeAttribute('alt');
+      this.src = DEFAULT_COVER_PLACEHOLDER;
+    };
   }
 
   if (chaptersBtn) chaptersBtn.onclick = () => openChapterModal(spotlight);
@@ -5842,6 +5847,77 @@ function renderLangBadge(lang) {
     default: return '<span class="manga-lang-badge lang-th">TH</span>';
   }
 }
+
+const DEFAULT_COVER_PLACEHOLDER = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23161821'/%3E%3Cstop offset='100%25' stop-color='%231f2330'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='200' height='280' rx='8' fill='url(%23bg)'/%3E%3Ctext x='50%25' y='46%25' fill='%23555b70' font-size='36' text-anchor='middle' dominant-baseline='middle'%3E📖%3C/text%3E%3Ctext x='50%25' y='64%25' fill='%23666d85' font-family='sans-serif' font-size='12' font-weight='bold' text-anchor='middle'%3ECleanManga%3C/text%3E%3C/svg%3E";
+
+const _mangaDexCoverCache = new Map();
+
+async function fetchMangaDexCoverByTitle(title) {
+  if (!title) return null;
+  const cleanTitle = title.trim();
+  if (_mangaDexCoverCache.has(cleanTitle)) {
+    return _mangaDexCoverCache.get(cleanTitle);
+  }
+  try {
+    const sessionCached = sessionStorage.getItem('md_cover_' + cleanTitle);
+    if (sessionCached) {
+      _mangaDexCoverCache.set(cleanTitle, sessionCached);
+      return sessionCached;
+    }
+  } catch (e) {}
+
+  try {
+    const cleanSearch = cleanTitle
+      .replace(/\[.*?\]|\(.*?\)/g, '')
+      .replace(/ตอนที่\s*\d+|ch\.\s*\d+|ep\.\s*\d+/gi, '')
+      .trim();
+    if (!cleanSearch) return null;
+
+    const res = await fetch(`https://api.mangadex.org/manga?title=${encodeURIComponent(cleanSearch)}&limit=1&includes[]=cover_art`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data && data.data && data.data.length > 0) {
+      const manga = data.data[0];
+      const coverRel = manga.relationships ? manga.relationships.find(r => r.type === 'cover_art') : null;
+      if (coverRel && coverRel.attributes && coverRel.attributes.fileName) {
+        const coverUrl = `https://uploads.mangadex.org/covers/${manga.id}/${coverRel.attributes.fileName}.256.jpg`;
+        _mangaDexCoverCache.set(cleanTitle, coverUrl);
+        try {
+          sessionStorage.setItem('md_cover_' + cleanTitle, coverUrl);
+        } catch (e) {}
+        return coverUrl;
+      }
+    }
+  } catch (err) {
+    console.warn('[CoverFallback] Failed to fetch cover from MangaDex:', err);
+  }
+  _mangaDexCoverCache.set(cleanTitle, null);
+  return null;
+}
+
+window.handleCoverError = function(img) {
+  if (!img) return;
+  img.onerror = null;
+  img.removeAttribute('alt');
+  img.src = DEFAULT_COVER_PLACEHOLDER;
+
+  const rawTitle = img.getAttribute('data-title');
+  if (rawTitle) {
+    fetchMangaDexCoverByTitle(rawTitle).then(coverUrl => {
+      if (coverUrl && img.isConnected) {
+        img.onerror = () => {
+          img.onerror = null;
+          img.src = DEFAULT_COVER_PLACEHOLDER;
+        };
+        img.src = coverUrl;
+        if (typeof allMangaList !== 'undefined' && Array.isArray(allMangaList)) {
+          const item = allMangaList.find(x => x.title === rawTitle);
+          if (item) item.cover = coverUrl;
+        }
+      }
+    }).catch(() => {});
+  }
+};
 
 // Render การ์ดมังงะ
 function renderMangaCards() {
@@ -5937,7 +6013,12 @@ function renderMangaCards() {
       if (altWithCover) m.cover = altWithCover.cover;
     }
 
-    const placeholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23161821'/%3E%3Cstop offset='100%25' stop-color='%231f2330'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='200' height='280' rx='8' fill='url(%23bg)'/%3E%3Ctext x='50%25' y='46%25' fill='%23555b70' font-size='36' text-anchor='middle' dominant-baseline='middle'%3E📖%3C/text%3E%3Ctext x='50%25' y='64%25' fill='%23666d85' font-family='sans-serif' font-size='12' font-weight='bold' text-anchor='middle'%3ECleanManga%3C/text%3E%3C/svg%3E";
+    if (!m.cover && m.title) {
+      const cached = _mangaDexCoverCache.get(m.title.trim());
+      if (cached) m.cover = cached;
+    }
+
+    const placeholder = DEFAULT_COVER_PLACEHOLDER;
     const isMangaDex = m.sourceId === 'mangadex';
     const coverUrl = m.cover ? (isMangaDex ? m.cover : getProxyUrl(m.cover)) : placeholder;
     const isFav = isFavorite(m.title);
@@ -5988,7 +6069,7 @@ function renderMangaCards() {
         <button class="btn-card-fav ${isFav ? 'active' : ''}" data-title="${encodeURIComponent(m.title)}" title="${isFav ? 'นำออกจากเรื่องโปรด' : 'บันทึกเป็นเรื่องโปรด'}">
           ${isFav ? '★' : '⭐'}
         </button>
-        <img src="${coverUrl}" alt="${m.title}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null; this.src='${placeholder}';">
+        <img src="${coverUrl}" alt="" data-title="${escapeHtmlText(m.title)}" loading="lazy" referrerpolicy="no-referrer" onerror="handleCoverError(this);">
         <span class="manga-source-pill">${m.sourceName}</span>
       </div>
       <div class="manga-info">
