@@ -9,13 +9,32 @@ let currentDisplayCount = 40;   // แสดงครั้งละ 40 เร�
 let loadedPagesPerSource = 1;
 let isInitialSourceLoadBusy = true;
 
-const OFFLINE_MANGA_FEED_STORAGE = 'clean_manga_offline_feed_v1';
+const OFFLINE_MANGA_FEED_STORAGE = 'clean_manga_offline_feed_v2';
 const OFFLINE_MANGA_FEED_LIMIT = 140;
+
+function sanitizeMangaItem(m) {
+  if (!m) return m;
+  const sId = (m.sourceId || m.sourceType || '').toLowerCase();
+  const sName = (m.sourceName || '').toLowerCase();
+  if (sId === 'ntrnaja' || sName.includes('ntrnaja')) {
+    if (m.type === '18+ Manhwa' || /18\+|doujin/i.test(m.type || '')) {
+      m.type = 'Manhwa';
+    }
+    if (Array.isArray(m.tags)) {
+      m.tags = m.tags.filter(t => !/18\+|doujin|adult|ecchi|hentai/i.test(String(t)));
+    }
+  }
+  if (Array.isArray(m.altSources)) {
+    m.altSources.forEach(alt => sanitizeMangaItem(alt));
+  }
+  return m;
+}
 
 function saveCachedMangaFeed() {
   if (!Array.isArray(allMangaList) || allMangaList.length === 0) return;
+  allMangaList.forEach(m => sanitizeMangaItem(m));
   try {
-    sessionStorage.setItem('cached_all_manga', JSON.stringify(allMangaList));
+    sessionStorage.setItem('cached_all_manga_v2', JSON.stringify(allMangaList));
   } catch (e) {}
   try {
     localStorage.setItem(OFFLINE_MANGA_FEED_STORAGE, JSON.stringify({
@@ -33,16 +52,22 @@ function saveCachedMangaFeed() {
 }
 
 function restoreCachedMangaFeed() {
+  let list = [];
   try {
-    const sessionItems = JSON.parse(sessionStorage.getItem('cached_all_manga') || 'null');
-    if (Array.isArray(sessionItems) && sessionItems.length > 0) return sessionItems;
+    // ล้างแคชเวอร์ชันเก่าที่อาจมีป้าย 18+ ค้างอยู่
+    sessionStorage.removeItem('cached_all_manga');
+    localStorage.removeItem('clean_manga_offline_feed_v1');
+    const sessionItems = JSON.parse(sessionStorage.getItem('cached_all_manga_v2') || 'null');
+    if (Array.isArray(sessionItems) && sessionItems.length > 0) list = sessionItems;
   } catch (e) {}
-  try {
-    const saved = JSON.parse(localStorage.getItem(OFFLINE_MANGA_FEED_STORAGE) || 'null');
-    return saved && Array.isArray(saved.items) ? saved.items : [];
-  } catch (e) {
-    return [];
+  if (!list.length) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(OFFLINE_MANGA_FEED_STORAGE) || 'null');
+      if (saved && Array.isArray(saved.items)) list = saved.items;
+    } catch (e) {}
   }
+  list.forEach(m => sanitizeMangaItem(m));
+  return list;
 }
 
 function initOfflineAppSupport() {
@@ -2899,6 +2924,7 @@ function mergeAndDeduplicate(list) {
   const keyToManga = new Map();
 
   list.forEach(m => {
+    sanitizeMangaItem(m);
     let keys = getMangaTitleKeys(m.title);
     if (!keys || keys.length === 0) {
       keys = [ (m.title || m.mangaUrl || Math.random().toString()).trim().toLowerCase() ];
@@ -2940,6 +2966,7 @@ function mergeAndDeduplicate(list) {
       if (Array.isArray(m.tags) && m.tags.length > 0) {
         existing.tags = Array.from(new Set([...(existing.tags || []), ...m.tags]));
       }
+      sanitizeMangaItem(existing);
 
       const isNewFree = m.readable !== false;
       const isExistingFree = existing.readable !== false;
@@ -2965,6 +2992,7 @@ function mergeAndDeduplicate(list) {
         if (Array.isArray(existing.tags) && existing.tags.length > 0) {
           m.tags = Array.from(new Set([...(m.tags || []), ...existing.tags]));
         }
+        sanitizeMangaItem(m);
 
         // เชื่อมคีย์ทั้งหมดไปยังตัวหลักใหม่
         const allKeys = [...getMangaTitleKeys(existing.title), ...keys];
@@ -3816,8 +3844,11 @@ function setupLanguageFilter() {
 
 function is18PlusManga(m) {
   if (!m) return false;
-  const sId = (m.sourceId || '').toLowerCase();
+  const sId = (m.sourceId || m.sourceType || '').toLowerCase();
   const sName = (m.sourceName || '').toLowerCase();
+  // NTRnaja เป็นเว็บการ์ตูนทั่วไป ไม่ใช่ 18+ ห้ามรวมเข้าหมวด 18+ เด็ดขาด
+  if (sId === 'ntrnaja' || sName.includes('ntrnaja')) return false;
+
   if (sId === 'ecchi-doujin' || sName.includes('ecchi') || sName.includes('doujin')) return true;
 
   const typeLower = (m.type || '').toLowerCase();
@@ -3826,7 +3857,11 @@ function is18PlusManga(m) {
   const tagsLower = Array.isArray(m.tags) ? m.tags.map(t => String(t).toLowerCase()) : [];
   if (tagsLower.some(t => t.includes('doujin') || t.includes('18+') || t.includes('ecchi') || t.includes('hentai') || t.includes('erotica') || t.includes('adult') || t.includes('mature'))) return true;
 
-  if (Array.isArray(m.altSources) && m.altSources.some(alt => is18PlusManga(alt))) return true;
+  if (Array.isArray(m.altSources) && m.altSources.some(alt => {
+    const altId = (alt.sourceId || alt.sourceType || '').toLowerCase();
+    if (altId === 'ntrnaja' || (alt.sourceName && alt.sourceName.toLowerCase().includes('ntrnaja'))) return false;
+    return is18PlusManga(alt);
+  })) return true;
   return false;
 }
 
@@ -5996,6 +6031,7 @@ function renderMangaCards() {
   const isFavView = currentTagFilter === 'favorites';
 
   slice.forEach(m => {
+    sanitizeMangaItem(m);
     const card = document.createElement('div');
     card.className = 'manga-card';
     if (m.mangaUrl) card.dataset.url = m.mangaUrl;
