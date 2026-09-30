@@ -570,8 +570,8 @@ function parseNtrNajaHtml(html, sourceInfo) {
       mangaUrl,
       cover: extractCoverUrl(imgEl, sourceInfo.url),
       latestEp,
-      type: '18+ Manhwa',
-      tags: ['18+', 'Doujin', 'Adult'],
+      type: 'Manhwa',
+      tags: [],
       sourceId: sourceInfo.id,
       sourceName: sourceInfo.name,
       sourceUrl: sourceInfo.url,
@@ -586,8 +586,8 @@ function parseNtrNajaHtml(html, sourceInfo) {
   if (!items.length) {
     return parseGenericSourceHtml(html, sourceInfo, 'ntrnaja').map(item => ({
       ...item,
-      type: '18+ Manhwa',
-      tags: ['18+', 'Doujin', 'Adult'],
+      type: item.type || 'Manhwa',
+      tags: item.tags || [],
       readable: sourceInfo.readable !== false,
       isCoin: !!sourceInfo.isCoin,
       icon: sourceInfo.icon || '🔒'
@@ -3818,7 +3818,7 @@ function is18PlusManga(m) {
   if (!m) return false;
   const sId = (m.sourceId || '').toLowerCase();
   const sName = (m.sourceName || '').toLowerCase();
-  if (sId === 'ecchi-doujin' || sName.includes('ecchi') || sName.includes('doujin') || sId === 'ntrnaja') return true;
+  if (sId === 'ecchi-doujin' || sName.includes('ecchi') || sName.includes('doujin')) return true;
 
   const typeLower = (m.type || '').toLowerCase();
   if (typeLower.includes('doujin') || typeLower.includes('18+') || typeLower.includes('ecchi') || typeLower.includes('hentai')) return true;
