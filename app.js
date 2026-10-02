@@ -2439,7 +2439,10 @@ function getReadingHistory() {
 
     raw.forEach(item => {
       if (!item || !item.title) return;
-      const keys = getMangaTitleKeys(item.title);
+      let keys = getMangaTitleKeys(item.title);
+      if (!keys || keys.length === 0) {
+        keys = [item.title.trim().toLowerCase()];
+      }
       let foundKey = null;
       for (const k of keys) {
         if (map.has(k)) {
@@ -2676,6 +2679,7 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
     const delHist = getDeletedHistory();
     delete delHist[manga.title.trim()];
     if (manga.mangaUrl) delete delHist[manga.mangaUrl.trim()];
+    keys.forEach(k => delete delHist[k]);
     try {
       localStorage.setItem(STORAGE_DELETED_HISTORY, JSON.stringify(delHist));
     } catch (e) {}
@@ -3970,6 +3974,14 @@ function applyFilters() {
   const allowedLangs = getSelectedLanguages();
 
   filteredList = baseList.filter(m => {
+    // หากกำลังดูแท็บประวัติ หรือ เรื่องโปรด: แสดงรายการทั้งหมดของผู้ใช้ทันที 100% ไม่ถูกตัวกรองเว็บหรือตัวกรองภาษามาบัง
+    if (currentTagFilter === 'history' || currentTagFilter === 'favorites') {
+      if (currentSearchQuery) {
+        return isMangaMatchQuery(m, currentSearchQuery);
+      }
+      return true;
+    }
+
     // 0. Language filter (กรองภาษาตามปุ่มที่เลือก ทั้งตอนดูปกติและตอนค้นหา 100% เคารพปุ่มตัวกรองภาษา)
     const mangaLang = m.lang || 'th';
     if (currentSourceFilter === 'all') {
@@ -5461,6 +5473,11 @@ async function initAggregatorPage() {
         filterTags.forEach(t => t.classList.remove('active'));
         btn.classList.add('active');
         currentTagFilter = btn.getAttribute('data-filter') || 'all';
+        if (currentTagFilter === 'history' || currentTagFilter === 'favorites') {
+          currentSourceFilter = 'all';
+          const sourceTabs = document.querySelectorAll('.source-tab');
+          sourceTabs.forEach(st => st.classList.toggle('active', st.getAttribute('data-source') === 'all'));
+        }
         applyFilters();
         if (currentTagFilter === 'romance') {
           ensureRomanceFeedLoaded();
@@ -5825,6 +5842,10 @@ function restoreActiveModal() {
 }
 
 window.addEventListener('pageshow', (e) => {
+  updateHistoryAndFavCounts();
+  if (currentTagFilter === 'history' || currentTagFilter === 'favorites') {
+    applyFilters();
+  }
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('restore') === '1') {
     const grid = document.getElementById('mangaGrid');
@@ -5833,6 +5854,15 @@ window.addEventListener('pageshow', (e) => {
       try {
         window.history.replaceState({}, '', window.location.pathname);
       } catch (err) {}
+    }
+  }
+});
+
+window.addEventListener('storage', (e) => {
+  if (e && (e.key === STORAGE_HISTORY || e.key === STORAGE_FAVORITES || !e.key)) {
+    updateHistoryAndFavCounts();
+    if (currentTagFilter === 'history' || currentTagFilter === 'favorites') {
+      applyFilters();
     }
   }
 });
@@ -6938,6 +6968,12 @@ async function openChapterModal(manga, activeSource = null) {
         </div>
         <a href="reader.html?${q.toString()}" class="btn-continue-now">อ่านต่อ${resumePositionText} ⚡</a>
       `;
+      const continueBtn = continueBox.querySelector('.btn-continue-now');
+      if (continueBtn) {
+        continueBtn.addEventListener('click', () => {
+          recordReadingHistory(manga, histItem.lastChapterTitle || 'ตอนล่าสุด', histItem.lastChapterUrl);
+        });
+      }
     } else {
       continueBox.style.display = 'none';
     }
@@ -8315,6 +8351,10 @@ async function initReaderPage() {
     titleEl.textContent = `${mangaObj.title} - ${chapterEpTitle}`;
   }
   let savedReadPosition = null;
+
+  // บันทึกประวัติการอ่านทันที 100% ตั้งแต่วินาทีแรกที่เปิดหน้าอ่าน (ไม่ต้องรอโหลดรูปภาพ)
+  recordReadingHistory(mangaObj, chapterEpTitle, cleanCurrentChapterUrl);
+  savedReadPosition = getSavedReadingPosition(mangaObj, cleanCurrentChapterUrl);
 
   try {
     statusEl.style.display = 'block';
