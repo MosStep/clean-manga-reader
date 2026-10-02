@@ -2099,10 +2099,7 @@ function getSyncKey() {
 
 // เริ่มต้นระบบซิงก์ (สุ่มรหัสให้อัตโนมัติหากยังไม่มี)
 async function initSyncEngine(options = {}) {
-  if (localStorage.getItem('clean_manga_sync_disabled') === '1') {
-    updateSyncKeyUI();
-    return;
-  }
+  try { localStorage.removeItem('clean_manga_sync_disabled'); } catch (e) {}
   const timeoutMs = Math.max(0, Number(options.timeoutMs) || 0);
   const controller = timeoutMs > 0 && typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeoutId = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : 0;
@@ -2195,7 +2192,6 @@ function getCloudSyncRevision(data) {
 
 // ส่งข้อมูลประวัติและเรื่องโปรดไปซิงก์บนคลาวด์ (Debounced 500ms) พร้อมส่ง Tombstones
 function pushSyncData() {
-  if (localStorage.getItem('clean_manga_sync_disabled') === '1') return;
   const key = getSyncKey();
   if (!key) return;
 
@@ -2232,6 +2228,7 @@ function pushSyncData() {
           mergeUserSourceProfiles(result.data.sourceProfiles);
           mergeSyncedSourceSnapshots(result.data.sourceSnapshots);
           const curDelFavs = getDeletedFavorites();
+          const curDelHist = getDeletedHistory();
           // อย่าเขียนทับ localStorage ของประวัติและเรื่องโปรดตรงนี้เด็ดขาด
           // เพราะข้อมูลในเครื่องเป็นข้อมูลสดใหม่ที่สุดที่กำลังอ่านอยู่
           if (result.data.deletedFavorites) {
@@ -2420,52 +2417,19 @@ async function switchSyncKey(newKey) {
   }
 }
 
-// ตัดการเชื่อมต่อคลาวด์และใช้งานแบบเครื่องนี้อย่างเดียว 100%
-function disconnectSync() {
-  if (!confirm('ต้องการตัดการเชื่อมต่อคลาวด์หรือไม่?\n(ข้อมูลประวัติและเรื่องโปรดจะถูกบันทึกไว้ในเครื่องนี้อย่างเดียว 100% โดยไม่ถูกคลาวด์ทับหรือลบอีก)')) {
-    return;
-  }
-  localStorage.setItem('clean_manga_sync_disabled', '1');
-  localStorage.removeItem(SYNC_STORAGE_KEY);
-  currentSyncKey = '';
-  updateSyncKeyUI();
-  const statusMsg = document.getElementById('syncStatusMsg');
-  if (statusMsg) {
-    statusMsg.textContent = '✓ ตัดการเชื่อมต่อคลาวด์แล้ว (บันทึกในเครื่อง 100%)';
-    setTimeout(() => { statusMsg.textContent = ''; }, 4000);
-  }
-}
-
 // อัปเดต UI ของแถบซิงก์
 function updateSyncKeyUI() {
   const badge = document.getElementById('syncCodeBadge');
   const copyBtn = document.getElementById('btnCopySyncKey');
   const applyBtn = document.getElementById('btnApplySyncKey');
-  const disconnectBtn = document.getElementById('btnDisconnectSync');
   const keyInput = document.getElementById('syncKeyInput');
-  const isDisabled = localStorage.getItem('clean_manga_sync_disabled') === '1';
   const key = getSyncKey();
 
   if (badge) {
-    if (isDisabled) {
-      badge.textContent = 'ออฟไลน์ (ในเครื่อง)';
-      badge.style.color = '#9e9e9e';
-      badge.style.borderColor = 'rgba(255,255,255,0.2)';
-      badge.onclick = null;
-    } else {
-      badge.textContent = key || 'กำลังสุ่ม...';
-      badge.style.color = '';
-      badge.style.borderColor = '';
-      badge.onclick = () => copySyncKey();
-    }
-  }
-
-  if (disconnectBtn && !disconnectBtn.dataset.bound) {
-    disconnectBtn.dataset.bound = "1";
-    disconnectBtn.onclick = () => disconnectSync();
-  }
-  if (disconnectBtn) {
-    disconnectBtn.style.display = isDisabled ? 'none' : 'inline-block';
+    badge.textContent = key || 'กำลังสุ่ม...';
+    badge.style.color = '';
+    badge.style.borderColor = '';
+    badge.onclick = () => copySyncKey();
   }
 
   if (copyBtn && !copyBtn.dataset.bound) {
@@ -2508,17 +2472,115 @@ function copySyncKey() {
   }
 }
 
+// ฟังก์ชันบันทึกประวัติการอ่านลง LocalStorage อย่างปลอดภัย 100% พร้อมระบบ Auto-Pruning เมื่อพื้นที่ใกล้เต็ม
+function saveHistoryToStorage(history) {
+  if (!Array.isArray(history)) return false;
+  // กรองเรื่องหลอกออก
+  const cleanList = history.filter(h => h && h.title && h.title !== 'มังงะ' && h.title !== 'อ่านการ์ตูน');
+  
+  // ลดขนาด altSources และ readChapters ให้กะทัดรัด ป้องกัน LocalStorage เกิน Quota
+  cleanList.forEach(item => {
+    if (Array.isArray(item.altSources)) {
+      item.altSources = item.altSources.map(a => ({
+        sourceId: a.sourceId || '',
+        sourceName: a.sourceName || 'Online',
+        mangaUrl: a.mangaUrl || '',
+        sourceType: a.sourceType || 'mangareader'
+      })).filter((a, idx, arr) => a.mangaUrl && arr.findIndex(x => x.mangaUrl === a.mangaUrl) === idx);
+    }
+    if (Array.isArray(item.readChapters) && item.readChapters.length > 50) {
+      item.readChapters = item.readChapters.slice(-50);
+    }
+  });
+
+  let limit = Math.min(cleanList.length, 500);
+  while (limit > 0) {
+    try {
+      localStorage.setItem(STORAGE_HISTORY, JSON.stringify(cleanList.slice(0, limit)));
+      return true;
+    } catch (e) {
+      if (limit > 250) limit = 250;
+      else if (limit > 100) limit = 100;
+      else if (limit > 50) limit = 50;
+      else limit -= 10;
+    }
+  }
+  return false;
+}
+
+// สกัดชื่อเรื่องมังงะจากบริบทของแท็บหน้าอ่าน แม้จะเปิดจากแท็บเก่าหรือรีเฟรชหน้า
+function extractMangaTitleFromReaderContext(params, chapterUrl, rawTitle) {
+  let mTitle = params ? params.get('mangaTitle') : '';
+  if (mTitle && mTitle !== 'มังงะ' && mTitle !== 'อ่านการ์ตูน') return mTitle.trim();
+
+  // 1. ลองดึงจากพารามิเตอร์ title
+  if (rawTitle && rawTitle !== 'อ่านการ์ตูน' && rawTitle !== 'มังงะ') {
+    let cleanT = rawTitle.split(/\s*[-–|]\s*/)[0].trim();
+    cleanT = cleanT.replace(/^(?:อ่านการ์ตูน|อ่านมังงะ|มังงะ|เรื่อง)\s*[:\-–|]?\s*/i, '').trim();
+    cleanT = cleanT.replace(/(?:ตอนที่|ตอน|ch(?:apter)?\.?|ep(?:isode)?\.?)\s*#?\d+(?:\.\d+)?[\s\S]*$/i, '').trim();
+    if (cleanT && cleanT.length >= 2 && cleanT !== 'มังงะ' && cleanT !== 'อ่านการ์ตูน') {
+      return cleanT;
+    }
+  }
+
+  // 2. ลองหาจากประวัติเดิมหรือเรื่องโปรดที่มี URL ตอนนี้
+  try {
+    const rawHist = JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
+    if (Array.isArray(rawHist)) {
+      const matchH = rawHist.find(h => (Array.isArray(h.readChapters) && h.readChapters.includes(chapterUrl)) || (h.lastChapterUrl === chapterUrl) || (h.mangaUrl && chapterUrl && chapterUrl.includes(h.mangaUrl)));
+      if (matchH && matchH.title && matchH.title !== 'มังงะ' && matchH.title !== 'อ่านการ์ตูน') return matchH.title;
+    }
+
+    const rawFavs = JSON.parse(localStorage.getItem(STORAGE_FAVORITES) || '[]');
+    if (Array.isArray(rawFavs)) {
+      const matchF = rawFavs.find(f => (f.mangaUrl && chapterUrl && chapterUrl.includes(f.mangaUrl)));
+      if (matchF && matchF.title && matchF.title !== 'มังงะ' && matchF.title !== 'อ่านการ์ตูน') return matchF.title;
+    }
+  } catch (e) {}
+
+  // 3. ลองหาจาก cached feed
+  if (allMangaList && allMangaList.length > 0) {
+    const match = allMangaList.find(m => {
+      if (m.mangaUrl && chapterUrl && chapterUrl.includes(m.mangaUrl)) return true;
+      if (m.latestChapterUrl && m.latestChapterUrl === chapterUrl) return true;
+      return false;
+    });
+    if (match && match.title && match.title !== 'มังงะ' && match.title !== 'อ่านการ์ตูน') return match.title;
+  }
+
+  // 4. ลองสกัดจาก URL slug
+  if (chapterUrl) {
+    try {
+      const u = new URL(chapterUrl);
+      const parts = u.pathname.split('/').filter(Boolean);
+      const slugIdx = parts.findIndex(p => /^(?:manga|series|comic|read|content)$/i.test(p));
+      if (slugIdx >= 0 && parts[slugIdx + 1]) {
+        const slug = decodeURIComponent(parts[slugIdx + 1]).replace(/[-_]/g, ' ').trim();
+        if (slug && slug.length >= 2 && !/^\d+$/.test(slug)) {
+          return slug.replace(/\b\w/g, l => l.toUpperCase());
+        }
+      }
+    } catch (e) {}
+  }
+
+  return '';
+}
+
 // ดึงประวัติการอ่าน พร้อมระบบตัดและรวมเรื่องซ้ำอัตโนมัติ (Smart Deduplication ข้ามเว็บต้นทาง)
 function getReadingHistory() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
     if (!Array.isArray(raw) || raw.length === 0) return [];
 
+    // กรอง dummy titles ออกทันที
+    const validRaw = raw.filter(item => item && item.title && item.title !== 'มังงะ' && item.title !== 'อ่านการ์ตูน');
+    if (validRaw.length === 0) return [];
+
     const map = new Map();
     const result = [];
     let hasMerged = false;
 
-    raw.forEach(item => {
+    validRaw.forEach(item => {
       if (!item || !item.title) return;
       let keys = getMangaTitleKeys(item.title);
       if (!keys || keys.length === 0) {
@@ -2538,18 +2600,30 @@ function getReadingHistory() {
           hasMerged = true;
           const existingRead = Array.isArray(existing.readChapters) ? existing.readChapters : [];
           const itemRead = Array.isArray(item.readChapters) ? item.readChapters : [];
-          const mergedRead = Array.from(new Set([...existingRead, ...itemRead]));
+          const mergedRead = Array.from(new Set([...existingRead, ...itemRead])).slice(-50);
 
           // เลือกรายการที่อ่านล่าสุดกว่า
           const newer = (item.updatedAt || 0) >= (existing.updatedAt || 0) ? item : existing;
           const older = newer === item ? existing : item;
 
-          // รวมรายการเว็บสำรอง (altSources)
+          // รวมรายการเว็บสำรอง (altSources) แบบปลอดภัย ไม่ซ้อนวัตถุใหญ่
+          const rawNewerAlt = Array.isArray(newer.altSources) ? newer.altSources : [];
+          const rawOlderAlt = Array.isArray(older.altSources) ? older.altSources : [];
           const combinedAlt = [
-            ...(newer.altSources || []),
-            ...(older.altSources || []),
-            ...(older.mangaUrl && older.mangaUrl !== newer.mangaUrl ? [older] : [])
-          ];
+            ...rawNewerAlt,
+            ...rawOlderAlt,
+            ...(older.mangaUrl && older.mangaUrl !== newer.mangaUrl ? [{
+              sourceId: older.sourceId || '',
+              sourceName: older.sourceName || 'Online',
+              mangaUrl: older.mangaUrl,
+              sourceType: older.sourceType || 'mangareader'
+            }] : [])
+          ].map(a => ({
+            sourceId: a.sourceId || '',
+            sourceName: a.sourceName || 'Online',
+            mangaUrl: a.mangaUrl || '',
+            sourceType: a.sourceType || 'mangareader'
+          })).filter((a, idx, arr) => a.mangaUrl && arr.findIndex(x => x.mangaUrl === a.mangaUrl) === idx);
 
           const merged = {
             ...newer,
@@ -2577,7 +2651,7 @@ function getReadingHistory() {
     result.forEach(r => {
       if (Array.isArray(r.altSources) && r.altSources.length > 0) {
         r.altSources = r.altSources.filter(alt => {
-          if (!alt || !alt.title) return false;
+          if (!alt || !alt.title) return true; // เก็บ altSource แบบย่อไว้ตามปกติ
           if (!areMangaSameStory(alt.title, r.title)) {
             if (!result.some(existing => existing.title === alt.title || areMangaSameStory(existing.title, alt.title))) {
               rescuedFromAlt.push(alt);
@@ -2595,9 +2669,7 @@ function getReadingHistory() {
     }
 
     if (hasMerged) {
-      try {
-        localStorage.setItem(STORAGE_HISTORY, JSON.stringify(result.slice(0, 500)));
-      } catch (e) {}
+      saveHistoryToStorage(result);
     }
     result.forEach(item => {
       if (!item.lang) {
@@ -2773,7 +2845,21 @@ function clearAllFavorites() {
 
 // บันทึกประวัติการอ่านอัตโนมัติ (เรียกใช้อัตโนมัติเมื่อกดอ่านตอน)
 function recordReadingHistory(manga, chapterTitle, chapterUrl) {
-  if (!manga || !manga.title || !chapterUrl) return;
+  if (!manga || !chapterUrl) return;
+  let finalTitle = (manga.title || '').trim();
+  if (!finalTitle || finalTitle === 'มังงะ' || finalTitle === 'อ่านการ์ตูน') {
+    // พยายามกู้คืนชื่อเรื่องจากบริบท URL หรือประวัติเดิม
+    finalTitle = extractMangaTitleFromReaderContext(
+      typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null,
+      chapterUrl,
+      chapterTitle
+    );
+  }
+  if (!finalTitle || finalTitle === 'มังงะ' || finalTitle === 'อ่านการ์ตูน') {
+    return; // ไม่บันทึกชื่อเรื่องหลอก เพื่อไม่ให้ทับซ้อนกัน
+  }
+  manga.title = finalTitle;
+
   try {
     let history = getReadingHistory();
     const keys = getMangaTitleKeys(manga.title);
@@ -2821,6 +2907,13 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
       const altWithCover = manga.altSources.find(a => a.cover);
       if (altWithCover) resolvedCover = altWithCover.cover;
     }
+    if (!resolvedCover) {
+      try {
+        const favs = getFavorites();
+        const favMatch = favs.find(f => f.title === manga.title || areMangaSameStory(f.title, manga.title));
+        if (favMatch && favMatch.cover) resolvedCover = favMatch.cover;
+      } catch (e) {}
+    }
 
     // สร้างหรืออัปเดตข้อมูลเรื่อง
     const item = {
@@ -2838,7 +2931,7 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
       altSources: (manga.altSources && manga.altSources.length > 0) ? manga.altSources : (existing && existing.altSources ? existing.altSources : []),
       lastChapterTitle: cleanChapterTitle,
       lastChapterUrl: chapterUrl,
-      readChapters: readChapters,
+      readChapters: readChapters.slice(-50),
       lastReadPosition: existing && existing.lastReadPosition?.chapterUrl === chapterUrl
         ? existing.lastReadPosition
         : {
@@ -2862,9 +2955,12 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
     history.unshift(item);
     if (history.length > 500) history.pop(); // เก็บประวัติสูงสุด 500 เรื่อง
 
-    localStorage.setItem(STORAGE_HISTORY, JSON.stringify(history));
+    saveHistoryToStorage(history);
     updateHistoryAndFavCounts();
     pushSyncData(); // ซิงก์ขึ้น Cloudflare KV
+    try {
+      window.dispatchEvent(new CustomEvent('clean_manga_history_updated', { detail: { manga: item } }));
+    } catch (e) {}
   } catch (e) {
     console.warn("Could not save history:", e);
   }
@@ -5954,12 +6050,25 @@ window.addEventListener('pageshow', (e) => {
   }
 });
 
+const refreshUserDataOnView = () => {
+  updateHistoryAndFavCounts();
+  if (currentTagFilter === 'history' || currentTagFilter === 'favorites') {
+    applyFilters();
+  }
+};
+
 window.addEventListener('storage', (e) => {
   if (e && (e.key === STORAGE_HISTORY || e.key === STORAGE_FAVORITES || !e.key)) {
-    updateHistoryAndFavCounts();
-    if (currentTagFilter === 'history' || currentTagFilter === 'favorites') {
-      applyFilters();
-    }
+    refreshUserDataOnView();
+  }
+});
+
+window.addEventListener('clean_manga_history_updated', refreshUserDataOnView);
+window.addEventListener('focus', refreshUserDataOnView);
+window.addEventListener('pageshow', refreshUserDataOnView);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    refreshUserDataOnView();
   }
 });
 
@@ -8302,6 +8411,7 @@ async function initReaderPage() {
   initOfflineAppSupport();
   const params = new URLSearchParams(window.location.search);
   const chapterUrl = params.get('url');
+  const cleanCurrentChapterUrl = cleanChapterNavUrl(chapterUrl);
   const title = params.get('title') || 'อ่านการ์ตูน';
 
   let mangaUrl = params.get('mangaUrl');
@@ -8347,8 +8457,15 @@ async function initReaderPage() {
     }
   } catch (e) {}
 
+  const inferredMangaTitle = extractMangaTitleFromReaderContext(params, cleanCurrentChapterUrl, title);
+  let resolvedMangaTitle = mangaTitle || inferredMangaTitle || '';
+  if (!resolvedMangaTitle || resolvedMangaTitle === 'มังงะ' || resolvedMangaTitle === 'อ่านการ์ตูน') {
+    resolvedMangaTitle = title.split(' - ')[0].trim();
+  }
+  if (resolvedMangaTitle === 'อ่านการ์ตูน') resolvedMangaTitle = '';
+
   const mangaObj = {
-    title: mangaTitle || title.split(' - ')[0] || 'มังงะ',
+    title: resolvedMangaTitle,
     cover: mangaCover || '',
     mangaUrl: mangaUrl || '',
     sourceId: sourceId || '',
@@ -8363,7 +8480,7 @@ async function initReaderPage() {
   if (!mangaObj.title || mangaObj.title === 'มังงะ' || mangaObj.title === 'อ่านการ์ตูน') {
     if (allMangaList && allMangaList.length > 0) {
       const match = allMangaList.find(m => {
-        if (m.mangaUrl && cleanCurrentChapterUrl.includes(m.mangaUrl)) return true;
+        if (m.mangaUrl && cleanCurrentChapterUrl && cleanCurrentChapterUrl.includes(m.mangaUrl)) return true;
         if (m.latestChapterUrl && m.latestChapterUrl === cleanCurrentChapterUrl) return true;
         return false;
       });
@@ -8450,7 +8567,6 @@ async function initReaderPage() {
   if (readerChaptersBtn) readerChaptersBtn.onclick = openInReaderModal;
   if (footerChaptersBtn) footerChaptersBtn.onclick = openInReaderModal;
 
-  const cleanCurrentChapterUrl = cleanChapterNavUrl(chapterUrl);
   if (!cleanCurrentChapterUrl) {
     statusEl.innerHTML = `
       <div style="max-width:500px; margin: 40px auto; padding: 28px 20px; background: rgba(255,255,255,0.04); border-radius: 16px; border: 1px solid var(--border); text-align: center; backdrop-filter: blur(10px);">
@@ -8485,8 +8601,10 @@ async function initReaderPage() {
   let savedReadPosition = null;
 
   // บันทึกประวัติการอ่านทันที 100% ตั้งแต่วินาทีแรกที่เปิดหน้าอ่าน (ไม่ต้องรอโหลดรูปภาพ)
-  recordReadingHistory(mangaObj, chapterEpTitle, cleanCurrentChapterUrl);
-  savedReadPosition = getSavedReadingPosition(mangaObj, cleanCurrentChapterUrl);
+  if (mangaObj.title && mangaObj.title !== 'มังงะ' && mangaObj.title !== 'อ่านการ์ตูน') {
+    recordReadingHistory(mangaObj, chapterEpTitle, cleanCurrentChapterUrl);
+    savedReadPosition = getSavedReadingPosition(mangaObj, cleanCurrentChapterUrl);
+  }
 
   try {
     statusEl.style.display = 'block';
@@ -8512,12 +8630,13 @@ async function initReaderPage() {
     if (readerSyncPromise && typeof readerSyncPromise.catch === 'function') {
       readerSyncPromise.catch(() => {});
     }
-    if (readerData && readerData.mangaTitle && (!mangaObj.title || mangaObj.title === 'มังงะ' || mangaObj.title === 'อ่านการ์ตูน')) {
+    if (readerData && readerData.mangaTitle && (!mangaObj.title || mangaObj.title === 'มังงะ' || mangaObj.title === 'อ่านการ์ตูน' || mangaObj.title.length < readerData.mangaTitle.length)) {
       mangaObj.title = readerData.mangaTitle;
       const updatedEpTitle = cleanMangaChapterTitle(title, mangaObj.title, cleanCurrentChapterUrl);
       if (titleEl) titleEl.textContent = `${mangaObj.title} - ${updatedEpTitle}`;
     }
-    recordReadingHistory(mangaObj, chapterEpTitle, cleanCurrentChapterUrl);
+    const finalEpTitle = cleanMangaChapterTitle(title, mangaObj.title, cleanCurrentChapterUrl);
+    recordReadingHistory(mangaObj, finalEpTitle, cleanCurrentChapterUrl);
     savedReadPosition = getSavedReadingPosition(mangaObj, cleanCurrentChapterUrl);
     if (readerDataError) throw readerDataError;
 

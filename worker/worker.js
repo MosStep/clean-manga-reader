@@ -275,6 +275,7 @@ export default {
 
       for (const item of combined) {
         if (!item || !item.title) continue;
+        const itemUpdatedAt = Number(item.updatedAt || 0);
         const titleKey = item.title.trim();
         const urlKey = (item.mangaUrl || '').trim();
         const isFromPayload = Array.isArray(histB) && histB.includes(item);
@@ -302,7 +303,7 @@ export default {
         if (!map.has(itemKey)) {
           map.set(itemKey, { 
             ...item,
-            readChapters: itemReadChapters
+            readChapters: itemReadChapters.slice(-50)
           });
         } else {
           const existing = map.get(itemKey);
@@ -310,14 +311,27 @@ export default {
           const combinedRead = Array.from(new Set([...existRead, ...itemReadChapters]));
           const newer = itemUpdatedAt >= (existing.updatedAt || 0) ? item : existing;
           const older = newer === item ? existing : item;
+          const rawAlt = Array.isArray(newer.altSources) ? newer.altSources : [];
+          const rawOlderAlt = Array.isArray(older.altSources) ? older.altSources : [];
           const combinedAlt = [
-            ...(newer.altSources || []),
-            ...(older.altSources || []),
-            ...(older.mangaUrl && older.mangaUrl !== newer.mangaUrl ? [older] : [])
-          ];
+            ...rawAlt,
+            ...rawOlderAlt,
+            ...(older.mangaUrl && older.mangaUrl !== newer.mangaUrl ? [{
+              sourceId: older.sourceId || '',
+              sourceName: older.sourceName || 'Online',
+              mangaUrl: older.mangaUrl,
+              sourceType: older.sourceType || 'mangareader'
+            }] : [])
+          ].map(a => ({
+            sourceId: a.sourceId || '',
+            sourceName: a.sourceName || 'Online',
+            mangaUrl: a.mangaUrl,
+            sourceType: a.sourceType || 'mangareader'
+          })).filter((a, idx, arr) => a.mangaUrl && arr.findIndex(x => x.mangaUrl === a.mangaUrl) === idx);
+
           map.set(itemKey, {
             ...newer,
-            readChapters: combinedRead,
+            readChapters: combinedRead.slice(-50),
             altSources: combinedAlt,
             updatedAt: Math.max(existing.updatedAt || 0, itemUpdatedAt)
           });
@@ -555,7 +569,9 @@ export default {
         // ผสานรายการที่ถูกลบ (Tombstones) และเวลาล้างประวัติ
         const mergedDeletedFavs = { ...existingData.deletedFavorites, ...(payload.deletedFavorites || {}) };
         const mergedDeletedHist = { ...existingData.deletedHistory, ...(payload.deletedHistory || {}) };
-        const mergedHistClearedAt = Math.max(existingData.historyClearedAt || 0, Number(payload.historyClearedAt || 0));
+        const mergedHistClearedAt = (Array.isArray(payload.history) && payload.history.length > 0)
+          ? 0
+          : Math.max(existingData.historyClearedAt || 0, Number(payload.historyClearedAt || 0));
 
         // ถ้านำเรื่องที่มีอยู่กลับมาส่ง แปลว่าผู้ใช้อ่านเรื่องนี้อยู่ ให้ล้าง Tombstone การลบทิ้งทันที
         if (Array.isArray(payload.history)) {
