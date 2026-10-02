@@ -277,17 +277,18 @@ export default {
         if (!item || !item.title) continue;
         const titleKey = item.title.trim();
         const urlKey = (item.mangaUrl || '').trim();
-        const itemUpdatedAt = item.updatedAt || 0;
+        const isFromPayload = Array.isArray(histB) && histB.includes(item);
+        if (!isFromPayload) {
+          // ตรวจสอบการล้างประวัติทั้งหมดเฉพาะกับข้อมูลเก่าบนคลาวด์
+          if (clearedAt > 0 && itemUpdatedAt <= clearedAt) {
+            continue;
+          }
 
-        // ตรวจสอบการล้างประวัติทั้งหมด
-        if (clearedAt > 0 && itemUpdatedAt <= clearedAt) {
-          continue;
-        }
-
-        // ตรวจสอบการลบรายเรื่อง
-        const deletedTime = Math.max(deletedMap[titleKey] || 0, deletedMap[urlKey] || 0);
-        if (deletedTime > 0 && itemUpdatedAt <= deletedTime) {
-          continue;
+          // ตรวจสอบการลบรายเรื่องเฉพาะกับข้อมูลเก่าบนคลาวด์
+          const deletedTime = Math.max(deletedMap[titleKey] || 0, deletedMap[urlKey] || 0);
+          if (deletedTime > 0 && itemUpdatedAt <= deletedTime) {
+            continue;
+          }
         }
 
         if (itemUpdatedAt && itemUpdatedAt < cutoff) continue; // ลบเมื่อเกิน 2 ปี
@@ -555,6 +556,22 @@ export default {
         const mergedDeletedFavs = { ...existingData.deletedFavorites, ...(payload.deletedFavorites || {}) };
         const mergedDeletedHist = { ...existingData.deletedHistory, ...(payload.deletedHistory || {}) };
         const mergedHistClearedAt = Math.max(existingData.historyClearedAt || 0, Number(payload.historyClearedAt || 0));
+
+        // ถ้านำเรื่องที่มีอยู่กลับมาส่ง แปลว่าผู้ใช้อ่านเรื่องนี้อยู่ ให้ล้าง Tombstone การลบทิ้งทันที
+        if (Array.isArray(payload.history)) {
+          payload.history.forEach(item => {
+            if (!item || !item.title) return;
+            delete mergedDeletedHist[item.title.trim()];
+            if (item.mangaUrl) delete mergedDeletedHist[item.mangaUrl.trim()];
+          });
+        }
+        if (Array.isArray(payload.favorites)) {
+          payload.favorites.forEach(item => {
+            if (!item || !item.title) return;
+            delete mergedDeletedFavs[item.title.trim()];
+            if (item.mangaUrl) delete mergedDeletedFavs[item.mangaUrl.trim()];
+          });
+        }
 
         // รวมข้อมูลแบบ Smart Merge: ผสานประวัติ, เรื่องโปรด และชื่อเล่นในแชทจากหลายเครื่อง โดยเคารพการลบ
         const nickname = (payload.nickname || existingData.nickname || '').trim().slice(0, 25);

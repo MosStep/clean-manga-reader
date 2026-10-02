@@ -2099,6 +2099,10 @@ function getSyncKey() {
 
 // เริ่มต้นระบบซิงก์ (สุ่มรหัสให้อัตโนมัติหากยังไม่มี)
 async function initSyncEngine(options = {}) {
+  if (localStorage.getItem('clean_manga_sync_disabled') === '1') {
+    updateSyncKeyUI();
+    return;
+  }
   const timeoutMs = Math.max(0, Number(options.timeoutMs) || 0);
   const controller = timeoutMs > 0 && typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeoutId = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : 0;
@@ -2191,6 +2195,7 @@ function getCloudSyncRevision(data) {
 
 // ส่งข้อมูลประวัติและเรื่องโปรดไปซิงก์บนคลาวด์ (Debounced 500ms) พร้อมส่ง Tombstones
 function pushSyncData() {
+  if (localStorage.getItem('clean_manga_sync_disabled') === '1') return;
   const key = getSyncKey();
   if (!key) return;
 
@@ -2227,44 +2232,17 @@ function pushSyncData() {
           mergeUserSourceProfiles(result.data.sourceProfiles);
           mergeSyncedSourceSnapshots(result.data.sourceSnapshots);
           const curDelFavs = getDeletedFavorites();
-          const curDelHist = getDeletedHistory();
-          const curClearedAt = getHistoryClearedAt();
-
-          if (Array.isArray(result.data.favorites)) {
-            // กรองรายการที่ถูกลบออก เพื่อไม่ให้เรื่องที่ลบไปแล้วฟื้นคืนชีพกลับมา
-            const cleanFavs = result.data.favorites.filter(f => {
-              if (!f || !f.title) return false;
-              const delTime = Math.max(curDelFavs[f.title.trim()] || 0, curDelFavs[(f.mangaUrl || '').trim()] || 0);
-              return !delTime || (f.savedAt || 0) > delTime;
-            });
-            localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(cleanFavs));
-          }
-          if (Array.isArray(result.data.history)) {
-            // กรองรายการที่ถูกลบออก หรือเวลาเก่ากว่าการสั่งล้างทั้งหมด
-            const cleanHist = result.data.history.filter(h => {
-              if (!h || !h.title) return false;
-              if (curClearedAt && (h.updatedAt || 0) <= curClearedAt) return false;
-              const delTime = Math.max(curDelHist[h.title.trim()] || 0, curDelHist[(h.mangaUrl || '').trim()] || 0);
-              return !delTime || (h.updatedAt || 0) > delTime;
-            });
-            localStorage.setItem(STORAGE_HISTORY, JSON.stringify(cleanHist));
-          }
+          // อย่าเขียนทับ localStorage ของประวัติและเรื่องโปรดตรงนี้เด็ดขาด
+          // เพราะข้อมูลในเครื่องเป็นข้อมูลสดใหม่ที่สุดที่กำลังอ่านอยู่
           if (result.data.deletedFavorites) {
             localStorage.setItem(STORAGE_DELETED_FAVORITES, JSON.stringify({ ...curDelFavs, ...result.data.deletedFavorites }));
           }
           if (result.data.deletedHistory) {
             localStorage.setItem(STORAGE_DELETED_HISTORY, JSON.stringify({ ...curDelHist, ...result.data.deletedHistory }));
           }
-          if (result.data.historyClearedAt) {
-            localStorage.setItem(STORAGE_HISTORY_CLEARED_AT, String(Math.max(curClearedAt, result.data.historyClearedAt)));
-          }
           if (result.data.nickname) {
             localStorage.setItem(CHAT_STORAGE_NICKNAME, result.data.nickname);
             if (nickInput && !nickInput.value) nickInput.value = result.data.nickname;
-          }
-          updateHistoryAndFavCounts();
-          if (currentTagFilter === 'favorites' || currentTagFilter === 'history') {
-            applyFilters();
           }
         }
       }
@@ -2351,11 +2329,9 @@ async function pullAndMergeSyncData(options = {}) {
           const delTime = Math.max(delHist[ch.title] || 0, delHist[ch.mangaUrl] || 0);
           return !delTime || (ch.updatedAt || 0) > delTime;
         });
-        const localHist = getReadingHistory().filter(lh => {
-          if (histClearedAt && (lh.updatedAt || 0) <= histClearedAt) return false;
-          const delTime = Math.max(delHist[lh.title] || 0, delHist[lh.mangaUrl] || 0);
-          return !delTime || (lh.updatedAt || 0) > delTime;
-        });
+        // ข้อมูลในเครื่อง (localHist) จะต้องไม่ถูกคัดทิ้งโดย Tombstone ของคลาวด์
+        // เพื่อป้องกันไม่ให้ประวัติที่เพิ่งอ่านหายไป
+        const localHist = getReadingHistory();
 
         const mergedHist = [...localHist];
         cloudHist.forEach(ch => {
@@ -2423,7 +2399,8 @@ async function switchSyncKey(newKey) {
       } catch (e) {}
     }
 
-    // บันทึกรหัสใหม่ลงเครื่องนี้ถาวร
+    // บันทึกรหัสใหม่ลงเครื่องนี้ถาวร และเปิดใช้งานซิงก์
+    localStorage.removeItem('clean_manga_sync_disabled');
     currentSyncKey = cleanKey;
     localStorage.setItem(SYNC_STORAGE_KEY, cleanKey);
     lastSeenCloudRevision = null;
@@ -2443,17 +2420,52 @@ async function switchSyncKey(newKey) {
   }
 }
 
+// ตัดการเชื่อมต่อคลาวด์และใช้งานแบบเครื่องนี้อย่างเดียว 100%
+function disconnectSync() {
+  if (!confirm('ต้องการตัดการเชื่อมต่อคลาวด์หรือไม่?\n(ข้อมูลประวัติและเรื่องโปรดจะถูกบันทึกไว้ในเครื่องนี้อย่างเดียว 100% โดยไม่ถูกคลาวด์ทับหรือลบอีก)')) {
+    return;
+  }
+  localStorage.setItem('clean_manga_sync_disabled', '1');
+  localStorage.removeItem(SYNC_STORAGE_KEY);
+  currentSyncKey = '';
+  updateSyncKeyUI();
+  const statusMsg = document.getElementById('syncStatusMsg');
+  if (statusMsg) {
+    statusMsg.textContent = '✓ ตัดการเชื่อมต่อคลาวด์แล้ว (บันทึกในเครื่อง 100%)';
+    setTimeout(() => { statusMsg.textContent = ''; }, 4000);
+  }
+}
+
 // อัปเดต UI ของแถบซิงก์
 function updateSyncKeyUI() {
   const badge = document.getElementById('syncCodeBadge');
   const copyBtn = document.getElementById('btnCopySyncKey');
   const applyBtn = document.getElementById('btnApplySyncKey');
+  const disconnectBtn = document.getElementById('btnDisconnectSync');
   const keyInput = document.getElementById('syncKeyInput');
+  const isDisabled = localStorage.getItem('clean_manga_sync_disabled') === '1';
   const key = getSyncKey();
 
   if (badge) {
-    badge.textContent = key || 'กำลังสุ่ม...';
-    badge.onclick = () => copySyncKey();
+    if (isDisabled) {
+      badge.textContent = 'ออฟไลน์ (ในเครื่อง)';
+      badge.style.color = '#9e9e9e';
+      badge.style.borderColor = 'rgba(255,255,255,0.2)';
+      badge.onclick = null;
+    } else {
+      badge.textContent = key || 'กำลังสุ่ม...';
+      badge.style.color = '';
+      badge.style.borderColor = '';
+      badge.onclick = () => copySyncKey();
+    }
+  }
+
+  if (disconnectBtn && !disconnectBtn.dataset.bound) {
+    disconnectBtn.dataset.bound = "1";
+    disconnectBtn.onclick = () => disconnectSync();
+  }
+  if (disconnectBtn) {
+    disconnectBtn.style.display = isDisabled ? 'none' : 'inline-block';
   }
 
   if (copyBtn && !copyBtn.dataset.bound) {
@@ -2766,13 +2778,14 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
     let history = getReadingHistory();
     const keys = getMangaTitleKeys(manga.title);
 
-    // ถ้านำเรื่องนี้กลับมาอ่านใหม่ ให้ยกเลิก Tombstone การลบ
+    // ถ้านำเรื่องนี้กลับมาอ่านใหม่ ให้ยกเลิก Tombstone การลบ และล้างสถานะเคยล้างประวัติ
     const delHist = getDeletedHistory();
     delete delHist[manga.title.trim()];
     if (manga.mangaUrl) delete delHist[manga.mangaUrl.trim()];
     keys.forEach(k => delete delHist[k]);
     try {
       localStorage.setItem(STORAGE_DELETED_HISTORY, JSON.stringify(delHist));
+      localStorage.removeItem(STORAGE_HISTORY_CLEARED_AT);
     } catch (e) {}
     
     // หาเรื่องเดิมถ้าเคยอ่าน
@@ -8495,8 +8508,10 @@ async function initReaderPage() {
       readerDataError = error;
     }
 
-    // ดึง checkpoint บนอุปกรณ์อื่นก่อนบันทึกประวัติ เพื่อไม่ให้การเปิดตอนใหม่ทับตำแหน่งเดิม
-    try { await readerSyncPromise; } catch (error) {}
+    // ซิงก์ข้อมูลคลาวด์แบบ background โดยไม่ขัดจังหวะการอ่าน
+    if (readerSyncPromise && typeof readerSyncPromise.catch === 'function') {
+      readerSyncPromise.catch(() => {});
+    }
     if (readerData && readerData.mangaTitle && (!mangaObj.title || mangaObj.title === 'มังงะ' || mangaObj.title === 'อ่านการ์ตูน')) {
       mangaObj.title = readerData.mangaTitle;
       const updatedEpTitle = cleanMangaChapterTitle(title, mangaObj.title, cleanCurrentChapterUrl);
