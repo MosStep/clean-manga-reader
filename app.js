@@ -9233,9 +9233,93 @@ async function initReaderPage() {
       window.requestAnimationFrame(applyPosition);
     }
 
+    // --- ระบบซ่อน/แสดงแถบนำทางด้านบนอัตโนมัติ (Auto-hide on Scroll Down, Show on Scroll Up & Tap to Toggle) ---
+    const readerNavbar = document.querySelector('.reader-navbar');
+    let lastReaderScrollY = window.scrollY || 0;
+    let isReaderNavHidden = false;
+
+    function setReaderNavbarVisibility(show) {
+      isReaderNavHidden = !show;
+      if (readerNavbar) {
+        if (show) {
+          readerNavbar.classList.remove('nav-hidden');
+        } else {
+          readerNavbar.classList.add('nav-hidden');
+        }
+      }
+      if (singlePageBar && currentMode === 'single') {
+        if (show) {
+          singlePageBar.classList.remove('bar-hidden');
+        } else {
+          singlePageBar.classList.add('bar-hidden');
+        }
+      }
+    }
+
+    function toggleReaderNavbar() {
+      setReaderNavbarVisibility(isReaderNavHidden);
+    }
+
+    const scrollThreshold = 14;
     window.addEventListener('scroll', () => {
-      if (currentMode === 'scroll') scheduleReadPositionSave();
+      const currentScrollY = window.scrollY || 0;
+      if (currentMode === 'scroll') {
+        scheduleReadPositionSave();
+        const delta = currentScrollY - lastReaderScrollY;
+
+        if (currentScrollY <= 25) {
+          // ถ้าอยู่ด้านบนสุดของหน้า ให้แสดงแถบเมนูเสมอ
+          setReaderNavbarVisibility(true);
+        } else if (delta > scrollThreshold && currentScrollY > 50) {
+          // เลื่อนลง -> ซ่อนแถบเมนู
+          setReaderNavbarVisibility(false);
+        } else if (delta < -scrollThreshold) {
+          // เลื่อนขึ้น -> นำแถบเมนูกลับมา
+          setReaderNavbarVisibility(true);
+        }
+      }
+      lastReaderScrollY = currentScrollY;
     }, { passive: true });
+
+    // ตรวจจับการแตะหน้าจอ (Tap) เพื่อมุบ/เรียกแถบเมนูออกมา
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchStartTime = 0;
+    let lastTapToggleTime = 0;
+
+    const isInteractiveTarget = (target) => {
+      if (!target || !target.closest) return false;
+      return !!target.closest('button, a, input, select, textarea, dialog, .tap-zone, .btn-page-nav, .modal, .modal-content, .reader-footer, .manga-chat-section, #chatSection');
+    };
+
+    window.addEventListener('touchstart', (e) => {
+      if (e.touches && e.touches.length === 1) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        touchStartTime = Date.now();
+      }
+    }, { passive: true });
+
+    window.addEventListener('touchend', (e) => {
+      if (isInteractiveTarget(e.target)) return;
+      const touchDuration = Date.now() - touchStartTime;
+      if (touchDuration < 380 && e.changedTouches && e.changedTouches.length === 1) {
+        const dx = Math.abs(e.changedTouches[0].clientX - touchStartX);
+        const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
+        if (dx <= 12 && dy <= 12) {
+          lastTapToggleTime = Date.now();
+          toggleReaderNavbar();
+        }
+      }
+    }, { passive: true });
+
+    // คลิกบน Desktop (หรืออุปกรณ์ที่ไม่ได้ทริกเกอร์ touch)
+    window.addEventListener('click', (e) => {
+      if (Date.now() - lastTapToggleTime < 350) return; // ป้องกัน double trigger จาก touch event
+      if (isInteractiveTarget(e.target)) return;
+      toggleReaderNavbar();
+    });
+
     window.addEventListener('pagehide', () => persistCurrentReadPosition(true));
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') persistCurrentReadPosition(true);

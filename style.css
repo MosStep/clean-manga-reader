@@ -1452,6 +1452,13 @@ body {
   padding: 0 16px;
   z-index: 100;
   gap: 8px;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+
+.reader-navbar.nav-hidden {
+  transform: translateY(-100%) !important;
+  pointer-events: none;
 }
 
 .reader-nav-left, .reader-nav-right {
@@ -1614,6 +1621,14 @@ body {
   align-items: center;
   gap: 16px;
   z-index: 120;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.28s ease;
+  will-change: transform, opacity;
+}
+
+.single-page-bar.bar-hidden {
+  transform: translate(-50%, 150%) !important;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .source-tag[hidden],
