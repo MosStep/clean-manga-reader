@@ -3000,6 +3000,137 @@ body {
 .source-manager-empty { padding: 10px; color: var(--text-sub); font-size: 0.78rem; text-align: center; }
 .source-status-badge.warning { color: #ffd36a; background: rgba(255, 211, 106, 0.1); border: 1px solid rgba(255, 211, 106, 0.24); box-shadow: none; }
 
+/* Body Lock when Chapter Modal is open */
+body.modal-open {
+  overflow: hidden !important;
+  touch-action: none;
+}
+
+/* Reader Page Slots & Placeholders (CLS Prevention) */
+.reader-page-slot {
+  width: 100%;
+  max-width: 900px;
+  min-height: 520px;
+  aspect-ratio: 2 / 3;
+  margin: 0 auto 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #0f1015;
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.reader-page-slot img {
+  width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.reader-page-slot canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.reader-page-slot.loaded {
+  min-height: unset;
+  aspect-ratio: unset;
+  background: transparent;
+}
+
+.reader-page-placeholder-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-sub);
+  font-size: 0.88rem;
+  padding: 30px 15px;
+  text-align: center;
+}
+
+/* Reader Page Error & Retry UI */
+.reader-page-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  text-align: center;
+  background: rgba(255, 77, 77, 0.06);
+  border: 1px dashed rgba(255, 77, 77, 0.35);
+  border-radius: 12px;
+  max-width: 440px;
+  margin: 20px auto;
+  box-sizing: border-box;
+}
+
+.reader-page-error-icon {
+  font-size: 2.2rem;
+  margin-bottom: 8px;
+}
+
+.reader-page-error-title {
+  color: #ff6b6b;
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.reader-page-error-desc {
+  color: var(--text-sub);
+  font-size: 0.84rem;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.btn-retry-page {
+  padding: 9px 22px;
+  background: #00e676;
+  color: #000;
+  border: 0;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: transform 0.15s, opacity 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-retry-page:hover {
+  opacity: 0.9;
+  transform: scale(1.03);
+}
+
+/* Free vs Coin Episode Breakdown Badges */
+.manga-ep-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.25;
+}
+
+.manga-latest-ep.free-ep {
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.manga-sub-ep.coin-ep {
+  color: #ffd36a;
+  font-size: 0.72rem;
+  font-weight: 500;
+  opacity: 0.95;
+}
+
 @media (max-width: 640px) {
   .source-bar-controls { flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
   .source-bar-controls .stats-counter { font-size: 0.7rem; }
@@ -3024,4 +3155,5 @@ body {
   .source-manager-input-row button { width: 100%; }
   .source-manager-item { align-items: flex-start; flex-direction: column; }
   .source-manager-item-actions { width: 100%; }
+  .reader-page-slot { min-height: 380px; }
 }

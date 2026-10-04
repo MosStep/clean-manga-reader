@@ -663,12 +663,26 @@ function saveNtrChapterCache(url, epTitle) {
 
 function updateCardLatestEpInDom(mangaUrl, title, newEp) {
   if (!newEp) return;
+  const mangaObj = typeof allMangaList !== 'undefined' ? allMangaList.find(m => (mangaUrl && m.mangaUrl === mangaUrl) || (title && m.title === title)) : null;
+  const epInfo = (mangaObj && typeof getMangaEpBreakdown === 'function') ? getMangaEpBreakdown(mangaObj) : null;
+
   const cards = document.querySelectorAll('.manga-card');
   cards.forEach(card => {
     if ((mangaUrl && card.dataset.url === mangaUrl) || (title && card.dataset.title === title)) {
-      const epEl = card.querySelector('.manga-latest-ep, .manga-latest span:first-child');
-      if (epEl) {
-        epEl.textContent = newEp;
+      const container = card.querySelector('.manga-latest');
+      if (container) {
+        if (epInfo && epInfo.hasCoinAhead) {
+          container.innerHTML = `
+            <div class="manga-ep-breakdown">
+              <span class="manga-latest-ep free-ep">อ่านฟรีถึง ตอนที่ ${epInfo.freeMax}</span>
+              <span class="manga-sub-ep coin-ep">ล่าสุดทุกเว็บ ตอนที่ ${epInfo.overallMax}</span>
+            </div>
+            <span style="font-size: 0.75rem; color: #888;">อ่าน →</span>
+          `;
+        } else {
+          const epEl = container.querySelector('.manga-latest-ep, span:first-child');
+          if (epEl) epEl.textContent = newEp;
+        }
       }
     }
   });
@@ -2844,7 +2858,7 @@ function clearAllFavorites() {
 }
 
 // บันทึกประวัติการอ่านอัตโนมัติ (เรียกใช้อัตโนมัติเมื่อกดอ่านตอน)
-function recordReadingHistory(manga, chapterTitle, chapterUrl) {
+function recordReadingHistory(manga, chapterTitle, chapterUrl, options = {}) {
   if (!manga || !chapterUrl) return;
   let finalTitle = (manga.title || '').trim();
   if (!finalTitle || finalTitle === 'มังงะ' || finalTitle === 'อ่านการ์ตูน') {
@@ -2880,8 +2894,9 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl) {
       return areMangaSameStory(h.title, manga.title);
     });
 
+    const shouldMarkRead = options.markRead !== false;
     const readChapters = existing && Array.isArray(existing.readChapters) ? [...existing.readChapters] : [];
-    if (!readChapters.includes(chapterUrl)) {
+    if (shouldMarkRead && !readChapters.includes(chapterUrl)) {
       readChapters.push(chapterUrl);
     }
 
@@ -3113,6 +3128,27 @@ function extractEpNumberFromText(text) {
   return m ? parseFloat(m[1]) : 0;
 }
 
+// คำนวณสรุปเลขตอนอ่านฟรี vs เลขตอนล่าสุดรวมทุกเว็บ (สำหรับแยกแสดงผลชัดเจน)
+function getMangaEpBreakdown(manga) {
+  if (!manga) return { freeMax: 0, overallMax: 0, hasCoinAhead: false };
+  const sources = [manga, ...(manga.altSources || [])].filter(Boolean);
+  let freeMax = 0;
+  let overallMax = 0;
+
+  sources.forEach(s => {
+    const epNum = extractEpNumberFromText(s.latestEp);
+    const isFree = s.readable !== false && !s.isCoin;
+    if (epNum > overallMax) overallMax = epNum;
+    if (isFree && epNum > freeMax) freeMax = epNum;
+  });
+
+  return {
+    freeMax,
+    overallMax,
+    hasCoinAhead: overallMax > freeMax && freeMax > 0
+  };
+}
+
 // 8. รวมข้อมูลและตัดเรื่องซ้ำ (Deduplication)
 // กฎเหล็ก: "เอาเว็บฟรีขึ้นก่อน" + "ถ้าสถานะเหมือนกัน ให้เอาเว็บที่มีตอนมากที่สุดขึ้นนำ" + ระบบตรวจจับชื่อเรื่องข้ามค่าย
 function mergeAndDeduplicate(list) {
@@ -3164,8 +3200,8 @@ function mergeAndDeduplicate(list) {
       }
       sanitizeMangaItem(existing);
 
-      const isNewFree = m.readable !== false;
-      const isExistingFree = existing.readable !== false;
+      const isNewFree = m.readable !== false && !m.isCoin;
+      const isExistingFree = existing.readable !== false && !existing.isCoin;
       const newEp = extractEpNumberFromText(m.latestEp);
       const existingEp = extractEpNumberFromText(existing.latestEp);
 
@@ -3188,6 +3224,19 @@ function mergeAndDeduplicate(list) {
         if (Array.isArray(existing.tags) && existing.tags.length > 0) {
           m.tags = Array.from(new Set([...(m.tags || []), ...existing.tags]));
         }
+        if (!m.sourceEpMap) m.sourceEpMap = {};
+        if (existing.sourceId) {
+          m.sourceEpMap[existing.sourceId] = {
+            latestEp: existing.latestEp,
+            readable: isExistingFree
+          };
+        }
+        if (m.sourceId) {
+          m.sourceEpMap[m.sourceId] = {
+            latestEp: m.latestEp,
+            readable: isNewFree
+          };
+        }
         sanitizeMangaItem(m);
 
         // เชื่อมคีย์ทั้งหมดไปยังตัวหลักใหม่
@@ -3206,8 +3255,26 @@ function mergeAndDeduplicate(list) {
         if (existing.sourceId !== m.sourceId && !existing.altSources.some(a => a.sourceId === m.sourceId)) {
           existing.altSources.push(m);
         }
-        // อัปเดต latestEp ให้โชว์ตอนสูงสุดเสมอหากเรื่องใหม่มีตอนมากกว่า
-        if (newEp > existingEp && m.latestEp) {
+        if (!existing.sourceEpMap) {
+          existing.sourceEpMap = {};
+          if (existing.sourceId) {
+            existing.sourceEpMap[existing.sourceId] = {
+              latestEp: existing.latestEp,
+              readable: isExistingFree
+            };
+          }
+        }
+        if (m.sourceId) {
+          existing.sourceEpMap[m.sourceId] = {
+            latestEp: m.latestEp,
+            readable: isNewFree
+          };
+        }
+
+        // อัปเดต latestEp ของเรื่องหลัก:
+        // เฉพาะกรณีที่ทั้งคู่ฟรีเหมือนกัน (หรือติดเหรียญเหมือนกัน) จึงอัปเดต latestEp ของเว็บหลัก
+        // หากเว็บหลักฟรีอยู่แล้ว แต่เว็บใหม่ติดเหรียญและมีตอนมากกว่า จะไม่เอาเลขตอนเหรียญมาทับ latestEp ของเว็บหลัก!
+        if ((isNewFree === isExistingFree || !existing.latestEp) && newEp > existingEp && m.latestEp) {
           existing.latestEp = m.latestEp;
         }
         keys.forEach(k => keyToManga.set(k, existing));
@@ -4813,6 +4880,7 @@ async function performGlobalLiveSearch(query) {
   if (btnText) btnText.innerHTML = `⏳ กำลังค้นหา "${escapeHtml(q)}" ในคลังใหญ่ของทุกเว็บ...`;
 
   const sourcesToSearch = CONFIG.SOURCES;
+  const failedSources = [];
   const promises = sourcesToSearch.map(async (source) => {
     try {
       let searchUrl = `${source.url}/?s=${encodeURIComponent(q)}`;
@@ -4850,6 +4918,7 @@ async function performGlobalLiveSearch(query) {
       return items;
     } catch (e) {
       console.warn(`Global search error for ${source.name}:`, e.message);
+      failedSources.push(source.name);
       return [];
     }
   });
@@ -4874,6 +4943,8 @@ async function performGlobalLiveSearch(query) {
   // กรองเฉพาะเรื่องที่ตรงกับคำค้นหาจริง 100% (คัดทิ้ง sidebar / widget ยอดนิยมที่เว็บแถมมา)
   foundItems = foundItems.filter(item => isMangaMatchQuery(item, q));
 
+  const failNote = failedSources.length > 0 ? ` (มี ${failedSources.length} เว็บค้นไม่สำเร็จ: ${failedSources.slice(0, 3).join(', ')}${failedSources.length > 3 ? '...' : ''})` : '';
+
   if (btn) btn.disabled = false;
 
   if (foundItems.length > 0) {
@@ -4885,20 +4956,24 @@ async function performGlobalLiveSearch(query) {
     applyFilters();
 
     if (btnText) {
-      btnText.innerHTML = `✓ พบ ${filteredList.length} เรื่อง (${foundItems.length} แหล่ง) ในคลังใหญ่! แสดงผลเรียบร้อย`;
+      btnText.innerHTML = `✓ พบ ${filteredList.length} เรื่อง (${foundItems.length} แหล่ง)${failNote}! แสดงผลเรียบร้อย`;
+    }
+    setTimeout(() => {
+      if (btnText && currentSearchQuery) {
+        btnText.textContent = `ค้นหา "${currentSearchQuery}" ในคลังใหญ่ของทุกเว็บ (หาเรื่องเก่า/จบแล้ว) ➔`;
+      }
+    }, 4500);
+  } else {
+    if (btnText) {
+      btnText.innerHTML = failedSources.length > 0
+        ? `ไม่พบเรื่องที่ตรงกับ "${escapeHtml(q)}" (${failedSources.length} เว็บค้นหาขัดข้อง: ${failedSources.slice(0, 3).join(', ')})`
+        : `ไม่พบเรื่องที่ตรงกับ "${escapeHtml(q)}" เพิ่มเติมในคลังใหญ่`;
     }
     setTimeout(() => {
       if (btnText && currentSearchQuery) {
         btnText.textContent = `ค้นหา "${currentSearchQuery}" ในคลังใหญ่ของทุกเว็บ (หาเรื่องเก่า/จบแล้ว) ➔`;
       }
     }, 4000);
-  } else {
-    if (btnText) btnText.innerHTML = `ไม่พบเรื่องที่ตรงกับ "${escapeHtml(q)}" เพิ่มเติมในคลังใหญ่`;
-    setTimeout(() => {
-      if (btnText && currentSearchQuery) {
-        btnText.textContent = `ค้นหา "${currentSearchQuery}" ในคลังใหญ่ของทุกเว็บ (หาเรื่องเก่า/จบแล้ว) ➔`;
-      }
-    }, 3500);
   }
 }
 
@@ -5549,10 +5624,15 @@ async function initAggregatorPage() {
   if (searchInput && !searchInput.dataset.bound) {
     searchInput.dataset.bound = "1";
     let searchDebounceTimer = null;
+    let searchRequestSeq = 0;
 
     searchInput.addEventListener('input', (e) => {
       currentSearchQuery = e.target.value.trim();
+      const currentSearchSeq = ++searchRequestSeq;
       if (clearSearchBtn) clearSearchBtn.style.display = currentSearchQuery ? 'block' : 'none';
+      try {
+        sessionStorage.setItem('activeSearchQuery', currentSearchQuery);
+      } catch (err) {}
 
       // แสดงปุ่มค้นหาคลังใหญ่ข้ามเว็บเมื่อพิมพ์ตั้งแต่ 2 ตัวอักษรขึ้นไป
       const globalSearchBanner = document.getElementById('globalSearchBanner');
@@ -5575,14 +5655,18 @@ async function initAggregatorPage() {
       if (currentSearchQuery.length >= 2) {
         const queryToSearch = currentSearchQuery;
         searchDebounceTimer = setTimeout(async () => {
-          if (currentSearchQuery !== queryToSearch) return;
+          if (currentSearchSeq !== searchRequestSeq || !currentSearchQuery || currentSearchQuery !== queryToSearch) return;
           // ถ้ามี URL, รหัส UUID หรือคำภาษาอังกฤษ ให้ค้นใน MangaDex อัตโนมัติทันที
           if (queryToSearch.includes('mangadex.org') || /[a-f0-9]{8}-[a-f0-9]{4}/i.test(queryToSearch) || /[a-zA-Z]/.test(queryToSearch)) {
             try {
               const mdResults = await searchMangaDex(queryToSearch, 20);
+              // ตรวจสอบความถูกต้องอีกครั้งหลังรอผลลัพธ์จากเครือข่าย เพื่อป้องกันผลเก่าทับซ้อนเมื่อผู้ใช้ล้างคำค้นหรือพิมพ์ใหม่
+              if (currentSearchSeq !== searchRequestSeq || !currentSearchQuery || currentSearchQuery !== queryToSearch) return;
+
               if (Array.isArray(mdResults) && mdResults.length > 0) {
                 const validMd = mdResults.filter(item => isMangaMatchQuery(item, queryToSearch));
                 if (validMd.length > 0) {
+                  if (currentSearchSeq !== searchRequestSeq || !currentSearchQuery || currentSearchQuery !== queryToSearch) return;
                   // ถ้าคำค้นหาเป็นภาษาอังกฤษหรือมีผลลัพธ์สากล และผู้ใช้ยังไม่ได้เลือก EN/ทั้งหมด ให้เปิดภาษาอังกฤษร่วมด้วย
                   if (!selectedLanguages.has('en') && !ALL_SUPPORTED_LANGS.every(l => selectedLanguages.has(l))) {
                     selectedLanguages.add('en');
@@ -5616,9 +5700,16 @@ async function initAggregatorPage() {
   if (clearSearchBtn && !clearSearchBtn.dataset.bound) {
     clearSearchBtn.dataset.bound = "1";
     clearSearchBtn.addEventListener('click', () => {
+      if (typeof searchDebounceTimer !== 'undefined' && searchDebounceTimer) {
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = null;
+      }
       searchInput.value = '';
       clearSearchBtn.style.display = 'none';
       currentSearchQuery = '';
+      try {
+        sessionStorage.removeItem('activeSearchQuery');
+      } catch (err) {}
       const globalSearchBanner = document.getElementById('globalSearchBanner');
       if (globalSearchBanner) globalSearchBanner.style.display = 'none';
       applyFilters();
@@ -6012,14 +6103,53 @@ async function initAggregatorPage() {
 
 }
 
-// ฟังก์ชันคืนค่าหน้าต่างเลือกตอน (Restore Chapter Modal) เมื่อกลับมาจากหน้า Reader
+// ฟังก์ชันคืนค่าหน้าต่างเลือกตอน (Restore Chapter Modal) และตัวกรองค้นหาเดิม เมื่อกลับมาจากหน้า Reader
 function restoreActiveModal() {
   try {
+    const savedSearch = sessionStorage.getItem('activeSearchQuery');
+    const savedTag = sessionStorage.getItem('activeTagFilter');
+    const savedSource = sessionStorage.getItem('activeSourceFilter');
+    const savedLangs = sessionStorage.getItem('activeLanguages');
+
+    if (savedSearch) {
+      currentSearchQuery = savedSearch;
+      const searchInput = document.getElementById('searchInput');
+      if (searchInput) searchInput.value = savedSearch;
+      const clearSearchBtn = document.getElementById('clearSearchBtn');
+      if (clearSearchBtn) clearSearchBtn.style.display = 'block';
+    }
+    if (savedTag) {
+      currentTagFilter = savedTag;
+      document.querySelectorAll('.filter-tags .tag').forEach(t => {
+        t.classList.toggle('active', t.dataset.filter === savedTag);
+      });
+    }
+    if (savedSource) {
+      currentSourceFilter = savedSource;
+      document.querySelectorAll('.source-pill').forEach(sp => {
+        sp.classList.toggle('active', sp.dataset.source === savedSource);
+      });
+    }
+    if (savedLangs) {
+      try {
+        const langs = JSON.parse(savedLangs);
+        if (Array.isArray(langs) && langs.length > 0) {
+          selectedLanguages.clear();
+          langs.forEach(l => selectedLanguages.add(l));
+          updateLanguageFilterUI();
+        }
+      } catch (errL) {}
+    }
+
+    if (savedSearch || savedTag || savedSource || savedLangs) {
+      applyFilters();
+    }
+
     const saved = sessionStorage.getItem('currentManga');
-    const savedSource = sessionStorage.getItem('currentSource');
+    const savedCurrentSource = sessionStorage.getItem('currentSource');
     if (saved) {
       const manga = JSON.parse(saved);
-      const activeSource = savedSource ? JSON.parse(savedSource) : null;
+      const activeSource = savedCurrentSource ? JSON.parse(savedCurrentSource) : null;
       const scrollPos = sessionStorage.getItem('scrollPos');
       if (scrollPos) {
         setTimeout(() => {
@@ -6318,6 +6448,19 @@ function renderMangaCards() {
       displayEp = m.lastChapterTitle || 'ตอนล่าสุด';
     }
 
+    const epBreakdown = getMangaEpBreakdown(m);
+    let epBadgeContent = '';
+    if (epBreakdown.hasCoinAhead) {
+      epBadgeContent = `
+        <div class="manga-ep-breakdown">
+          <span class="manga-latest-ep free-ep">อ่านฟรีถึง ตอนที่ ${epBreakdown.freeMax}</span>
+          <span class="manga-sub-ep coin-ep">ล่าสุดทุกเว็บ ตอนที่ ${epBreakdown.overallMax}</span>
+        </div>
+      `;
+    } else {
+      epBadgeContent = `<span class="manga-latest-ep">${displayEp || 'อ่านต่อ'}</span>`;
+    }
+
     card.innerHTML = `
       <div class="manga-cover">
         <div class="manga-badge-group">
@@ -6346,7 +6489,7 @@ function renderMangaCards() {
       <div class="manga-info">
         <div class="manga-title" title="${m.title}">${m.title}</div>
         <div class="manga-latest">
-          <span class="manga-latest-ep">${displayEp || 'อ่านต่อ'}</span>
+          ${epBadgeContent}
           <span style="font-size: 0.75rem; color: #888;">อ่าน →</span>
         </div>
         ${historyBadgeHtml}
@@ -6972,7 +7115,10 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
 }
 
 // 13. Modal รายชื่อตอน พร้อมระบบสลับเว็บอ่าน (Source Switcher), แจ้งเตือนสลับอ่านฟรี และเชื่อมโยงเว็บ
+let modalRequestSeq = 0;
+
 async function openChapterModal(manga, activeSource = null) {
+  const currentReqSeq = ++modalRequestSeq;
   const modal = document.getElementById('chapterModal');
   const modalTitle = document.getElementById('modalTitle');
   const modalSource = document.getElementById('modalSource');
@@ -6984,6 +7130,22 @@ async function openChapterModal(manga, activeSource = null) {
   const customLinkBox = document.getElementById('customLinkBox');
   const customLinkInput = document.getElementById('customLinkInput');
   const btnApplyCustomLink = document.getElementById('btnApplyCustomLink');
+
+  // ล็อกการเลื่อนของพื้นหลัง และผูก History State สำหรับปุ่มย้อนกลับของอุปกรณ์
+  document.body.classList.add('modal-open');
+  if (!window.history.state || !window.history.state.modalOpen) {
+    try {
+      window.history.pushState({ modalOpen: true }, '');
+    } catch (e) {}
+  }
+
+  // จดจำสถานะตัวกรองและการค้นหาลงใน sessionStorage ป้องกันหลุดหายเมื่อย้อนกลับ
+  try {
+    sessionStorage.setItem('activeSearchQuery', currentSearchQuery || '');
+    sessionStorage.setItem('activeTagFilter', currentTagFilter || 'all');
+    sessionStorage.setItem('activeSourceFilter', currentSourceFilter || 'all');
+    sessionStorage.setItem('activeLanguages', JSON.stringify(Array.from(selectedLanguages)));
+  } catch (e) {}
 
   // ตรวจสอบและดึง Alias อัตโนมัติ (เช่น ผมแต่งงานกับมังกรที่ผมเคยฆ่า <-> WhyToon)
   const currentKeys = getMangaTitleKeys(manga.title);
@@ -7392,6 +7554,7 @@ async function openChapterModal(manga, activeSource = null) {
       const mangaId = currentSource.mangaId || (currentSource.mangaUrl.match(/title\/([a-f0-9-]+)/i) || [])[1];
       const targetLang = currentSource.lang || (selectedLanguages.has('en') ? 'en' : (selectedLanguages.has('ja') ? 'ja' : 'en'));
       chapters = await fetchMangaDexChapters(mangaId, targetLang);
+      if (currentReqSeq !== modalRequestSeq) return;
     } else {
       const chapterListingUrl = currentSource.sourceType === 'nekopost'
         ? (currentSource.chapterIndexUrl || (() => {
@@ -7403,6 +7566,7 @@ async function openChapterModal(manga, activeSource = null) {
         })())
         : currentSource.mangaUrl;
       let html = await fetchViaProxy(chapterListingUrl);
+      if (currentReqSeq !== modalRequestSeq) return;
       chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
 
       // หากไม่พบตอน ให้ตรวจสอบว่าหน้านี้เป็นลิงก์ไปยังตอนเดี่ยว (ไม่ใช่หน้ามังงะรวม) หรือไม่ โดยดึงหน้าหลักของมังงะจาก breadcrumb / url
@@ -7414,6 +7578,7 @@ async function openChapterModal(manga, activeSource = null) {
             currentSource.mangaUrl = resolvedSeriesUrl;
             if (manga) manga.mangaUrl = resolvedSeriesUrl;
             const seriesHtml = await fetchViaProxy(resolvedSeriesUrl);
+            if (currentReqSeq !== modalRequestSeq) return;
             chapters = parseChaptersFromHtml(seriesHtml, currentSource.sourceUrl, currentSource.sourceType, resolvedSeriesUrl);
             html = seriesHtml; // ใช้อัปเดต tag genre ต่อไป
           }
@@ -7481,6 +7646,7 @@ async function openChapterModal(manga, activeSource = null) {
           }
 
           const pagesResults = await Promise.allSettled(pagePromises);
+          if (currentReqSeq !== modalRequestSeq) return;
           const existingUrls = new Set(chapters.map(c => c.url));
           pagesResults.forEach(res => {
             if (res.status === 'fulfilled' && Array.isArray(res.value)) {
@@ -7504,6 +7670,7 @@ async function openChapterModal(manga, activeSource = null) {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: 'action=manga_get_chapters'
           }, 10000);
+          if (currentReqSeq !== modalRequestSeq) return;
           if (ajaxHtml) {
             const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, 'madara', currentSource.mangaUrl);
             if (ajaxChapters.length > 0) {
@@ -7651,7 +7818,7 @@ async function openChapterModal(manga, activeSource = null) {
         `;
       }
 
-      // บันทึกประวัติการอ่านทันทีที่คลิกตอน (ไม่ว่าจะอ่านในเว็บหรือเปิดแท็บต้นทาง)
+      // บันทึกข้อมูลเรื่องเมื่อคลิกตอน (ไม่มาร์กว่าอ่านแล้ว จนกว่ารูปจะโหลดสำเร็จใน Reader)
       a.addEventListener('click', () => {
         const finalCover = manga.cover || currentSource.cover || '';
         const mangaForHist = {
@@ -7664,7 +7831,7 @@ async function openChapterModal(manga, activeSource = null) {
           sourceType: currentSource.sourceType || manga.sourceType,
           lang: c.lang || currentSource.lang || manga.lang || (currentSource.sourceId === 'mangadex' ? 'en' : 'th')
         };
-        recordReadingHistory(mangaForHist, c.title, c.url);
+        recordReadingHistory(mangaForHist, c.title, c.url, { markRead: false });
       });
 
       chapterList.appendChild(a);
@@ -7726,6 +7893,7 @@ async function openChapterModal(manga, activeSource = null) {
       }, 100);
     }
   } catch (err) {
+    if (currentReqSeq !== modalRequestSeq) return;
     if (chapterList) {
       chapterList.innerHTML = `
         <div style="text-align: center; padding: 24px 16px;">
@@ -7737,9 +7905,10 @@ async function openChapterModal(manga, activeSource = null) {
   }
 }
 
-function closeChapterModal() {
+function closeChapterModal(shouldBackHistory = true) {
   const modal = document.getElementById('chapterModal');
   if (modal) modal.style.display = 'none';
+  document.body.classList.remove('modal-open');
   const scrollControls = document.getElementById('modalScrollControls');
   if (scrollControls) scrollControls.style.display = 'none';
   if (!window.location.pathname.includes('reader.html')) {
@@ -7748,7 +7917,20 @@ function closeChapterModal() {
       sessionStorage.removeItem('scrollPos');
     } catch (e) {}
   }
+  if (shouldBackHistory && window.history.state && window.history.state.modalOpen) {
+    try {
+      window.history.back();
+    } catch (e) {}
+  }
 }
+
+// จัดการปุ่ม Back ของ Android / เบราว์เซอร์ เพื่อปิด Modal ก่อนเสมอ
+window.addEventListener('popstate', () => {
+  const modal = document.getElementById('chapterModal');
+  if (modal && modal.style.display === 'flex') {
+    closeChapterModal(false);
+  }
+});
 
 // ฟังก์ชันทำความสะอาด URL นำทาง ป้องกันลิงก์พัง เช่น #/next/, #/prev/, javascript:
 function cleanChapterNavUrl(rawUrl, currentUrl = '') {
@@ -8600,9 +8782,9 @@ async function initReaderPage() {
   }
   let savedReadPosition = null;
 
-  // บันทึกประวัติการอ่านทันที 100% ตั้งแต่วินาทีแรกที่เปิดหน้าอ่าน (ไม่ต้องรอโหลดรูปภาพ)
+  // บันทึกประวัติเพื่อการ Restore แต่ยังไม่มาร์กว่าอ่านแล้ว (markRead: false) จนกว่าจะโหลดรูปภาพสำเร็จ
   if (mangaObj.title && mangaObj.title !== 'มังงะ' && mangaObj.title !== 'อ่านการ์ตูน') {
-    recordReadingHistory(mangaObj, chapterEpTitle, cleanCurrentChapterUrl);
+    recordReadingHistory(mangaObj, chapterEpTitle, cleanCurrentChapterUrl, { markRead: false });
     savedReadPosition = getSavedReadingPosition(mangaObj, cleanCurrentChapterUrl);
   }
 
@@ -8636,7 +8818,7 @@ async function initReaderPage() {
       if (titleEl) titleEl.textContent = `${mangaObj.title} - ${updatedEpTitle}`;
     }
     const finalEpTitle = cleanMangaChapterTitle(title, mangaObj.title, cleanCurrentChapterUrl);
-    recordReadingHistory(mangaObj, finalEpTitle, cleanCurrentChapterUrl);
+    recordReadingHistory(mangaObj, finalEpTitle, cleanCurrentChapterUrl, { markRead: false });
     savedReadPosition = getSavedReadingPosition(mangaObj, cleanCurrentChapterUrl);
     if (readerDataError) throw readerDataError;
 
@@ -8703,6 +8885,9 @@ async function initReaderPage() {
       `;
       return;
     }
+
+    // เมื่อตรวจสอบพบว่ามีรูปภาพอย่างน้อย 1 รูปพร้อมอ่านจริง จึงบันทึกเป็น "อ่านแล้ว" 100%
+    recordReadingHistory(mangaObj, finalEpTitle, cleanCurrentChapterUrl, { markRead: true });
 
     const setupNavButtons = (prev, next) => {
       const buildNavUrl = (targetEpUrl) => {
@@ -8859,26 +9044,32 @@ async function initReaderPage() {
       }
     }
 
-    function restoreSavedScrollPosition() {
-      if (currentMode !== 'scroll' || !savedReadPosition || hasRestoredScrollPosition) return;
+    let userDidManualScroll = false;
+    window.addEventListener('wheel', () => { userDidManualScroll = true; }, { passive: true });
+    window.addEventListener('touchmove', () => { userDidManualScroll = true; }, { passive: true });
+    window.addEventListener('keydown', (e) => {
+      if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Space'].includes(e.code)) userDidManualScroll = true;
+    }, { passive: true });
+
+    function restoreSavedScrollPosition(force = false) {
+      if (currentMode !== 'scroll' || !savedReadPosition) return;
+      if (hasRestoredScrollPosition && !force) return;
+      if (force && userDidManualScroll) return;
+
       const targetIndex = Math.min(Math.max(0, Number(savedReadPosition.pageIndex) || 0), Math.max(0, totalPagesCount - 1));
       const target = container.querySelector(`[data-reader-page="${targetIndex}"]`);
       if (!target) return;
 
       const applyPosition = () => {
-        if (currentMode !== 'scroll' || hasRestoredScrollPosition) return;
+        if (currentMode !== 'scroll') return;
+        if (force && userDidManualScroll) return;
         const rect = target.getBoundingClientRect();
         const top = rect.top + window.scrollY + rect.height * Math.min(1, Math.max(0, Number(savedReadPosition.pageOffset) || 0)) - window.innerHeight * 0.36;
         window.scrollTo({ top: Math.max(0, top), behavior: 'instant' });
         hasRestoredScrollPosition = true;
       };
 
-      if (target.tagName === 'IMG' && !target.complete) {
-        target.addEventListener('load', applyPosition, { once: true });
-        target.addEventListener('error', applyPosition, { once: true });
-      } else {
-        window.requestAnimationFrame(applyPosition);
-      }
+      window.requestAnimationFrame(applyPosition);
     }
 
     window.addEventListener('scroll', () => {
@@ -8959,7 +9150,7 @@ async function initReaderPage() {
       }
 
       curPageIndex = pageIdx;
-      scheduleReadPositionSave(true);
+      // อย่าเพิ่ง scheduleReadPositionSave ทันทีตรงนี้ เพื่อป้องกันกรณีสลับแอปหรือภาพยังโหลดไม่ขึ้น
       window.scrollTo({ top: 0, behavior: 'instant' });
 
       if (pageCurrent) pageCurrent.textContent = curPageIndex + 1;
@@ -8987,14 +9178,44 @@ async function initReaderPage() {
       wrapper.appendChild(tapLeft);
       wrapper.appendChild(tapRight);
 
+      const showSinglePageError = (failedIdx) => {
+        wrapper.innerHTML = '';
+        wrapper.appendChild(tapLeft);
+        wrapper.appendChild(tapRight);
+        const errBox = document.createElement('div');
+        errBox.className = 'reader-page-error';
+        errBox.innerHTML = `
+          <div class="reader-page-error-icon">⚠️</div>
+          <div class="reader-page-error-title">ไม่สามารถโหลดรูปหน้า ${failedIdx + 1} / ${totalPagesCount} ได้</div>
+          <p class="reader-page-error-desc">เกิดข้อผิดพลาดในการโหลดรูปภาพ หรือสัญญาณอินเทอร์เน็ตไม่เสถียร</p>
+          <button class="btn-retry-page">ลองใหม่อีกครั้ง ↻</button>
+        `;
+        const retryBtn = errBox.querySelector('.btn-retry-page');
+        if (retryBtn) {
+          retryBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (isPaginated) delete pageImageMap[failedIdx];
+            renderSinglePage(failedIdx);
+          };
+        }
+        wrapper.appendChild(errBox);
+      };
+
       // ตรวจสอบรูปภาพของหน้านี้
       let item = isPaginated ? pageImageMap[curPageIndex] : readerData.images[curPageIndex];
 
       if (typeof item === 'string' && item) {
         const img = document.createElement('img');
-        img.src = item;
         img.alt = `Page ${curPageIndex + 1} / ${totalPagesCount}`;
         img.referrerPolicy = 'no-referrer';
+        img.onload = () => {
+          // บันทึกตำแหน่งอ่านเมื่อรูปภาพแสดงผลสำเร็จแล้วเท่านั้น (Issue 4)
+          scheduleReadPositionSave(true);
+        };
+        img.onerror = () => {
+          showSinglePageError(curPageIndex);
+        };
+        img.src = item;
         wrapper.appendChild(img);
         container.appendChild(wrapper);
         preloadSinglePage(curPageIndex + 1);
@@ -9017,6 +9238,10 @@ async function initReaderPage() {
               ctx.drawImage(rawImg, parseFloat(slice[2]), parseFloat(slice[3]), item.tileW, item.tileH, parseFloat(slice[0]), parseFloat(slice[1]), item.tileW, item.tileH);
             });
           }
+          scheduleReadPositionSave(true);
+        };
+        rawImg.onerror = () => {
+          showSinglePageError(curPageIndex);
         };
         rawImg.src = item.rawUrl;
         preloadSinglePage(curPageIndex + 1);
@@ -9033,18 +9258,19 @@ async function initReaderPage() {
           wrapper.appendChild(tapRight);
           if (fetchedSrc) {
             const img = document.createElement('img');
-            img.src = fetchedSrc;
             img.alt = `Page ${curPageIndex + 1} / ${totalPagesCount}`;
             img.referrerPolicy = 'no-referrer';
+            img.onload = () => {
+              scheduleReadPositionSave(true);
+            };
+            img.onerror = () => {
+              showSinglePageError(curPageIndex);
+            };
+            img.src = fetchedSrc;
             wrapper.appendChild(img);
             preloadSinglePage(curPageIndex + 1);
           } else {
-            wrapper.innerHTML = `
-              <div style="text-align:center; padding:40px 20px; color:#ff5555;">
-                <p>ไม่สามารถโหลดรูปหน้านี้ได้</p>
-                <button class="btn-nav" style="margin-top:10px;" onclick="renderSinglePage(${curPageIndex})">ลองใหม่อีกครั้ง ↻</button>
-              </div>
-            `;
+            showSinglePageError(curPageIndex);
           }
         }
       }
@@ -9056,37 +9282,90 @@ async function initReaderPage() {
       container.innerHTML = '';
       if (singlePageBar) singlePageBar.style.display = 'none';
 
+      // สร้างช่องสำรองความสูงสำหรับทุกหน้าล่วงหน้า (CLS Prevention & Slot Preservation)
+      const pageSlots = [];
+      for (let idx = 0; idx < totalPagesCount; idx++) {
+        const slot = document.createElement('div');
+        slot.className = 'reader-page-slot';
+        slot.dataset.readerPage = String(idx);
+        slot.innerHTML = `<div class="reader-page-placeholder-loading"><div class="spinner"></div>กำลังโหลดหน้า ${idx + 1}...</div>`;
+        container.appendChild(slot);
+        pageSlots.push(slot);
+      }
+
+      restoreSavedScrollPosition();
+
       if (!isPaginated) {
         readerData.images.forEach((item, idx) => {
+          const slot = pageSlots[idx];
+          if (!slot) return;
+
           if (typeof item === 'string') {
             const img = document.createElement('img');
-            img.dataset.readerPage = String(idx);
-            img.src = item;
             img.alt = `Page ${idx + 1}`;
             img.loading = idx < 4 || idx === Number(savedReadPosition?.pageIndex) ? 'eager' : 'lazy';
             img.referrerPolicy = 'no-referrer';
             let retried = false;
+
+            const renderSlotError = () => {
+              slot.classList.remove('loaded');
+              slot.innerHTML = '';
+              const errBox = document.createElement('div');
+              errBox.className = 'reader-page-error';
+              errBox.innerHTML = `
+                <div class="reader-page-error-icon">⚠️</div>
+                <div class="reader-page-error-title">ไม่สามารถโหลดหน้า ${idx + 1} ได้</div>
+                <p class="reader-page-error-desc">เกิดข้อผิดพลาดในการโหลดรูปภาพ หรือสัญญาณอินเทอร์เน็ตไม่เสถียร</p>
+                <button class="btn-retry-page">ลองใหม่อีกครั้ง ↻</button>
+              `;
+              errBox.querySelector('.btn-retry-page').onclick = (e) => {
+                e.stopPropagation();
+                slot.innerHTML = `<div class="reader-page-placeholder-loading"><div class="spinner"></div>กำลังลองโหลดหน้า ${idx + 1} ใหม่อีกครั้ง...</div>`;
+                const retryImg = new Image();
+                retryImg.alt = `Page ${idx + 1}`;
+                retryImg.referrerPolicy = 'no-referrer';
+                retryImg.onload = () => {
+                  slot.innerHTML = '';
+                  slot.appendChild(retryImg);
+                  slot.classList.add('loaded');
+                  if (!userDidManualScroll) restoreSavedScrollPosition(true);
+                };
+                retryImg.onerror = () => {
+                  renderSlotError();
+                };
+                retryImg.src = item + (item.includes('?') ? '&' : '?') + 'retry=' + Date.now();
+              };
+              slot.appendChild(errBox);
+            };
+
+            img.onload = () => {
+              slot.innerHTML = '';
+              slot.appendChild(img);
+              slot.classList.add('loaded');
+              if (!userDidManualScroll) restoreSavedScrollPosition(true);
+            };
+
             img.onerror = function() {
               if (!retried) {
                 retried = true;
                 setTimeout(() => {
                   this.src = item + (item.includes('?') ? '&' : '?') + 'retry=' + Date.now();
                 }, 1200);
+              } else {
+                renderSlotError();
               }
             };
-            container.appendChild(img);
-            restoreSavedScrollPosition();
+
+            img.src = item;
           } else if (item && item.isScrambled) {
             const canvas = document.createElement('canvas');
-            canvas.dataset.readerPage = String(idx);
             canvas.width = item.width || 1000;
             canvas.height = item.height || 2750;
             canvas.style.width = '100%';
             canvas.style.height = 'auto';
             canvas.style.display = 'block';
             canvas.style.margin = '0 auto';
-            container.appendChild(canvas);
-            restoreSavedScrollPosition();
+
             const ctx = canvas.getContext('2d');
             const rawImg = new Image();
             rawImg.crossOrigin = 'anonymous';
@@ -9096,45 +9375,80 @@ async function initReaderPage() {
                   ctx.drawImage(rawImg, parseFloat(slice[2]), parseFloat(slice[3]), item.tileW, item.tileH, parseFloat(slice[0]), parseFloat(slice[1]), item.tileW, item.tileH);
                 });
               }
+              slot.innerHTML = '';
+              slot.appendChild(canvas);
+              slot.classList.add('loaded');
+              if (!userDidManualScroll) restoreSavedScrollPosition(true);
+            };
+            rawImg.onerror = () => {
+              slot.classList.remove('loaded');
+              slot.innerHTML = `
+                <div class="reader-page-error">
+                  <div class="reader-page-error-icon">⚠️</div>
+                  <div class="reader-page-error-title">ไม่สามารถโหลดหน้า ${idx + 1} ได้</div>
+                  <p class="reader-page-error-desc">เกิดข้อผิดพลาดในการโหลดรูปภาพ</p>
+                  <button class="btn-retry-page" onclick="window.location.reload()">ลองใหม่อีกครั้ง ↻</button>
+                </div>
+              `;
             };
             rawImg.src = item.rawUrl;
           }
         });
       } else {
-        // MangaTown: เรนเดอร์หน้าแรกทันที และโหลดหน้าถัดไปแบบต่อเนื่อง
-        if (pageImageMap[0]) {
-          const img = document.createElement('img');
-          img.dataset.readerPage = '0';
-          img.src = pageImageMap[0];
-          img.alt = `Page 1 / ${totalPagesCount}`;
-          if (Number(savedReadPosition?.pageIndex) === 0) img.loading = 'eager';
-          container.appendChild(img);
-          restoreSavedScrollPosition();
-        }
+        // MangaTown: โหลดทุกหน้าโดยเก็บช่องของทุกหน้าไว้ตามลำดับ ไม่มีการข้ามหน้า!
+        async function loadMtSlot(p) {
+          const slot = pageSlots[p];
+          if (!slot) return;
 
-        const loadNotice = document.createElement('div');
-        loadNotice.id = 'mtScrollNotice';
-        loadNotice.style.cssText = 'padding: 20px; text-align: center; color: var(--text-sub); font-size: 0.88rem;';
-        loadNotice.innerHTML = '<div class="spinner"></div> กำลังดึงหน้ารูปภาพถัดไป...';
-        container.appendChild(loadNotice);
+          const renderMtError = () => {
+            slot.classList.remove('loaded');
+            slot.innerHTML = '';
+            const errBox = document.createElement('div');
+            errBox.className = 'reader-page-error';
+            errBox.innerHTML = `
+              <div class="reader-page-error-icon">⚠️</div>
+              <div class="reader-page-error-title">ไม่สามารถโหลดหน้า ${p + 1} ได้</div>
+              <p class="reader-page-error-desc">เกิดข้อผิดพลาดในการดึงข้อมูลหน้านี้ หรือสัญญาณอินเทอร์เน็ตไม่เสถียร</p>
+              <button class="btn-retry-page">ลองใหม่อีกครั้ง ↻</button>
+            `;
+            errBox.querySelector('.btn-retry-page').onclick = (e) => {
+              e.stopPropagation();
+              delete pageImageMap[p];
+              slot.innerHTML = `<div class="reader-page-placeholder-loading"><div class="spinner"></div>กำลังลองโหลดหน้า ${p + 1} ใหม่อีกครั้ง...</div>`;
+              loadMtSlot(p);
+            };
+            slot.appendChild(errBox);
+          };
 
-        for (let p = 1; p < totalPagesCount; p++) {
-          if (currentMode !== 'scroll') break;
           const src = await fetchMangaTownPageImage(p);
-          if (src && currentMode === 'scroll') {
+          if (currentMode !== 'scroll') return;
+
+          if (src) {
             const img = document.createElement('img');
-            img.dataset.readerPage = String(p);
-            img.src = src;
             img.alt = `Page ${p + 1} / ${totalPagesCount}`;
-            img.loading = 'lazy';
-            if (p === Number(savedReadPosition?.pageIndex)) img.loading = 'eager';
             img.referrerPolicy = 'no-referrer';
-            container.insertBefore(img, loadNotice);
-            restoreSavedScrollPosition();
+            img.loading = (p < 3 || p === Number(savedReadPosition?.pageIndex)) ? 'eager' : 'lazy';
+            img.onload = () => {
+              slot.innerHTML = '';
+              slot.appendChild(img);
+              slot.classList.add('loaded');
+              if (!userDidManualScroll) restoreSavedScrollPosition(true);
+            };
+            img.onerror = () => {
+              renderMtError();
+            };
+            img.src = src;
+          } else {
+            // โหลดไม่สำเร็จ: แสดงกล่องแจ้งข้อผิดพลาดพร้อมปุ่มลองใหม่ ไม่ข้ามหน้าเด็ดขาด!
+            renderMtError();
           }
         }
-        if (loadNotice) loadNotice.remove();
-        restoreSavedScrollPosition();
+
+        // ทยอยโหลดหน้า 0 ถึง totalPagesCount - 1
+        for (let p = 0; p < totalPagesCount; p++) {
+          if (currentMode !== 'scroll') break;
+          await loadMtSlot(p);
+        }
       }
     }
 
