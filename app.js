@@ -298,8 +298,54 @@ function getProxyUrl(targetUrl, referer = '') {
     url += `&referer=${encodeURIComponent('https://www.nekopost.net/')}`;
   } else if (targetUrl.includes('mangakimi')) {
     url += `&referer=${encodeURIComponent('https://www.mangakimi.com/')}`;
+  } else if (targetUrl.includes('manga-neko')) {
+    url += `&referer=${encodeURIComponent('https://manga-neko.com/')}`;
   }
   return url;
+}
+
+// ตรวจสอบว่า URL เป็นหน้าแคตตาล็อกรวม/หมวดหมู่/หน้าแรกหรือไม่ (ไม่ใช่หน้ารายละเอียดของเรื่องเดี่ยว)
+function isGenericCatalogUrl(url) {
+  if (!url) return true;
+  try {
+    const u = new URL(url);
+    const p = u.pathname.replace(/\/+$/, '').toLowerCase();
+    if (!p || p === '' || p === '/' || p === '/manga' || p === '/series' || p === '/comic' || p === '/comics' || 
+        p === '/project' || p === '/content' || p === '/read' || p === '/browse' || 
+        p === '/latest' || p === '/popular' || p === '/tag' || p === '/genre' || 
+        p === '/order' || p === '/all-manga' || p === '/bookmark' || p.startsWith('/page/') || p === '/manga/page') {
+      return true;
+    }
+    if (u.searchParams.has('order') || u.searchParams.has('s') || u.searchParams.has('search') || 
+        u.searchParams.has('keyword') || u.searchParams.has('filter') || u.searchParams.has('page') || 
+        u.searchParams.has('post_type')) {
+      return true;
+    }
+    return false;
+  } catch (e) {
+    return true;
+  }
+}
+
+// สกัด Slug ของชื่อเรื่องจาก URL เพื่อใช้ตรวจสอบความถูกต้องของรายการตอน ป้องกันตอนของเรื่องอื่นรั่วเข้ามา 100%
+function extractMangaSlug(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.replace(/\/+$/, '').split('/').filter(Boolean);
+    if (!parts.length) return '';
+    const last = parts[parts.length - 1].toLowerCase();
+    if (['manga', 'series', 'comic', 'project', 'content', 'read', 'browse'].includes(last)) {
+      return '';
+    }
+    if (/^\d+$/.test(last) && parts.length > 1) {
+      return parts[parts.length - 2].toLowerCase();
+    }
+    const cleanSlug = last.replace(/-(?:ตอนที่|chapter|ch|ep|c)?-?\d+.*$/i, '').trim();
+    return cleanSlug || last;
+  } catch (e) {
+    return '';
+  }
 }
 
 // 1. ดึงข้อมูลผ่าน Proxy พร้อม Timeout และรองรับ GET / POST
@@ -382,6 +428,9 @@ function parseMangaReaderHtml(html, sourceInfo) {
   const items = [];
   const seenUrls = new Set();
 
+  // กำจัด Footer และ Sidebar เพื่อไม่ให้ดึงเรื่องค้างจากวิดเจ็ตภายนอก
+  doc.querySelectorAll('#sidebar, .sidebar, footer, .site-footer, .c-footer-sidebar, .widget, .widgets').forEach(el => el.remove());
+
   const extractCard = (card, isPopular = false) => {
     const linkEl = card.querySelector('a.ntr-upd-title, a.ntr-upd-cover, a.series, .leftseries h2 a, .leftseries h4 a, a');
     const titleEl = card.querySelector('.ntr-upd-title h3, .tt, h2, h3, .title, h4, .leftseries h2, .leftseries h4');
@@ -414,6 +463,7 @@ function parseMangaReaderHtml(html, sourceInfo) {
       let cover = extractCoverUrl(imgEl, sourceInfo.url);
 
       if (mangaUrl.startsWith('/')) mangaUrl = sourceInfo.url + mangaUrl;
+      if (isGenericCatalogUrl(mangaUrl)) return;
 
       if (title && mangaUrl && !seenUrls.has(mangaUrl)) {
         seenUrls.add(mangaUrl);
@@ -775,6 +825,9 @@ function parseMadaraHtml(html, sourceInfo) {
   const items = [];
   const seenUrls = new Set();
 
+  // กำจัด Footer และ Sidebar เพื่อไม่ให้ดึงเรื่องค้างจากวิดเจ็ตภายนอก
+  doc.querySelectorAll('#sidebar, .sidebar, footer, .site-footer, .c-footer-sidebar, .widget, .widgets').forEach(el => el.remove());
+
   const extractCard = (card, isPopular = false) => {
     const titleEl = card.querySelector('.post-title a, h3 a, h5 a, .item-summary a, .slider__content a');
     const imgEl = card.querySelector('img');
@@ -790,6 +843,7 @@ function parseMadaraHtml(html, sourceInfo) {
       let cover = extractCoverUrl(imgEl, sourceInfo.url);
 
       if (mangaUrl.startsWith('/')) mangaUrl = sourceInfo.url.replace(/\/$/, '') + mangaUrl;
+      if (isGenericCatalogUrl(mangaUrl)) return;
 
       if (title && mangaUrl && !seenUrls.has(mangaUrl)) {
         seenUrls.add(mangaUrl);
@@ -4984,7 +5038,7 @@ function resolveSeriesUrlFromHtml(doc, currentUrl) {
   if (!doc || !currentUrl) return '';
   try {
     const origin = new URL(currentUrl).origin;
-    // 1. ตรวจสอบ Breadcrumbs และลิงก์ย้อนกลับไปยังหน้าเรื่องหลัก
+    // 1. ตรวจสอบ Breadcrumbs และลิงก์ย้อนกลับไปยังหน้าเรื่องหลัก (เฉพาะลิงก์ที่เจาะจงเรื่อง ไม่ใช่หน้าแคตตาล็อกรวม)
     const seriesSelectors = [
       '.ts-breadcrumb a[href*="/manga/"]',
       '.ts-breadcrumb a[href*="/series/"]',
@@ -5003,10 +5057,7 @@ function resolveSeriesUrlFromHtml(doc, currentUrl) {
       'nav.breadcrumb a[href*="/manga/"]',
       'nav.breadcrumb a[href*="/series/"]',
       '.breadcrumb a[href*="/manga/"]',
-      '.breadcrumb a[href*="/series/"]',
-      'a[href*="/manga/"]:not([href*="chapter"]):not([href*="ตอน"]):not([href*="-ch-"]):not([href*="/ch-"])',
-      'a[href*="/series/"]:not([href*="chapter"]):not([href*="ตอน"]):not([href*="-ch-"]):not([href*="/ch-"])',
-      'a[href*="/project/"]:not([href*="chapter"]):not([href*="ตอน"]):not([href*="-ch-"]):not([href*="/ch-"])'
+      '.breadcrumb a[href*="/series/"]'
     ];
     for (const sel of seriesSelectors) {
       const el = doc.querySelector(sel);
@@ -5014,14 +5065,14 @@ function resolveSeriesUrlFromHtml(doc, currentUrl) {
         let href = el.getAttribute('href').trim();
         if (href && href !== '#' && !href.startsWith('javascript:')) {
           const resolved = new URL(href, currentUrl).href;
-          if (resolved !== currentUrl && resolved !== origin && resolved !== origin + '/') {
+          if (resolved !== currentUrl && !isGenericCatalogUrl(resolved)) {
             return resolved;
           }
         }
       }
     }
 
-    // 2. แกะตามโครงสร้าง Path ของเว็บต่างๆ
+    // 2. แกะตามโครงสร้าง Path ของเว็บต่างๆ จาก currentUrl
     const parsed = new URL(currentUrl);
     // WhyToon / DukeToon: /content/slug/id -> /content/slug
     const contentMatch = parsed.pathname.match(/^(\/content\/[a-zA-Z0-9_\-]+)\/\d+/);
@@ -5039,9 +5090,16 @@ function resolveSeriesUrlFromHtml(doc, currentUrl) {
     const townMatch = parsed.pathname.match(/^(\/manga\/[a-zA-Z0-9_\-]+)\/c\d+/);
     if (townMatch) return `${origin}${townMatch[1]}/`;
 
-    // ตัดส่วนท้ายที่เป็นเลขตอน เช่น /manga/slug/chapter-1/ -> /manga/slug/
-    const chapterPathMatch = parsed.pathname.match(/^(\/manga\/[a-zA-Z0-9_\-]+)\/(?:chapter|ch|ep|ตอนที่)[-_ ]?\d+/i);
-    if (chapterPathMatch) return `${origin}${chapterPathMatch[1]}/`;
+    // Madara: /manga/slug/chapter-... หรือ /manga/slug/-XX/ -> /manga/slug/
+    const madaraMatch = parsed.pathname.match(/^(\/manga\/[a-zA-Z0-9_\-]+)\/(?:chapter|ตอนที่|ch|ep|-[0-9]+)/i);
+    if (madaraMatch) return `${origin}${madaraMatch[1]}/`;
+
+    // MangaReader / WordPress: /slug-ตอนที่-XX/ หรือ /slug-chapter-XX/ -> /slug/
+    const mrSlugMatch = parsed.pathname.match(/^\/([a-zA-Z0-9_\-]+?)(?:-(?:ตอนที่|chapter|ch|ep|c)?-?\d+.*|\/\d+.*)\/?$/i);
+    if (mrSlugMatch && mrSlugMatch[1] && mrSlugMatch[1].length >= 3 && !['manga', 'series', 'comic', 'project'].includes(mrSlugMatch[1].toLowerCase())) {
+      const candidate = `${origin}/${mrSlugMatch[1]}/`;
+      if (!isGenericCatalogUrl(candidate)) return candidate;
+    }
 
   } catch (e) {
     console.warn('resolveSeriesUrlFromHtml error:', e);
@@ -6633,6 +6691,22 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
   const chapters = [];
   const seenUrls = new Set();
 
+  // กำจัดส่วนประกอบอื่น ๆ ที่ไม่ใช่เนื้อหาหลักของมังงะเรื่องนี้ (ป้องกันตอนของเรื่องอื่นจากวิดเจ็ตแนะนำ/เรื่องยอดนิยม/สไลเดอร์ รั่วเข้ามา)
+  const junkSelectors = [
+    '#sidebar', '.sidebar', '#footer', 'footer', '#header', 'header', 'nav',
+    '.related-posts', '.related-manga', '.c-related-content', '[class*="related"]',
+    '.wpop', '.popular', '.widget_manga_popular', '.top10manga', '.serieslist',
+    '.listupd', '.listupdate', '.latestupd', '.recent-updates', '.bigslider',
+    '.slider', '.mainslider', '#series-history', '#series-history-tpl', '[id*="history"]',
+    '.comments', '#comments', '.comment-list', '#disqus_thread',
+    '.widget', '.widgets', '.widget-area', '.sidebar-widget'
+  ];
+  junkSelectors.forEach(sel => {
+    try { doc.querySelectorAll(sel).forEach(el => el.remove()); } catch (e) {}
+  });
+
+  const mangaSlug = extractMangaSlug(mangaUrl);
+
   if (sourceType === 'nekopost') {
     let mangaId = '';
     try { mangaId = new URL(mangaUrl || baseUrl).pathname.match(/^\/(?:manga|project)\/(\d+)/)?.[1] || ''; } catch (e) {}
@@ -6812,12 +6886,22 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
       });
     });
   } else if (sourceType === 'madara') {
-    const links = doc.querySelectorAll('.wp-manga-chapter a, li.wp-manga-chapter a');
+    const chapterContainers = doc.querySelectorAll('#manga-chapters-holder, .listing-chapters_wrap, .page-content-listing, .c-sub-content, .version-chap, .chapter-list');
+    let links = [];
+    if (chapterContainers.length > 0) {
+      chapterContainers.forEach(c => {
+        c.querySelectorAll('.wp-manga-chapter a, li.wp-manga-chapter a').forEach(a => links.push(a));
+      });
+    }
+    if (links.length === 0) {
+      links = Array.from(doc.querySelectorAll('.wp-manga-chapter a, li.wp-manga-chapter a'));
+    }
     links.forEach(a => {
       let url = (a.getAttribute('href') || '').trim();
       if (!url || url.startsWith('#') || url.startsWith('javascript:') || url.includes('/genre') || url.includes('/tag') || url.includes('/author')) {
         return;
       }
+      if (isGenericCatalogUrl(url)) return;
 
       const aClone = a.cloneNode(true);
       aClone.querySelectorAll('.chapter-release-date, .date, .time, time, i').forEach(el => el.remove());
@@ -6831,6 +6915,17 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
         url = baseUrl.replace(/\/$/, '') + url;
       } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
         url = baseUrl.replace(/\/$/, '') + '/' + url;
+      }
+
+      if (mangaSlug && mangaSlug.length >= 3) {
+        const uLower = url.toLowerCase();
+        if (!uLower.includes(mangaSlug)) {
+          const simpleSlug = mangaSlug.replace(/[-_]/g, '');
+          const simpleUrl = uLower.replace(/[-_]/g, '');
+          if (!simpleUrl.includes(simpleSlug)) {
+            return;
+          }
+        }
       }
 
       let title = rawTitle;
@@ -6946,10 +7041,20 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
       }
     });
   } else {
-    // MangaReader (Go, Fin, Dark, Up, Slow, NTR-Manga, Ped-Manga, MangaStep, Ecchi, Speed)
+    // MangaReader (Go, Fin, Dark, Up, Slow, NTR-Manga, Ped-Manga, MangaStep, Ecchi, Speed, Manga-Neko, Manga-Kimi)
     doc.querySelectorAll('#series-history, #series-history-tpl, [id*="history"]').forEach(el => el.remove());
 
-    const links = doc.querySelectorAll('.eph-num a, .clstyle li a, #chapterlist li a, .bxcl ul li a, .chlist li a, .ntr-upd-ep, .series-chapterlist li a, .series-chapterlist a, .flexch-infoz a');
+    const mrContainers = doc.querySelectorAll('#chapterlist, .eplister, .clstyle, .bxcl');
+    let links = [];
+    if (mrContainers.length > 0) {
+      mrContainers.forEach(c => {
+        c.querySelectorAll('.eph-num a, .clstyle li a, #chapterlist li a, .bxcl ul li a, .chlist li a, .ntr-upd-ep, .series-chapterlist li a, .series-chapterlist a, .flexch-infoz a').forEach(a => links.push(a));
+      });
+    }
+    if (links.length === 0) {
+      links = Array.from(doc.querySelectorAll('.eph-num a, .clstyle li a, #chapterlist li a, .bxcl ul li a, .chlist li a, .ntr-upd-ep, .series-chapterlist li a, .series-chapterlist a, .flexch-infoz a'));
+    }
+
     links.forEach(a => {
       let url = (a.getAttribute('href') || '').trim();
 
@@ -6961,6 +7066,26 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
       if (url.includes('/page/') || url.includes('/genre') || url.includes('/tag') || url.includes('/author') || url.includes('/feed') || url.includes('wp-admin')) {
         return;
       }
+      if (isGenericCatalogUrl(url)) return;
+
+      if (url.startsWith('//')) {
+        url = 'https:' + url;
+      } else if (url.startsWith('/')) {
+        url = baseUrl.replace(/\/$/, '') + url;
+      } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = baseUrl.replace(/\/$/, '') + '/' + url;
+      }
+
+      if (mangaSlug && mangaSlug.length >= 3) {
+        const uLower = url.toLowerCase();
+        if (!uLower.includes(mangaSlug)) {
+          const simpleSlug = mangaSlug.replace(/[-_]/g, '');
+          const simpleUrl = uLower.replace(/[-_]/g, '');
+          if (!simpleUrl.includes(simpleSlug)) {
+            return;
+          }
+        }
+      }
 
       const aClone = a.cloneNode(true);
       aClone.querySelectorAll('.chapterdate, .date, .time, time, i').forEach(el => el.remove());
@@ -6971,14 +7096,6 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
 
       const liParent = a.closest('li');
       const dataNum = liParent ? liParent.getAttribute('data-num') : null;
-
-      if (url.startsWith('//')) {
-        url = 'https:' + url;
-      } else if (url.startsWith('/')) {
-        url = baseUrl.replace(/\/$/, '') + url;
-      } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        url = baseUrl.replace(/\/$/, '') + '/' + url;
-      }
 
       let title = rawTitle;
       const numMatch = rawTitle.match(/ตอนที่\s*(\d+(\.\d+)?)/i) ||
@@ -7018,6 +7135,8 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
       if (url.startsWith('//')) url = 'https:' + url;
       else if (url.startsWith('/')) url = baseUrl.replace(/\/$/, '') + url;
       else if (!url.startsWith('http')) url = baseUrl.replace(/\/$/, '') + '/' + url;
+      if (isGenericCatalogUrl(url)) return;
+      if (mangaSlug && mangaSlug.length >= 3 && !url.toLowerCase().includes(mangaSlug)) return;
       const text = a.textContent.trim().replace(/\s+/g, ' ');
       const numMatch = text.match(/(?:ตอนที่|chapter|ch\.?|ep\.?)\s*(\d+(?:\.\d+)?)/i) || url.match(/(?:ตอนที่|chapter|ch|ep)[-_ ]?(\d+(?:\.\d+)?)/i);
       const epNum = numMatch ? parseFloat(numMatch[1]) : undefined;
@@ -7038,6 +7157,8 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
       if (url.startsWith('//')) url = 'https:' + url;
       else if (url.startsWith('/')) url = baseUrl.replace(/\/$/, '') + url;
       else if (!url.startsWith('http')) url = baseUrl.replace(/\/$/, '') + '/' + url;
+      if (isGenericCatalogUrl(url)) return;
+      if (mangaSlug && mangaSlug.length >= 3 && !url.toLowerCase().includes(mangaSlug)) return;
       const text = a.textContent.trim().replace(/\s+/g, ' ');
       const numMatch = text.match(/(?:ตอนที่|chapter|ch\.?|ep\.?)\s*(\d+(?:\.\d+)?)/i) || url.match(/(?:ตอนที่|chapter|ch|ep)[-_ ]?(\d+(?:\.\d+)?)/i);
       const epNum = numMatch ? parseFloat(numMatch[1]) : undefined;
@@ -7056,6 +7177,7 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
       let url = (a.getAttribute('href') || '').trim();
       if (!url || !url.match(/\/(?:content|read)\/[^/]+\/\d+/)) return;
       if (url.startsWith('/')) url = baseUrl.replace(/\/$/, '') + url;
+      if (isGenericCatalogUrl(url)) return;
       const numMatch = url.match(/\/(?:content|read)\/[^/]+\/(\d+)/);
       const epNum = numMatch ? parseFloat(numMatch[1]) : undefined;
       const title = epNum !== undefined ? `ตอนที่ ${epNum}` : (a.textContent.trim() || 'อ่านตอนนี้');
@@ -7076,6 +7198,7 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
       else if (!val.startsWith('http')) {
         try { val = new URL(val, baseUrl).href; } catch(e) { return; }
       }
+      if (isGenericCatalogUrl(val)) return;
       const optText = (opt.textContent || '').trim().replace(/\s+/g, ' ');
       const match = optText.match(/(?:ตอนที่|chapter|ch\.?|ep\.?)\s*(\d+(?:\.\d+)?)/i) || val.match(/(?:ตอนที่|chapter|ch|ep)[-_/ ]?(\d+(?:\.\d+)?)/i);
       if (match) {
@@ -7089,7 +7212,7 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
   }
 
   if (chapters.length === 0) {
-    // 5. ลองตัวดึง Generic Links ในรายการหรือเนื้อหาทั้งหมด
+    // 5. ลองตัวดึง Generic Links ในรายการหรือเนื้อหาทั้งหมด (ต้องตรงกับ Slug ของเรื่อง)
     const candidateNodes = doc.querySelectorAll('.chapter-list a, #chapter-list a, .chapters a, .chapter_list a, .list-chapter a, .chapter-list-items a, ul.chapters a, .episodes a, .table-chapters a, .sub-ch a, .box-chapter a, a[href*="chapter"], a[href*="ตอนที่"], a[href*="-ch-"], a[href*="/ch-"], a[href*="/ep-"]');
     candidateNodes.forEach(a => {
       let url = (a.getAttribute('href') || '').trim();
@@ -7099,6 +7222,20 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
       else if (!url.startsWith('http')) {
         try { url = new URL(url, baseUrl).href; } catch (e) { return; }
       }
+      if (isGenericCatalogUrl(url)) return;
+
+      // ตรวจสอบว่าลิงก์ต้องมี slug ของเรื่องเพื่อป้องกันตอนของเรื่องอื่นรั่วไหล 100%
+      if (mangaSlug && mangaSlug.length >= 3) {
+        const uLower = url.toLowerCase();
+        if (!uLower.includes(mangaSlug)) {
+          const simpleSlug = mangaSlug.replace(/[-_]/g, '');
+          const simpleUrl = uLower.replace(/[-_]/g, '');
+          if (!simpleUrl.includes(simpleSlug)) {
+            return;
+          }
+        }
+      }
+
       const text = a.textContent.trim().replace(/\s+/g, ' ');
       const match = text.match(/(?:ตอนที่|chapter|ch\.?|ep\.?)\s*(\d+(?:\.\d+)?)/i) || url.match(/(?:ตอนที่|chapter|ch|ep)[-_/ ]?(\d+(?:\.\d+)?)/i);
       if (match) {
@@ -7375,9 +7512,9 @@ async function openChapterModal(manga, activeSource = null) {
     const allSources = [];
     const seenSources = new Set();
 
-    // รวมแหล่งหลักและแหล่งสำรองที่เจอ
+    // รวมแหล่งหลักและแหล่งสำรองที่เจอ (กรองหน้าแคตตาล็อกรวมออก 100%)
     [manga, ...(manga.altSources || [])].forEach(s => {
-      if (s && s.sourceId && !seenSources.has(s.sourceId)) {
+      if (s && s.sourceId && !seenSources.has(s.sourceId) && !isGenericCatalogUrl(s.mangaUrl)) {
         seenSources.add(s.sourceId);
         allSources.push(s);
       }
@@ -7420,6 +7557,7 @@ async function openChapterModal(manga, activeSource = null) {
       const isSelected = s.sourceId === currentSource.sourceId;
       const pill = document.createElement('button');
       pill.className = `modal-source-pill ${isSelected ? 'active' : ''} ${!isFree ? 'locked' : ''}`;
+      pill.setAttribute('data-source-id', s.sourceId);
       const epNum = extractEpNumberFromText(s.latestEp);
       const epLabel = epNum > 0 ? ` (${epNum} ตอน)` : (s.latestEp ? ` (${s.latestEp})` : '');
       pill.innerHTML = `
@@ -7569,18 +7707,58 @@ async function openChapterModal(manga, activeSource = null) {
       if (currentReqSeq !== modalRequestSeq) return;
       chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
 
+      // สำหรับเว็บตระกูล Madara หรือเว็บที่โหลดตอนผ่าน AJAX หากยังไม่ได้รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที
+      if (chapters.length === 0 && (currentSource.sourceType === 'madara' || html.includes('wp-manga') || html.includes('ajax/chapters') || html.includes('manga_get_chapters') || html.includes('c-tabs-item__content'))) {
+        try {
+          const ajaxUrl = currentSource.mangaUrl.replace(/\/$/, '') + '/ajax/chapters/';
+          const ajaxHtml = await fetchViaProxy(ajaxUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=manga_get_chapters'
+          }, 10000);
+          if (currentReqSeq !== modalRequestSeq) return;
+          if (ajaxHtml) {
+            const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, 'madara', currentSource.mangaUrl);
+            if (ajaxChapters.length > 0) {
+              chapters = ajaxChapters;
+            }
+          }
+        } catch (errAjax) {
+          console.warn("Madara ajax chapters fetch:", errAjax);
+        }
+      }
+
       // หากไม่พบตอน ให้ตรวจสอบว่าหน้านี้เป็นลิงก์ไปยังตอนเดี่ยว (ไม่ใช่หน้ามังงะรวม) หรือไม่ โดยดึงหน้าหลักของมังงะจาก breadcrumb / url
       if (chapters.length === 0) {
         try {
           const doc = new DOMParser().parseFromString(html, 'text/html');
           const resolvedSeriesUrl = resolveSeriesUrlFromHtml(doc, chapterListingUrl);
-          if (resolvedSeriesUrl && resolvedSeriesUrl !== chapterListingUrl) {
+          if (resolvedSeriesUrl && resolvedSeriesUrl !== chapterListingUrl && !isGenericCatalogUrl(resolvedSeriesUrl)) {
             currentSource.mangaUrl = resolvedSeriesUrl;
             if (manga) manga.mangaUrl = resolvedSeriesUrl;
             const seriesHtml = await fetchViaProxy(resolvedSeriesUrl);
             if (currentReqSeq !== modalRequestSeq) return;
             chapters = parseChaptersFromHtml(seriesHtml, currentSource.sourceUrl, currentSource.sourceType, resolvedSeriesUrl);
             html = seriesHtml; // ใช้อัปเดต tag genre ต่อไป
+
+            // ถ้าซีรีส์ที่ resolve ได้เป็น Madara ให้ลองดึง AJAX ด้วย
+            if (chapters.length === 0 && (currentSource.sourceType === 'madara' || seriesHtml.includes('wp-manga') || seriesHtml.includes('ajax/chapters') || seriesHtml.includes('manga_get_chapters'))) {
+              try {
+                const ajaxUrl = resolvedSeriesUrl.replace(/\/$/, '') + '/ajax/chapters/';
+                const ajaxHtml = await fetchViaProxy(ajaxUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: 'action=manga_get_chapters'
+                }, 10000);
+                if (currentReqSeq !== modalRequestSeq) return;
+                if (ajaxHtml) {
+                  const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, 'madara', resolvedSeriesUrl);
+                  if (ajaxChapters.length > 0) {
+                    chapters = ajaxChapters;
+                  }
+                }
+              } catch (e2) {}
+            }
           }
         } catch (e) {
           console.warn('Failed to resolve series URL from chapter page:', e);
@@ -7661,27 +7839,6 @@ async function openChapterModal(manga, activeSource = null) {
         }
       }
 
-      // สำหรับเว็บตระกูล Madara หรือเว็บที่โหลดตอนผ่าน AJAX หากยังไม่ได้รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที
-      if (chapters.length === 0 && (currentSource.sourceType === 'madara' || html.includes('wp-manga') || html.includes('ajax/chapters') || html.includes('manga_get_chapters'))) {
-        try {
-          const ajaxUrl = currentSource.mangaUrl.replace(/\/$/, '') + '/ajax/chapters/';
-          const ajaxHtml = await fetchViaProxy(ajaxUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'action=manga_get_chapters'
-          }, 10000);
-          if (currentReqSeq !== modalRequestSeq) return;
-          if (ajaxHtml) {
-            const ajaxChapters = parseChaptersFromHtml(ajaxHtml, currentSource.sourceUrl, 'madara', currentSource.mangaUrl);
-            if (ajaxChapters.length > 0) {
-              chapters = ajaxChapters;
-            }
-          }
-        } catch (errAjax) {
-          console.warn("Madara ajax chapters fetch:", errAjax);
-        }
-      }
-
       // หากยังคงได้ 0 ตอน ให้ตรวจสอบว่าหน้านี้ (currentSource.mangaUrl) เป็นหน้าอ่านตอนที่มีรูปการ์ตูนพร้อมอ่านได้เลยหรือไม่!
       if (chapters.length === 0) {
         try {
@@ -7739,12 +7896,16 @@ async function openChapterModal(manga, activeSource = null) {
     chapters = sortChaptersDescending(chapters);
     if (chapters.length > 0) {
       currentSource.latestEp = chapters[0].title;
-      if (manga) manga.latestEp = chapters[0].title;
+      if (manga && manga.sourceId === currentSource.sourceId) manga.latestEp = chapters[0].title;
       // อัปเดตตัวเลขจำนวนตอนใน Pill ของ Modal ทันที
+      const epNum = extractEpNumberFromText(chapters[0].title);
+      const epLabel = epNum > 0 ? ` (${epNum} ตอน)` : ` (${chapters[0].title})`;
+      const targetPill = sourcePills ? sourcePills.querySelector(`.modal-source-pill[data-source-id="${currentSource.sourceId}"] span:nth-child(2)`) : null;
+      if (targetPill) {
+        targetPill.textContent = `${currentSource.sourceName}${epLabel}`;
+      }
       const activePill = sourcePills ? sourcePills.querySelector('.modal-source-pill.active span:nth-child(2)') : null;
-      if (activePill) {
-        const epNum = extractEpNumberFromText(chapters[0].title);
-        const epLabel = epNum > 0 ? ` (${epNum} ตอน)` : ` (${chapters[0].title})`;
+      if (activePill && activePill !== targetPill) {
         activePill.textContent = `${currentSource.sourceName}${epLabel}`;
       }
       updateCardLatestEpInDom(currentSource.mangaUrl, manga.title, chapters[0].title);
