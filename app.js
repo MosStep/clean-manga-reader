@@ -9437,72 +9437,23 @@ async function initReaderPage() {
       }
     }
 
-    // อัปเดตการแสดงผลโหมดเลื่อนยาว (Continuous Vertical Scroll)
+    // อัปเดตการแสดงผลโหมดเลื่อนยาว (Continuous Vertical Scroll - โหลดภาพทั้งหมดทันที ไร้รอยต่อ ไร้ขีดดำ)
     async function renderScrollMode() {
       container.className = 'reader-container';
       container.innerHTML = '';
       if (singlePageBar) singlePageBar.style.display = 'none';
 
-      // สร้างช่องสำรองความสูงสำหรับทุกหน้าล่วงหน้า (CLS Prevention & Slot Preservation)
-      const pageSlots = [];
-      for (let idx = 0; idx < totalPagesCount; idx++) {
-        const slot = document.createElement('div');
-        slot.className = 'reader-page-slot';
-        slot.dataset.readerPage = String(idx);
-        slot.innerHTML = `<div class="reader-page-placeholder-loading"><div class="spinner"></div>กำลังโหลดหน้า ${idx + 1}...</div>`;
-        container.appendChild(slot);
-        pageSlots.push(slot);
-      }
-
-      restoreSavedScrollPosition();
-
       if (!isPaginated) {
         readerData.images.forEach((item, idx) => {
-          const slot = pageSlots[idx];
-          if (!slot) return;
-
           if (typeof item === 'string') {
             const img = document.createElement('img');
+            img.src = item;
             img.alt = `Page ${idx + 1}`;
-            img.loading = idx < 4 || idx === Number(savedReadPosition?.pageIndex) ? 'eager' : 'lazy';
+            img.dataset.readerPage = String(idx);
             img.referrerPolicy = 'no-referrer';
             let retried = false;
 
-            const renderSlotError = () => {
-              slot.classList.remove('loaded');
-              slot.innerHTML = '';
-              const errBox = document.createElement('div');
-              errBox.className = 'reader-page-error';
-              errBox.innerHTML = `
-                <div class="reader-page-error-icon">⚠️</div>
-                <div class="reader-page-error-title">ไม่สามารถโหลดหน้า ${idx + 1} ได้</div>
-                <p class="reader-page-error-desc">เกิดข้อผิดพลาดในการโหลดรูปภาพ หรือสัญญาณอินเทอร์เน็ตไม่เสถียร</p>
-                <button class="btn-retry-page">ลองใหม่อีกครั้ง ↻</button>
-              `;
-              errBox.querySelector('.btn-retry-page').onclick = (e) => {
-                e.stopPropagation();
-                slot.innerHTML = `<div class="reader-page-placeholder-loading"><div class="spinner"></div>กำลังลองโหลดหน้า ${idx + 1} ใหม่อีกครั้ง...</div>`;
-                const retryImg = new Image();
-                retryImg.alt = `Page ${idx + 1}`;
-                retryImg.referrerPolicy = 'no-referrer';
-                retryImg.onload = () => {
-                  slot.innerHTML = '';
-                  slot.appendChild(retryImg);
-                  slot.classList.add('loaded');
-                  if (!userDidManualScroll) restoreSavedScrollPosition(true);
-                };
-                retryImg.onerror = () => {
-                  renderSlotError();
-                };
-                retryImg.src = item + (item.includes('?') ? '&' : '?') + 'retry=' + Date.now();
-              };
-              slot.appendChild(errBox);
-            };
-
             img.onload = () => {
-              slot.innerHTML = '';
-              slot.appendChild(img);
-              slot.classList.add('loaded');
               if (!userDidManualScroll) restoreSavedScrollPosition(true);
             };
 
@@ -9512,12 +9463,10 @@ async function initReaderPage() {
                 setTimeout(() => {
                   this.src = item + (item.includes('?') ? '&' : '?') + 'retry=' + Date.now();
                 }, 1200);
-              } else {
-                renderSlotError();
               }
             };
 
-            img.src = item;
+            container.appendChild(img);
           } else if (item && item.isScrambled) {
             const canvas = document.createElement('canvas');
             canvas.width = item.width || 1000;
@@ -9526,6 +9475,7 @@ async function initReaderPage() {
             canvas.style.height = 'auto';
             canvas.style.display = 'block';
             canvas.style.margin = '0 auto';
+            canvas.dataset.readerPage = String(idx);
 
             const ctx = canvas.getContext('2d');
             const rawImg = new Image();
@@ -9536,80 +9486,49 @@ async function initReaderPage() {
                   ctx.drawImage(rawImg, parseFloat(slice[2]), parseFloat(slice[3]), item.tileW, item.tileH, parseFloat(slice[0]), parseFloat(slice[1]), item.tileW, item.tileH);
                 });
               }
-              slot.innerHTML = '';
-              slot.appendChild(canvas);
-              slot.classList.add('loaded');
               if (!userDidManualScroll) restoreSavedScrollPosition(true);
             };
-            rawImg.onerror = () => {
-              slot.classList.remove('loaded');
-              slot.innerHTML = `
-                <div class="reader-page-error">
-                  <div class="reader-page-error-icon">⚠️</div>
-                  <div class="reader-page-error-title">ไม่สามารถโหลดหน้า ${idx + 1} ได้</div>
-                  <p class="reader-page-error-desc">เกิดข้อผิดพลาดในการโหลดรูปภาพ</p>
-                  <button class="btn-retry-page" onclick="window.location.reload()">ลองใหม่อีกครั้ง ↻</button>
-                </div>
-              `;
+            rawImg.onerror = function() {
+              setTimeout(() => {
+                rawImg.src = item.rawUrl + (item.rawUrl.includes('?') ? '&' : '?') + 'retry=' + Date.now();
+              }, 1200);
             };
             rawImg.src = item.rawUrl;
+            container.appendChild(canvas);
           }
         });
+        restoreSavedScrollPosition();
       } else {
-        // MangaTown: โหลดทุกหน้าโดยเก็บช่องของทุกหน้าไว้ตามลำดับ ไม่มีการข้ามหน้า!
-        async function loadMtSlot(p) {
-          const slot = pageSlots[p];
-          if (!slot) return;
+        // MangaTown: เรนเดอร์หน้าแรกทันที และโหลดหน้าถัดไปแบบต่อเนื่องไร้รอยต่อ
+        if (pageImageMap[0]) {
+          const img = document.createElement('img');
+          img.src = pageImageMap[0];
+          img.alt = `Page 1 / ${totalPagesCount}`;
+          img.dataset.readerPage = '0';
+          img.referrerPolicy = 'no-referrer';
+          container.appendChild(img);
+        }
 
-          const renderMtError = () => {
-            slot.classList.remove('loaded');
-            slot.innerHTML = '';
-            const errBox = document.createElement('div');
-            errBox.className = 'reader-page-error';
-            errBox.innerHTML = `
-              <div class="reader-page-error-icon">⚠️</div>
-              <div class="reader-page-error-title">ไม่สามารถโหลดหน้า ${p + 1} ได้</div>
-              <p class="reader-page-error-desc">เกิดข้อผิดพลาดในการดึงข้อมูลหน้านี้ หรือสัญญาณอินเทอร์เน็ตไม่เสถียร</p>
-              <button class="btn-retry-page">ลองใหม่อีกครั้ง ↻</button>
-            `;
-            errBox.querySelector('.btn-retry-page').onclick = (e) => {
-              e.stopPropagation();
-              delete pageImageMap[p];
-              slot.innerHTML = `<div class="reader-page-placeholder-loading"><div class="spinner"></div>กำลังลองโหลดหน้า ${p + 1} ใหม่อีกครั้ง...</div>`;
-              loadMtSlot(p);
-            };
-            slot.appendChild(errBox);
-          };
+        const loadNotice = document.createElement('div');
+        loadNotice.id = 'mtScrollNotice';
+        loadNotice.style.cssText = 'padding: 20px; text-align: center; color: var(--text-sub); font-size: 0.88rem;';
+        loadNotice.innerHTML = '<div class="spinner"></div> กำลังดึงหน้ารูปภาพถัดไป...';
+        container.appendChild(loadNotice);
 
+        for (let p = 1; p < totalPagesCount; p++) {
+          if (currentMode !== 'scroll') break;
           const src = await fetchMangaTownPageImage(p);
-          if (currentMode !== 'scroll') return;
-
-          if (src) {
+          if (src && currentMode === 'scroll') {
             const img = document.createElement('img');
-            img.alt = `Page ${p + 1} / ${totalPagesCount}`;
-            img.referrerPolicy = 'no-referrer';
-            img.loading = (p < 3 || p === Number(savedReadPosition?.pageIndex)) ? 'eager' : 'lazy';
-            img.onload = () => {
-              slot.innerHTML = '';
-              slot.appendChild(img);
-              slot.classList.add('loaded');
-              if (!userDidManualScroll) restoreSavedScrollPosition(true);
-            };
-            img.onerror = () => {
-              renderMtError();
-            };
             img.src = src;
-          } else {
-            // โหลดไม่สำเร็จ: แสดงกล่องแจ้งข้อผิดพลาดพร้อมปุ่มลองใหม่ ไม่ข้ามหน้าเด็ดขาด!
-            renderMtError();
+            img.alt = `Page ${p + 1} / ${totalPagesCount}`;
+            img.dataset.readerPage = String(p);
+            img.referrerPolicy = 'no-referrer';
+            container.insertBefore(img, loadNotice);
           }
         }
-
-        // ทยอยโหลดหน้า 0 ถึง totalPagesCount - 1
-        for (let p = 0; p < totalPagesCount; p++) {
-          if (currentMode !== 'scroll') break;
-          await loadMtSlot(p);
-        }
+        if (loadNotice) loadNotice.remove();
+        restoreSavedScrollPosition();
       }
     }
 
