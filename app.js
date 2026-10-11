@@ -124,7 +124,7 @@ function initOfflineAppSupport() {
 }
 
 const MAX_PARALLEL_SOURCE_FETCHES = 4;
-const INITIAL_SOURCE_PAGES = 3;
+const INITIAL_SOURCE_PAGES = 1;
 const AUTO_FEED_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const AUTO_FEED_REFRESH_STAMP = 'clean_manga_auto_feed_refresh_at_v1';
 
@@ -2217,7 +2217,7 @@ function bindAutomaticCloudSync() {
     pullAndMergeSyncData({ pushMerged: false });
   };
 
-  window.setInterval(pullIfVisible, 60 * 1000);
+  window.setInterval(pullIfVisible, 5 * 60 * 1000);
   window.addEventListener('focus', pullIfVisible);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') pullIfVisible();
@@ -2258,7 +2258,7 @@ function getCloudSyncRevision(data) {
   return `${serialized.length}:${(hash >>> 0).toString(16)}`;
 }
 
-// ส่งข้อมูลประวัติและเรื่องโปรดไปซิงก์บนคลาวด์ (Debounced 500ms) พร้อมส่ง Tombstones
+// ส่งข้อมูลประวัติและเรื่องโปรดไปซิงก์บนคลาวด์ (Debounced 2500ms) พร้อมส่ง Tombstones
 function pushSyncData() {
   const key = getSyncKey();
   if (!key) return;
@@ -2314,7 +2314,7 @@ function pushSyncData() {
     } catch (e) {
       console.warn("Push sync data error:", e);
     }
-  }, 500);
+  }, 2500);
 }
 
 // ดึงข้อมูลจากคลาวด์และรวมกับข้อมูลในเครื่องอย่างชาญฉลาด (Smart Multi-Device Merge พร้อมเคารพการลบ)
@@ -4002,7 +4002,7 @@ function initAutomaticFeedRefresh() {
   };
 
   document.addEventListener('visibilitychange', refreshIfDue);
-  window.setInterval(refreshIfDue, 60 * 1000);
+  window.setInterval(refreshIfDue, 5 * 60 * 1000);
 }
 
 // ==========================================================
@@ -6274,8 +6274,7 @@ function setupHeroSpotlight(list) {
   const chaptersBtn = document.getElementById('heroChaptersBtn');
 
   if (titleEl) titleEl.textContent = spotlight.title;
-  const isMangaDex = spotlight.sourceId === 'mangadex';
-  const heroCover = spotlight.cover ? (isMangaDex ? spotlight.cover : getProxyUrl(spotlight.cover)) : '';
+  const heroCover = spotlight.cover ? getOptimizedCoverUrl(spotlight.cover, spotlight.sourceId) : '';
   if (backdropEl && heroCover) {
     backdropEl.style.backgroundImage = `url('${heroCover}')`;
   }
@@ -6353,8 +6352,29 @@ async function fetchMangaDexCoverByTitle(title) {
   return null;
 }
 
+// ตัวช่วยเลือก URL รูปปกแบบประหยัดโควตา Cloudflare (โหลดตรงด้วย no-referrer สำหรับเว็บที่ไม่บล็อก)
+function getOptimizedCoverUrl(cover, sourceId) {
+  if (!cover) return '';
+  if (sourceId === 'mangadex' || cover.startsWith('data:')) return cover;
+  // เว็บที่จำเป็นต้องผ่าน Proxy แน่นอนเพื่อส่ง Referer
+  const strictRefererSources = new Set([
+    'mangatown', 'bully-manga', 'six-manga', 'mangablackcat', 'nekopost', 'whytoon', 'duketoon'
+  ]);
+  if (strictRefererSources.has(sourceId)) {
+    return getProxyUrl(cover);
+  }
+  return cover;
+}
+
 window.handleCoverError = function(img) {
   if (!img) return;
+  const originalCover = img.getAttribute('data-original-cover');
+  const currentSrc = img.src || '';
+  // ถ้าดึงตรงแล้วไม่ขึ้น ให้สลับมาลองผ่าน Proxy 1 ครั้ง
+  if (originalCover && !currentSrc.includes('/api/proxy') && !currentSrc.includes('workers.dev')) {
+    img.src = getProxyUrl(originalCover);
+    return;
+  }
   img.onerror = null;
   img.removeAttribute('alt');
   img.src = DEFAULT_COVER_PLACEHOLDER;
@@ -6478,8 +6498,7 @@ function renderMangaCards() {
     }
 
     const placeholder = DEFAULT_COVER_PLACEHOLDER;
-    const isMangaDex = m.sourceId === 'mangadex';
-    const coverUrl = m.cover ? (isMangaDex ? m.cover : getProxyUrl(m.cover)) : placeholder;
+    const coverUrl = m.cover ? getOptimizedCoverUrl(m.cover, m.sourceId) : placeholder;
     const isFav = isFavorite(m.title);
 
     let historyBadgeHtml = '';
@@ -6541,7 +6560,7 @@ function renderMangaCards() {
         <button class="btn-card-fav ${isFav ? 'active' : ''}" data-title="${encodeURIComponent(m.title)}" title="${isFav ? 'นำออกจากเรื่องโปรด' : 'บันทึกเป็นเรื่องโปรด'}">
           ${isFav ? '★' : '⭐'}
         </button>
-        <img src="${coverUrl}" alt="" data-title="${escapeHtmlText(m.title)}" loading="lazy" referrerpolicy="no-referrer" onerror="handleCoverError(this);">
+        <img src="${coverUrl}" alt="" data-title="${escapeHtmlText(m.title)}" data-original-cover="${escapeHtmlText(m.cover || '')}" loading="lazy" referrerpolicy="no-referrer" onerror="handleCoverError(this);">
         <span class="manga-source-pill">${m.sourceName}</span>
       </div>
       <div class="manga-info">
@@ -6592,7 +6611,10 @@ function renderMangaCards() {
           if (foundCover) {
             m.cover = foundCover;
             const cardImg = card.querySelector('.manga-cover img');
-            if (cardImg) cardImg.src = getProxyUrl(foundCover);
+            if (cardImg) {
+              cardImg.setAttribute('data-original-cover', foundCover);
+              cardImg.src = getOptimizedCoverUrl(foundCover, m.sourceId);
+            }
             try {
               let hist = JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
               const hItem = hist.find(h => h.title === m.title || h.mangaUrl === m.mangaUrl);

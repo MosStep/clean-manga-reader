@@ -1,12 +1,13 @@
 const CACHE_PREFIX = 'clean-manga-reader-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v21`;
+const CACHE_NAME = `${CACHE_PREFIX}v22`;
+const IMAGE_CACHE_NAME = 'clean-manga-reader-images-v1';
 const SHELL_ASSETS = [
   '',
   'index.html',
   'reader.html',
   'style.css?v=4.18',
   'config.js?v=4.19',
-  'app.js?v=4.37',
+  'app.js?v=4.38',
   'favicon.svg'
 ];
 
@@ -40,6 +41,34 @@ self.addEventListener('fetch', event => {
 
   const scope = new URL(self.registration.scope);
   const requestUrl = new URL(request.url);
+
+  // 1. แคชรูปภาพแบบ Cache-First เพื่อประหยัดโควตา Cloudflare Worker สูงสุด
+  const targetParam = requestUrl.searchParams.get('url') || '';
+  const isImageRequest = request.destination === 'image' ||
+    (requestUrl.pathname.includes('/api/proxy') && /\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(targetParam)) ||
+    /\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(requestUrl.pathname);
+
+  if (isImageRequest) {
+    event.respondWith((async () => {
+      const imgCache = await caches.open(IMAGE_CACHE_NAME);
+      const cached = await imgCache.match(request);
+      if (cached) {
+        return cached;
+      }
+      try {
+        const netRes = await fetch(request);
+        if (netRes && (netRes.ok || netRes.type === 'opaque')) {
+          imgCache.put(request, netRes.clone());
+        }
+        return netRes;
+      } catch (err) {
+        if (cached) return cached;
+        throw err;
+      }
+    })());
+    return;
+  }
+
   if (requestUrl.origin !== scope.origin || !requestUrl.pathname.startsWith(scope.pathname)) return;
 
   event.respondWith((async () => {

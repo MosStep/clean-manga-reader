@@ -612,7 +612,6 @@ export default {
           await env.CHAT_KV.put(`sync_data_${key}`, JSON.stringify(resultData), {
             expirationTtl: TWO_YEARS_SECONDS // 730 วัน (2 ปี)
           });
-          await env.CHAT_KV.put(`sync_key_${key}`, JSON.stringify({ active: true, updatedAt: Date.now() }));
         }
 
         return new Response(JSON.stringify({ success: true, data: resultData }), {
@@ -659,6 +658,19 @@ export default {
           headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "text/plain; charset=utf-8" }
         });
       }
+
+      // ตรวจสอบ Cloudflare Edge Cache สำหรับคำขอแบบ GET ก่อนเสมอ
+      const cache = caches.default;
+      const cacheKey = new Request(request.url, { method: "GET" });
+      if (request.method === "GET") {
+        try {
+          const cachedResponse = await cache.match(cacheKey);
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+        } catch (_) {}
+      }
+
       const parsedTarget = new URL(targetUrl);
       const origin = parsedTarget.origin;
 
@@ -720,11 +732,32 @@ export default {
       headers.set("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS");
       headers.set("Access-Control-Allow-Headers", "*");
       
-      // เพิ่มการแคชสำหรับ GET เพื่อความเร็ว
+      // เพิ่มการแคชสำหรับ GET เพื่อความเร็ว และป้องกันไม่ให้เบราว์เซอร์ส่ง Request ซ้ำ
       if (request.method === "GET" && response.status === 200) {
         const contentType = (headers.get("Content-Type") || "").toLowerCase();
-        const cacheSeconds = contentType.startsWith("image/") ? 86400 : 900;
-        headers.set("Cache-Control", `public, max-age=${cacheSeconds}`);
+        const isImage = contentType.startsWith("image/") || /\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(targetUrl);
+        const cacheSeconds = isImage ? 604800 : 900; // 7 วันสำหรับรูปภาพ, 15 นาทีสำหรับเว็บเพจ
+
+        // ลบ Headers ที่บล็อกการจำแคชจากเว็บต้นทาง
+        headers.delete("pragma");
+        headers.delete("expires");
+        headers.delete("set-cookie");
+        headers.delete("vary");
+        headers.set("Cache-Control", `public, max-age=${cacheSeconds}, s-maxage=${cacheSeconds}`);
+
+        const responseToReturn = new Response(response.body, {
+          status: response.status,
+          headers: headers
+        });
+
+        // บันทึกลง Cloudflare Edge Cache ในเบื้องหลัง
+        if (ctx && typeof ctx.waitUntil === 'function') {
+          try {
+            ctx.waitUntil(cache.put(cacheKey, responseToReturn.clone()));
+          } catch (_) {}
+        }
+
+        return responseToReturn;
       }
 
       return new Response(response.body, {
