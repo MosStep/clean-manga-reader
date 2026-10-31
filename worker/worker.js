@@ -848,7 +848,21 @@ export default {
       const messages = [
         {
           role: 'system',
-          content: 'You are an intelligent manga recommendation parser. The user searches for manga using story plots, feelings, or tropes in Thai or English. Extract 4-7 relevant search keywords (both Thai and English concepts), genres, and a 1-line Thai summary of the concept. Output ONLY valid JSON in format: {"keywords":["keyword1","keyword2","keyword3"],"genres":["action","fantasy"],"summary":"สรุปแนวสั้นๆ 1 บรรทัด"}'
+          content: `You are an expert manga semantic search engine.
+The user searches for manga using story plots, character concepts, feelings, or tropes in Thai or English.
+1. Extract "coreKeywords": The MUST-HAVE primary subject or character terms in BOTH English and Thai (e.g. if query has "elf", include ["elf", "elves", "เอลฟ์"]).
+2. Extract "qualifiers": Secondary attributes, age rating, tropes in BOTH English and Thai (e.g. if query has "18+", include ["18+", "adult", "erotica", "mature", "ecchi", "hentai", "ติดเรท", "ผู้ใหญ่"]).
+3. Extract "genres": High-level broad genres (e.g. ["fantasy", "romance"]).
+4. Provide "summary": 1-line punchy Thai summary.
+
+Output ONLY valid JSON in format:
+{
+  "coreKeywords": ["keyword_en", "keyword_th"],
+  "qualifiers": ["qualifier1", "qualifier2"],
+  "genres": ["genre1"],
+  "keywords": ["all", "combined", "keywords"],
+  "summary": "คำอธิบายแนวเรื่องสั้นๆ 1 บรรทัด"
+}`
         },
         {
           role: 'user',
@@ -1062,9 +1076,9 @@ export default {
       }
 
       // ตรวจสอบ Cloudflare Edge Cache สำหรับคำขอแบบ GET ก่อนเสมอ
-      const cache = caches.default;
+      const cache = typeof caches !== 'undefined' ? caches.default : null;
       const cacheKey = new Request(request.url, { method: "GET" });
-      if (request.method === "GET") {
+      if (cache && request.method === "GET") {
         try {
           const cachedResponse = await cache.match(cacheKey);
           if (cachedResponse) {
@@ -1117,6 +1131,14 @@ export default {
         }
       };
 
+      const xRequestedWith = request.headers.get("x-requested-with");
+      if (xRequestedWith) {
+        fetchOptions.headers["X-Requested-With"] = xRequestedWith;
+      }
+      if (targetUrl.includes("dongmanga.com") && targetUrl.includes("dong_wallet:pages")) {
+        fetchOptions.headers["X-Requested-With"] = "XMLHttpRequest";
+      }
+
       if (request.method === "POST") {
         fetchOptions.body = await request.text();
         const contentType = request.headers.get("content-type");
@@ -1133,6 +1155,43 @@ export default {
       headers.set("Access-Control-Allow-Origin", "*");
       headers.set("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS");
       headers.set("Access-Control-Allow-Headers", "*");
+
+      // รองรับการถอดรหัสรูปภาพอัตโนมัติสำหรับ DongManga (Discuz Dynamic Token Loader)
+      if (request.method === "GET" && targetUrl.includes("dongmanga.com") && (targetUrl.includes("thread-") || targetUrl.includes("mod=viewthread"))) {
+        try {
+          let text = await response.text();
+          const tokenMatch = text.match(/data-pg=["']([^"']+)["']/i);
+          if (tokenMatch) {
+            const token = tokenMatch[1];
+            const pagesEndpoint = "https://dongmanga.com/plugin.php?id=dong_wallet:pages";
+            const pagesResp = await fetch(pagesEndpoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": targetUrl,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+              },
+              body: "pg=" + encodeURIComponent(token)
+            });
+            if (pagesResp.ok) {
+              const pData = await pagesResp.json();
+              if (pData && pData.ok && Array.isArray(pData.img) && pData.img.length > 0) {
+                const imgTags = pData.img.map(src => `<img src="${src}" class="dz8-injected-img" />`).join('\n');
+                text = text.replace(/(<article[^>]*class=["'][^"']*dz8-pages[^"']*["'][^>]*>)/i, `$1\n<div class="injected-dz8-pages">\n${imgTags}\n</div>`);
+              }
+            }
+          }
+          headers.set("Content-Type", "text/html; charset=utf-8");
+          headers.delete("content-length");
+          return new Response(text, {
+            status: response.status,
+            headers: headers
+          });
+        } catch (e) {
+          console.warn("Worker DongManga pages resolution error:", e);
+        }
+      }
       
       // เพิ่มการแคชสำหรับ GET เพื่อความเร็ว และป้องกันไม่ให้เบราว์เซอร์ส่ง Request ซ้ำ
       if (request.method === "GET" && response.status === 200) {
@@ -1153,7 +1212,7 @@ export default {
         });
 
         // บันทึกลง Cloudflare Edge Cache ในเบื้องหลัง
-        if (ctx && typeof ctx.waitUntil === 'function') {
+        if (cache && ctx && typeof ctx.waitUntil === 'function') {
           try {
             ctx.waitUntil(cache.put(cacheKey, responseToReturn.clone()));
           } catch (_) {}

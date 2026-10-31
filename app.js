@@ -1812,7 +1812,11 @@ async function searchMangaDex(query, limit = 20) {
         if (c) return JSON.parse(c);
       } catch (e) {}
 
-      const url = `https://api.mangadex.org/manga?title=${encodeURIComponent(searchTerm)}&limit=${limit}&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
+      const isAdultSearch = /18\+|adult|porn|hentai|erotica|nsfw/i.test(searchTerm) || (currentSearchMode === 'ai' && /18\+|adult|erotica/i.test(currentSearchQuery));
+      const ratingParam = isAdultSearch 
+        ? '&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica&contentRating[]=pornographic'
+        : '&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica';
+      const url = `https://api.mangadex.org/manga?title=${encodeURIComponent(searchTerm)}&limit=${limit}&includes[]=cover_art${ratingParam}`;
       let json = null;
       const ctrl = new AbortController();
       const tmr = setTimeout(() => ctrl.abort(), 2500);
@@ -1951,39 +1955,96 @@ function stopAiPlaceholderRotation(inputEl) {
   }
 }
 
-// ตรวจสอบว่ามังงะตรงกับแนวพล็อตที่ AI วิเคราะห์หรือไม่
+// ตรวจสอบและให้คะแนนว่ามังงะตรงกับแนวพล็อตที่ AI วิเคราะห์หรือไม่ (Relevance Scoring Engine)
 function isMangaMatchAiSemantic(m, aiData) {
-  if (!m || !aiData || !Array.isArray(aiData.keywords) || aiData.keywords.length === 0) return false;
+  if (!m || !aiData) return false;
   const title = (m.title || '').toLowerCase();
   const altTitles = Array.isArray(m.altTitles) ? m.altTitles.map(t => String(t).toLowerCase()) : [];
   const tags = Array.isArray(m.tags) ? m.tags.map(t => String(t).toLowerCase()) : [];
   const genreTag = (m.genreTag || '').toLowerCase();
   const type = (m.type || '').toLowerCase();
-  const pool = [title, ...altTitles, ...tags, genreTag, type].join(' ');
+  const sourceName = (m.sourceName || '').toLowerCase();
+  const sourceId = (m.sourceId || '').toLowerCase();
+  
+  let urlSlug = '';
+  try {
+    const p = new URL(m.mangaUrl).pathname;
+    urlSlug = decodeURIComponent(p).replace(/[-_]/g, ' ').toLowerCase();
+  } catch (e) {}
 
-  for (const kw of aiData.keywords) {
-    const cleanKw = String(kw).toLowerCase().replace(/[()]/g, '').trim();
-    if (!cleanKw) continue;
-    const subWords = cleanKw.split(/[\s/]+/).filter(w => w.length >= 2);
-    for (const sw of subWords) {
-      if (pool.includes(sw)) {
-        m._aiMatchTag = sw;
-        return true;
-      }
+  const titlePool = [title, ...altTitles, urlSlug].join(' ');
+  const metadataPool = [...tags, genreTag, type, sourceName, sourceId].join(' ');
+  const fullPool = titlePool + ' ' + metadataPool;
+
+  const coreKws = Array.isArray(aiData.coreKeywords) && aiData.coreKeywords.length > 0 
+    ? aiData.coreKeywords 
+    : (Array.isArray(aiData.keywords) ? aiData.keywords.slice(0, 3) : []);
+  const qualifiers = Array.isArray(aiData.qualifiers) ? aiData.qualifiers : [];
+  const genres = Array.isArray(aiData.genres) ? aiData.genres : [];
+
+  let score = 0;
+  let matchedTags = [];
+
+  // 1. ตรวจสอบ Core Keywords (คำสำคัญหลัก เช่น elf, เอลฟ์)
+  let coreMatched = false;
+  for (const kw of coreKws) {
+    const cleanKw = String(kw).toLowerCase().trim();
+    if (!cleanKw || cleanKw.length < 2) continue;
+    if (titlePool.includes(cleanKw)) {
+      score += 100;
+      coreMatched = true;
+      if (!matchedTags.includes(cleanKw)) matchedTags.push(cleanKw);
+    } else if (metadataPool.includes(cleanKw)) {
+      score += 40;
+      coreMatched = true;
+      if (!matchedTags.includes(cleanKw)) matchedTags.push(cleanKw);
     }
   }
 
-  if (Array.isArray(aiData.genres)) {
-    for (const g of aiData.genres) {
-      const gLower = String(g).toLowerCase();
-      if (pool.includes(gLower)) {
-        m._aiMatchTag = g;
-        return true;
+  // 2. ตรวจสอบ Qualifiers (เช่น 18+, adult, ecchi, mature)
+  for (const q of qualifiers) {
+    const cleanQ = String(q).toLowerCase().trim();
+    if (!cleanQ) continue;
+    if (cleanQ === '18+' || cleanQ === 'adult' || cleanQ === 'erotica' || cleanQ === 'ecchi' || cleanQ === 'hentai' || cleanQ === 'ติดเรท') {
+      const isAdultContent = fullPool.includes('18+') || fullPool.includes('adult') || fullPool.includes('erotica') ||
+        fullPool.includes('ecchi') || fullPool.includes('hentai') || fullPool.includes('mature') ||
+        fullPool.includes('suggestive') || sourceId === 'ntrnaja' || sourceName.includes('ntr');
+      if (isAdultContent) {
+        score += 60;
+        if (!matchedTags.includes('18+')) matchedTags.push('18+');
       }
+    } else if (titlePool.includes(cleanQ)) {
+      score += 45;
+      if (!matchedTags.includes(cleanQ)) matchedTags.push(cleanQ);
+    } else if (metadataPool.includes(cleanQ)) {
+      score += 20;
+      if (!matchedTags.includes(cleanQ)) matchedTags.push(cleanQ);
     }
   }
 
-  return false;
+  // 3. ตรวจสอบ Genres ทั่วไป (เช่น fantasy, action)
+  for (const g of genres) {
+    const cleanG = String(g).toLowerCase().trim();
+    if (!cleanG || cleanG.length < 3) continue;
+    if (fullPool.includes(cleanG)) {
+      score += 4; // คะแนนน้อย เพื่อไม่ให้แนวทั่วไปดันเรื่องที่ไม่ตรงขึ้นมา
+      if (matchedTags.length < 3 && !matchedTags.includes(cleanG)) matchedTags.push(cleanG);
+    }
+  }
+
+  // เกณฑ์การคัดเลือก (Relevance Gate):
+  // ถ้ามีการระบุ Core Keyword (เช่น elf) เรื่องนั้นจะต้องมี Core Keyword หรือมีคะแนนความตรง >= 40 เท่านั้น
+  if (coreKws.length > 0 && !coreMatched && score < 50) {
+    return false;
+  }
+
+  if (score <= 5) return false;
+
+  m._aiScore = score;
+  if (matchedTags.length > 0) {
+    m._aiMatchTag = matchedTags.slice(0, 3).map(t => '#' + t).join(' ');
+  }
+  return true;
 }
 
 // ส่งคำค้นหาพล็อตเรื่องไปให้ AI วิเคราะห์ผ่านระบบหลังบ้าน
@@ -2008,9 +2069,24 @@ async function performAiSemanticSearch(query) {
       currentAiSearchData = data;
       if (summaryEl) summaryEl.textContent = `✨ วิเคราะห์พล็อต: ${data.summary || query}`;
       if (tagsEl) {
-        tagsEl.innerHTML = data.keywords.map(kw => `<span class="ai-keyword-chip">#${escapeHtmlText(kw)}</span>`).join('');
+        tagsEl.innerHTML = (data.keywords || []).map(kw => `<span class="ai-keyword-chip">#${escapeHtmlText(kw)}</span>`).join('');
       }
       applyFilters();
+
+      // ดึงมังงะเรื่องใหม่ๆ จาก MangaDex ให้ตรงกับพล็อตและแนวเรื่อง (เช่น elf 18+)
+      try {
+        const searchTerms = [query];
+        if (Array.isArray(data.coreKeywords) && data.coreKeywords.length > 0) {
+          searchTerms.push(data.coreKeywords[0]);
+        }
+        for (const st of searchTerms) {
+          const mdResults = await searchMangaDex(st, 25);
+          if (Array.isArray(mdResults) && mdResults.length > 0) {
+            allMangaList = mergeAndDeduplicate([...mdResults, ...allMangaList]);
+          }
+        }
+        applyFilters();
+      } catch (e) {}
     }
   } catch (err) {
     console.warn('[AISearch] Error:', err);
@@ -3744,27 +3820,28 @@ function parseDongMangaHtml(html, sourceInfo) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const items = [];
   const seen = new Set();
-  const links = doc.querySelectorAll('a[href*="mod=forumdisplay"][href*="fid="], a[href*="forum.php"][href*="fid="]');
+  const links = doc.querySelectorAll('a[href*="forum-"][href*="-1.html"], a[href*="mod=forumdisplay"][href*="fid="], a[href*="forum.php"][href*="fid="], .dz8-fslide-inner a, .dz8-fslide-title a, .dz8-rec-card a');
   links.forEach(anchor => {
     const href = (anchor.getAttribute('href') || '').trim();
-    if (!href) return;
+    if (!href || href === '#' || /home\.php|ranking|guide|member/i.test(href)) return;
     let target;
     try { target = new URL(href, sourceInfo.url); } catch (e) { return; }
     if (!matchesSourceHost(target.href, sourceInfo.url) || seen.has(target.href)) return;
-    const card = anchor.closest('.bm, .fl_row, article, li, .item, .manga-card') || anchor.parentElement;
-    const image = card && card.querySelector('img');
-    const heading = card && card.querySelector('h1, h2, h3, h4, .title, .xs3, .xs2');
-    const title = (heading && heading.textContent || anchor.getAttribute('title') || anchor.textContent || (image && image.alt) || '').trim().replace(/\s+/g, ' ');
-    if (title.length < 2 || title.length > 180 || /^(คลังมังงะ|หน้าแรก|สุ่มเรื่องอ่าน)$/i.test(title)) return;
+    const card = anchor.closest('.dz8-fslide-inner, .dz8-rec-card, .dz8-latest-card, .bm, .fl_row, article, li, .item, .manga-card') || anchor.parentElement;
+    const image = (card && card.querySelector('img')) || (anchor.querySelector('img'));
+    const heading = (card && card.querySelector('h1, h2, h3, h4, .dz8-fslide-title, .title, .xs3, .xs2')) || anchor;
+    let title = (heading && heading.textContent || anchor.getAttribute('title') || anchor.textContent || (image && image.alt) || '').trim().replace(/\s+/g, ' ');
+    title = title.replace(/^ปก\s+/i, '').replace(/[\r\n\t]+/g, ' ').trim();
+    if (title.length < 2 || title.length > 180 || /^(คลังมังงะ|หน้าแรก|สุ่มเรื่องอ่าน|ดูรายละเอียด|อ่านเลย|จัดอันดับ)$/i.test(title)) return;
     const text = (card && card.textContent || anchor.textContent || '').replace(/\s+/g, ' ');
-    const chapter = text.match(/(?:ตอนที่|ตอน|chapter|ch\.?|episode)\s*\d+(?:\.\d+)?/i);
+    const chapter = text.match(/(?:ตอนที่|ตอน|chapter|ch\.?|episode)\s*\d+(?:\.\d+)?/i) || text.match(/(\d+)\s*ตอน/i);
     const type = text.match(/\b(Manhwa|Manhua|Manga|Webtoon)\b/i);
     seen.add(target.href);
     items.push({
       title,
       mangaUrl: target.href,
       cover: extractCoverUrl(image, sourceInfo.url),
-      latestEp: chapter ? chapter[0] : 'ตอนล่าสุด',
+      latestEp: chapter ? (chapter[0].includes('ตอนที่') ? chapter[0] : `ตอนที่ ${chapter[1]}`) : 'ตอนล่าสุด',
       type: type ? type[1] : 'Manga',
       sourceId: sourceInfo.id,
       sourceName: sourceInfo.name,
@@ -4565,6 +4642,9 @@ function applyFilters() {
   if (currentTagFilter === 'history') {
     // ประวัติการอ่าน: เรียงตามเวลาอ่านล่าสุดจากบนลงล่างเสมอ 100% ห้ามสลับตามภาษา
     filteredList.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  } else if (currentSearchMode === 'ai' && currentAiSearchData) {
+    // ในโหมดค้นหาด้วย AI: จัดเรียงตามคะแนนความตรงกับพล็อตเรื่อง (Relevance Score) มากไปน้อย
+    filteredList.sort((a, b) => (b._aiScore || 0) - (a._aiScore || 0));
   } else if (currentSearchQuery) {
     // กรณีพิมพ์ค้นหา: ให้การ์ตูนไทยขึ้นนำก่อนเสมอ
     if (allowedLangs.has('th')) {
@@ -7219,18 +7299,18 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
         });
       }
     });
-  } else if (sourceType === 'dongmanga') {
-    const links = doc.querySelectorAll('a[href*="mod=viewthread"][href*="tid="], a[href*="forum.php"][href*="tid="]');
+  } else if (sourceType === 'dongmanga' || /dongmanga\.com/i.test(baseUrl)) {
+    const links = doc.querySelectorAll('a[href*="thread-"][href*="-1-1.html"], a[href*="mod=viewthread"][href*="tid="], a[href*="forum.php"][href*="tid="]');
     links.forEach(a => {
       const rawHref = (a.getAttribute('href') || '').trim();
-      if (!rawHref || /mod=forumdisplay|mod=redirect/i.test(rawHref)) return;
+      if (!rawHref || /mod=forumdisplay|mod=redirect|home\.php/i.test(rawHref)) return;
       let url;
       try { url = new URL(rawHref, baseUrl).href; } catch (e) { return; }
       const text = (a.textContent || a.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
-      if (text.length < 2 || /^(?:ตอบกลับ|ดู|อ่านเพิ่มเติม|next|previous|ถัดไป|ก่อนหน้า)$/i.test(text)) return;
+      if (text.length < 2 || /^(?:ตอบกลับ|ดู|อ่านเพิ่มเติม|next|previous|ถัดไป|ก่อนหน้า|ดูทั้งหมด)$/i.test(text)) return;
       const numMatch = text.match(/(?:ตอนที่|ตอน|chapter|ch\.?|ep\.?)[\s#]*(\d+(?:\.\d+)?)/i) ||
-        url.match(/chapter[-_ ]?(\d+(?:\.\d+)?)/i);
-      const title = numMatch ? `ตอนที่ ${numMatch[1]}` : text.slice(0, 120);
+        url.match(/thread-(\d+)/i) || url.match(/chapter[-_ ]?(\d+(?:\.\d+)?)/i);
+      const title = numMatch ? (text.includes('ตอนที่') ? text : `ตอนที่ ${numMatch[1]}`) : text.slice(0, 120);
       if (seenUrls.has(url)) return;
       seenUrls.add(url);
       chapters.push({
@@ -8649,24 +8729,27 @@ function parseReaderData(html, currentUrl = '') {
   if (/dongmanga\.com/i.test(currentUrl)) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
+    const images = [];
+
     const imageNodes = doc.querySelectorAll([
+      '#dz8pages img', '.dz8-pages img', '.injected-dz8-pages img',
       '#postlist .t_f img', '#postlist .pcb img', '.t_fsz img', '.t_f img',
       '.message-content img', '.reader-area img', '.chapter-content img',
       '.wp-content img', '.entry-content img'
     ].join(','));
-    const images = [];
     imageNodes.forEach(img => {
-      let src = img.getAttribute('data-original') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('src') || '';
+      let src = img.getAttribute('data-lz') || img.getAttribute('data-original') || img.getAttribute('data-src') || img.getAttribute('file') || img.getAttribute('src') || '';
       src = src.replace(/&amp;/g, '&').trim();
-      if (!src || /avatar|smilies|emoji|logo|icon/i.test(src)) return;
+      if (!src || /avatar|smilies|emoji|logo|icon|theme/i.test(src)) return;
       try {
         const imageUrl = new URL(src, currentUrl);
         if (!['http:', 'https:'].includes(imageUrl.protocol) || images.includes(imageUrl.href)) return;
-        images.push(getProxyUrl(imageUrl.href, 'https://dongmanga.com/'));
+        images.push(getProxyUrl(imageUrl.href, currentUrl));
       } catch (e) {}
     });
-    const prevAnchor = doc.querySelector('a[rel="prev"], a.prev, a#prev, a[title*="ก่อน"]');
-    const nextAnchor = doc.querySelector('a[rel="next"], a.next, a#next, a[title*="ถัดไป"]');
+
+    const prevAnchor = doc.querySelector('a[rel="prev"], a.prev, a#prev, a[title*="ก่อน"], .dz8-navcard-prev, a[href*="thread-"][class*="prev"]');
+    const nextAnchor = doc.querySelector('a[rel="next"], a.next, a#next, a[title*="ถัดไป"], .dz8-navcard-next, a[href*="thread-"][class*="next"]');
     const pageUrl = anchor => anchor ? cleanChapterNavUrl(anchor.getAttribute('href'), currentUrl) : '';
     if (images.length) {
       return {
