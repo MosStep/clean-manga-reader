@@ -16,6 +16,15 @@ function sanitizeMangaItem(m) {
   if (!m) return m;
   const sId = (m.sourceId || m.sourceType || '').toLowerCase();
   const sName = (m.sourceName || '').toLowerCase();
+  const isAdultSource = sId === 'ntrnaja' || sName.includes('ntrnaja') || sName.includes('ntr');
+  const hasAdultTags = Array.isArray(m.tags) && m.tags.some(t => /18\+|doujin|adult|ecchi|hentai|erotica|sex/i.test(String(t)));
+  const isAdultType = /18\+|doujin|adult|ecchi|hentai/i.test(m.type || '');
+
+  if (isAdultSource || hasAdultTags || isAdultType) {
+    m.isAdult = true;
+    m._adultCategory = true;
+  }
+
   if (sId === 'ntrnaja' || sName.includes('ntrnaja')) {
     if (m.type === '18+ Manhwa' || /18\+|doujin/i.test(m.type || '')) {
       m.type = 'Manhwa';
@@ -1812,7 +1821,8 @@ async function searchMangaDex(query, limit = 20) {
         if (c) return JSON.parse(c);
       } catch (e) {}
 
-      const isAdultSearch = /18\+|adult|porn|hentai|erotica|nsfw/i.test(searchTerm) || (currentSearchMode === 'ai' && /18\+|adult|erotica/i.test(currentSearchQuery));
+      const isAdultSearch = /sex|เซ็กซ์|18\+|adult|porn|hentai|erotica|ecchi|nsfw/i.test(searchTerm) || 
+                            (currentSearchMode === 'ai' && (currentAiSearchData?.isAdult || /sex|เซ็กซ์|18\+|adult|erotica/i.test(currentSearchQuery)));
       const ratingParam = isAdultSearch 
         ? '&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica&contentRating[]=pornographic'
         : '&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica';
@@ -1892,9 +1902,15 @@ async function searchMangaDex(query, limit = 20) {
       if (item.attributes?.originalLanguage === 'ja' && !item.attributes?.title?.en) detectedLang = 'ja';
       if (item.attributes?.originalLanguage === 'ko' && !item.attributes?.title?.en) detectedLang = 'ko';
 
+      const cr = item.attributes?.contentRating;
+      const isAdultItem = cr === 'pornographic' || cr === 'erotica' || tags.some(t => /18\+|adult|erotica|hentai|ecchi/i.test(t));
+      const synopsis = item.attributes?.description?.th || item.attributes?.description?.en || (item.attributes?.description ? Object.values(item.attributes.description)[0] : '') || '';
+
       return {
         title,
         altTitles,
+        synopsis,
+        isAdult: isAdultItem,
         mangaUrl: `https://mangadex.org/title/${item.id}`,
         mangaId: item.id,
         cover: coverUrl,
@@ -1965,6 +1981,8 @@ function isMangaMatchAiSemantic(m, aiData) {
   const type = (m.type || '').toLowerCase();
   const sourceName = (m.sourceName || '').toLowerCase();
   const sourceId = (m.sourceId || '').toLowerCase();
+  const isAdultItem = !!m.isAdult || sourceId === 'ntrnaja' || sourceName.includes('ntr') || 
+                      type.includes('18+') || tags.some(t => /18\+|adult|ecchi|hentai|erotica/i.test(t));
   
   let urlSlug = '';
   try {
@@ -1981,38 +1999,56 @@ function isMangaMatchAiSemantic(m, aiData) {
     : (Array.isArray(aiData.keywords) ? aiData.keywords.slice(0, 3) : []);
   const qualifiers = Array.isArray(aiData.qualifiers) ? aiData.qualifiers : [];
   const genres = Array.isArray(aiData.genres) ? aiData.genres : [];
+  const isAdultQuery = !!aiData.isAdult || 
+    coreKws.some(k => /sex|เซ็กซ์|18\+|adult|hentai|erotica|ecchi/i.test(String(k))) ||
+    qualifiers.some(q => /sex|เซ็กซ์|18\+|adult|hentai|erotica|ecchi/i.test(String(q)));
 
   let score = 0;
   let matchedTags = [];
+  let subjectMatched = false;
+  let hasSpecificSubject = false;
 
-  // 1. ตรวจสอบ Core Keywords (คำสำคัญหลัก เช่น elf, เอลฟ์)
-  let coreMatched = false;
+  // 1. ตรวจสอบ Subject Core Keywords (คำสำคัญหลัก เช่น elf, เอลฟ์, มังกร)
   for (const kw of coreKws) {
     const cleanKw = String(kw).toLowerCase().trim();
     if (!cleanKw || cleanKw.length < 2) continue;
+    const isAdultWord = /sex|เซ็กซ์|18\+|adult|hentai|erotica|ecchi|ร่วมเพศ|โป๊|เรท/i.test(cleanKw);
+    if (!isAdultWord) {
+      hasSpecificSubject = true;
+    }
     if (titlePool.includes(cleanKw)) {
       score += 100;
-      coreMatched = true;
+      if (!isAdultWord) subjectMatched = true;
       if (!matchedTags.includes(cleanKw)) matchedTags.push(cleanKw);
     } else if (metadataPool.includes(cleanKw)) {
       score += 40;
-      coreMatched = true;
+      if (!isAdultWord) subjectMatched = true;
       if (!matchedTags.includes(cleanKw)) matchedTags.push(cleanKw);
     }
   }
 
-  // 2. ตรวจสอบ Qualifiers (เช่น 18+, adult, ecchi, mature)
+  // หากมีการระบุ Subject เฉพาะเจาะจง (เช่น elf) เรื่องนั้น "ต้อง" แมตช์ Subject ด้วย!
+  if (hasSpecificSubject && !subjectMatched) {
+    return false;
+  }
+
+  // หากเป็นการค้นหา 18+/sex แบบเจาะจง (ไม่มี Subject อื่น) เรื่องนั้น "ต้อง" เป็น 18+ เท่านั้น
+  if (isAdultQuery && !hasSpecificSubject && !isAdultItem) {
+    return false;
+  }
+
+  // 2. ให้คะแนนโบนัสเรท 18+ / Adult
+  if (isAdultQuery && isAdultItem) {
+    score += 120;
+    if (!matchedTags.includes('18+')) matchedTags.push('18+');
+  }
+
+  // 3. ตรวจสอบ Qualifiers อื่นๆ
   for (const q of qualifiers) {
     const cleanQ = String(q).toLowerCase().trim();
     if (!cleanQ) continue;
-    if (cleanQ === '18+' || cleanQ === 'adult' || cleanQ === 'erotica' || cleanQ === 'ecchi' || cleanQ === 'hentai' || cleanQ === 'ติดเรท') {
-      const isAdultContent = fullPool.includes('18+') || fullPool.includes('adult') || fullPool.includes('erotica') ||
-        fullPool.includes('ecchi') || fullPool.includes('hentai') || fullPool.includes('mature') ||
-        fullPool.includes('suggestive') || sourceId === 'ntrnaja' || sourceName.includes('ntr');
-      if (isAdultContent) {
-        score += 60;
-        if (!matchedTags.includes('18+')) matchedTags.push('18+');
-      }
+    if (/18\+|adult|erotica|ecchi|hentai|sex|ติดเรท/i.test(cleanQ)) {
+      // handled above
     } else if (titlePool.includes(cleanQ)) {
       score += 45;
       if (!matchedTags.includes(cleanQ)) matchedTags.push(cleanQ);
@@ -2022,20 +2058,14 @@ function isMangaMatchAiSemantic(m, aiData) {
     }
   }
 
-  // 3. ตรวจสอบ Genres ทั่วไป (เช่น fantasy, action)
+  // 4. ตรวจสอบ Genres ทั่วไป
   for (const g of genres) {
     const cleanG = String(g).toLowerCase().trim();
     if (!cleanG || cleanG.length < 3) continue;
     if (fullPool.includes(cleanG)) {
-      score += 4; // คะแนนน้อย เพื่อไม่ให้แนวทั่วไปดันเรื่องที่ไม่ตรงขึ้นมา
+      score += 4;
       if (matchedTags.length < 3 && !matchedTags.includes(cleanG)) matchedTags.push(cleanG);
     }
-  }
-
-  // เกณฑ์การคัดเลือก (Relevance Gate):
-  // ถ้ามีการระบุ Core Keyword (เช่น elf) เรื่องนั้นจะต้องมี Core Keyword หรือมีคะแนนความตรง >= 40 เท่านั้น
-  if (coreKws.length > 0 && !coreMatched && score < 50) {
-    return false;
   }
 
   if (score <= 5) return false;
@@ -4938,9 +4968,96 @@ function openMangaFromChat(mangaTitle, mangaUrl) {
 }
 
 // ดึงข้อความแชท
-async function fetchChatMessages() {
+function renderChatMessages(messages) {
   const container = document.getElementById('chatMessagesList');
   const countEl = document.getElementById('chatMessageCount');
+  if (!container) return;
+
+  if (countEl) countEl.textContent = `${messages.length} ข้อความล่าสุด`;
+
+  if (messages.length === 0) {
+    container.innerHTML = '<div class="chat-empty-text">ยังไม่มีข้อความ เริ่มพิมพ์พูดคุยหรือป้ายยาเป็นคนแรกได้เลย! ✨</div>';
+    return;
+  }
+
+  container.innerHTML = '';
+  messages.forEach(msg => {
+    const item = document.createElement('div');
+    const isAi = (msg.nickname || '').includes('น้องมังงะ') || (msg.nickname || '').includes('AI');
+    const isBot = isAi || (msg.nickname || '').includes('Bot') || (msg.nickname || '').includes('บอท');
+    item.className = isAi ? 'chat-item chat-item-ai' : (isBot ? 'chat-item chat-item-bot' : 'chat-item');
+
+    const botBadgeHtml = isAi ? '<span class="chat-bot-badge chat-ai-badge">AI ✨</span>' : (isBot ? '<span class="chat-bot-badge">BOT</span>' : '');
+    const nameClass = isAi ? 'chat-user-name ai-name' : (isBot ? 'chat-user-name bot-name' : 'chat-user-name');
+
+    let storyTagHtml = '';
+    if (msg.mangaTitle) {
+      storyTagHtml = `
+        <button type="button" class="chat-story-tag" data-title="${encodeURIComponent(msg.mangaTitle)}" data-url="${encodeURIComponent(msg.mangaUrl || '')}" title="แตะเพื่อเปิดอ่านเรื่องนี้">
+          <span>📖</span> ${escapeHtml(msg.mangaTitle)} ↗
+        </button>
+      `;
+    }
+
+    // ลบคำนำหน้าชื่อบอทออกหากมี เช่น "น้องบอท :", "น้องมังงะ AI ✨:" เพราะในกรอบแชทมีชื่อบอทอยู่แล้ว
+    let bodyText = msg.text || '';
+    if (isBot) {
+      bodyText = bodyText.replace(/^(?:น้อง(?:บอท|มังงะ(?:\s*AI)?(?:\s*✨)?)|CleanManga\s*Bot|บอท|AI|Bot)\s*[:：\-]\s*/i, '').trim();
+    }
+
+    item.innerHTML = `
+      <div class="chat-item-header">
+        <span class="${nameClass}">${escapeHtml(msg.nickname || 'สหายมังงะ')}</span>
+        ${botBadgeHtml}
+        <span class="chat-time">${formatTimeAgo(msg.time)}</span>
+        ${storyTagHtml}
+      </div>
+      <div class="chat-item-body">${escapeHtml(bodyText)}</div>
+    `;
+
+    const tagBtn = item.querySelector('.chat-story-tag');
+    if (tagBtn) {
+      tagBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const targetTitle = decodeURIComponent(tagBtn.getAttribute('data-title') || '');
+        const targetUrl = decodeURIComponent(tagBtn.getAttribute('data-url') || '');
+        openMangaFromChat(targetTitle, targetUrl);
+      });
+    }
+
+    container.appendChild(item);
+  });
+}
+
+function showAiTypingIndicator() {
+  const container = document.getElementById('chatMessagesList');
+  if (!container) return;
+  removeAiTypingIndicator();
+  const typingEl = document.createElement('div');
+  typingEl.id = 'chatAiTyping';
+  typingEl.className = 'chat-item chat-item-ai';
+  typingEl.innerHTML = `
+    <div class="chat-item-header">
+      <span class="chat-user-name ai-name">น้องมังงะ AI ✨</span>
+      <span class="chat-bot-badge chat-ai-badge">AI ✨</span>
+      <span class="chat-time">กำลังคิด...</span>
+    </div>
+    <div class="chat-item-body chat-typing-pulse">
+      <span>✍️ น้องมังงะกำลังพิมพ์ตอบ...</span>
+    </div>
+  `;
+  container.appendChild(typingEl);
+  container.scrollTop = container.scrollHeight;
+}
+
+function removeAiTypingIndicator() {
+  const el = document.getElementById('chatAiTyping');
+  if (el) el.remove();
+}
+
+async function fetchChatMessages() {
+  const container = document.getElementById('chatMessagesList');
   if (!container) return;
 
   try {
@@ -4949,56 +5066,7 @@ async function fetchChatMessages() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const messages = data.messages || [];
-
-    if (countEl) countEl.textContent = `${messages.length} ข้อความล่าสุด`;
-
-    if (messages.length === 0) {
-      container.innerHTML = '<div class="chat-empty-text">ยังไม่มีข้อความ เริ่มพิมพ์พูดคุยหรือป้ายยาเป็นคนแรกได้เลย! ✨</div>';
-      return;
-    }
-
-    container.innerHTML = '';
-    messages.forEach(msg => {
-      const item = document.createElement('div');
-      const isAi = (msg.nickname || '').includes('น้องมังงะ') || (msg.nickname || '').includes('AI');
-      const isBot = isAi || (msg.nickname || '').includes('Bot') || (msg.nickname || '').includes('บอท');
-      item.className = isAi ? 'chat-item chat-item-ai' : (isBot ? 'chat-item chat-item-bot' : 'chat-item');
-
-      const botBadgeHtml = isAi ? '<span class="chat-bot-badge chat-ai-badge">AI ✨</span>' : (isBot ? '<span class="chat-bot-badge">BOT</span>' : '');
-      const nameClass = isAi ? 'chat-user-name ai-name' : (isBot ? 'chat-user-name bot-name' : 'chat-user-name');
-
-      let storyTagHtml = '';
-      if (msg.mangaTitle) {
-        storyTagHtml = `
-          <button type="button" class="chat-story-tag" data-title="${encodeURIComponent(msg.mangaTitle)}" data-url="${encodeURIComponent(msg.mangaUrl || '')}" title="แตะเพื่อเปิดอ่านเรื่องนี้">
-            <span>📖</span> ${escapeHtml(msg.mangaTitle)} ↗
-          </button>
-        `;
-      }
-
-      item.innerHTML = `
-        <div class="chat-item-header">
-          <span class="${nameClass}">${escapeHtml(msg.nickname || 'สหายมังงะ')}</span>
-          ${botBadgeHtml}
-          <span class="chat-time">${formatTimeAgo(msg.time)}</span>
-          ${storyTagHtml}
-        </div>
-        <div class="chat-item-body">${escapeHtml(msg.text)}</div>
-      `;
-
-      const tagBtn = item.querySelector('.chat-story-tag');
-      if (tagBtn) {
-        tagBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const targetTitle = decodeURIComponent(tagBtn.getAttribute('data-title') || '');
-          const targetUrl = decodeURIComponent(tagBtn.getAttribute('data-url') || '');
-          openMangaFromChat(targetTitle, targetUrl);
-        });
-      }
-
-      container.appendChild(item);
-    });
+    renderChatMessages(messages);
   } catch (err) {
     console.warn("Fetch chat error:", err);
     if (container && container.children.length === 0) {
@@ -5186,6 +5254,8 @@ function initChatComponent(currentMangaContext = null) {
         pushSyncData();
       } catch (err) {}
 
+      // ล้างช่องพิมพ์ทันที (<50ms) เพื่อให้รู้สึกรวดเร็ว ลื่นไหล
+      if (textInput) textInput.value = '';
       if (sendBtn) sendBtn.disabled = true;
 
       try {
@@ -5204,14 +5274,20 @@ function initChatComponent(currentMangaContext = null) {
         });
 
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        if (textInput) textInput.value = '';
-        await fetchChatMessages();
+        const resData = await res.json();
+        if (resData.messages) {
+          renderChatMessages(resData.messages);
+        } else {
+          await fetchChatMessages();
+        }
+        if (sendBtn) sendBtn.disabled = false;
 
         // คำสั่งบอทตอบสนองอัตโนมัติ
         if (isRandomCommand) {
           setTimeout(async () => {
             await triggerBotRandom();
           }, 400);
+          return;
         } else if (isHelpCommand) {
           setTimeout(async () => {
             try {
@@ -5220,7 +5296,7 @@ function initChatComponent(currentMangaContext = null) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   nickname: "CleanManga Bot ⚡",
-                  text: "🤖 คำสั่งที่ใช้ได้: กดปุ่ม [🎲 สุ่มการ์ตูน] หรือพิมพ์ /random เพื่อให้บอทสุ่มมังงะน่าอ่าน หรือพิมพ์คุย/ป้ายยาตามสบายได้เลยครับ!",
+                  text: "🤖 คำสั่งที่ใช้ได้: กดปุ่ม [🎲 สุ่มการ์ตูน] หรือพิมพ์ /random เพื่อให้บอทสุ่มมังงะน่าอ่าน หรือพิมพ์ @ai เพื่อคุยเล่นกับน้องมังงะ AI ครับ!",
                   mangaTitle: '',
                   mangaUrl: ''
                 })
@@ -5228,6 +5304,38 @@ function initChatComponent(currentMangaContext = null) {
               await fetchChatMessages();
             } catch (e) {}
           }, 400);
+          return;
+        }
+
+        // หากระบบตรวจพบว่าต้องมี น้องมังงะ AI ตอบ (needAiReply) หรือผู้ใช้พิมพ์เรียก @ai
+        const summonPattern = /(?:@ai|@บอท|\/ai|\bai\b|น้องมังงะ|บอท\s|เรียก\s*ai)/i;
+        const isSummon = summonPattern.test(text);
+        if (resData.needAiReply || isSummon) {
+          showAiTypingIndicator();
+          try {
+            const historyTitles = getReadingHistory().slice(0, 30).map(h => h.title).filter(Boolean);
+            const aiRes = await fetch('/api/chat/ai', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                readHistory: historyTitles,
+                mangaTitle: currentMangaContext ? currentMangaContext.title : '',
+                mangaUrl: currentMangaContext ? (currentMangaContext.mangaUrl || '') : ''
+              })
+            });
+            if (aiRes.ok) {
+              const aiData = await aiRes.json();
+              if (aiData.messages) {
+                renderChatMessages(aiData.messages);
+              } else {
+                await fetchChatMessages();
+              }
+            }
+          } catch (errAi) {
+            console.warn('AI chat response error:', errAi);
+          } finally {
+            removeAiTypingIndicator();
+          }
         }
       } catch (err) {
         alert('ส่งข้อความไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
@@ -7691,6 +7799,38 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
 // 13. Modal รายชื่อตอน พร้อมระบบสลับเว็บอ่าน (Source Switcher), แจ้งเตือนสลับอ่านฟรี และเชื่อมโยงเว็บ
 let modalRequestSeq = 0;
 
+function extractSynopsisFromHtml(html) {
+  if (!html || typeof html !== 'string') return '';
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const selectors = [
+      '.manga-excerpt',
+      '.description-summary .summary__content',
+      '.description-summary',
+      '.review-content',
+      '.entry-content p',
+      '.entry-content',
+      '.post-content p',
+      '.post-content',
+      '#synopsis',
+      '.manga-about',
+      '.series-synopsis',
+      '.detail-content',
+      '.t_f'
+    ];
+    for (const sel of selectors) {
+      const el = doc.querySelector(sel);
+      if (el) {
+        const text = el.textContent.replace(/\s+/g, ' ').trim();
+        if (text.length >= 25 && !text.includes('function(') && !text.includes('{')) {
+          return text.slice(0, 1500);
+        }
+      }
+    }
+  } catch (e) {}
+  return '';
+}
+
 async function openChapterModal(manga, activeSource = null) {
   const currentReqSeq = ++modalRequestSeq;
   const modal = document.getElementById('chapterModal');
@@ -7863,7 +8003,7 @@ async function openChapterModal(manga, activeSource = null) {
       summaryBox.style.display = 'block';
       btnAiSummary.classList.add('active');
 
-      const cacheKey = 'manga_ai_summary_' + encodeURIComponent(manga.title || '');
+      const cacheKey = 'manga_ai_summary_v2_' + encodeURIComponent(manga.title || '');
       let cached = null;
       try {
         const raw = localStorage.getItem(cacheKey);
@@ -7882,7 +8022,7 @@ async function openChapterModal(manga, activeSource = null) {
         }
       };
 
-      if (cached && cached.summary) {
+      if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ')) {
         renderSummaryData(cached);
         return;
       }
@@ -7893,7 +8033,11 @@ async function openChapterModal(manga, activeSource = null) {
       if (summaryMoodTags) summaryMoodTags.innerHTML = '';
 
       try {
-        const resp = await fetch(`/api/ai/summary?title=${encodeURIComponent(manga.title)}`);
+        const queryParams = new URLSearchParams({
+          title: manga.title || '',
+          synopsis: manga.synopsis || ''
+        });
+        const resp = await fetch(`/api/ai/summary?${queryParams.toString()}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         if (data.success && data.summary) {
@@ -8219,6 +8363,10 @@ async function openChapterModal(manga, activeSource = null) {
         : currentSource.mangaUrl;
       let html = await fetchViaProxy(chapterListingUrl);
       if (currentReqSeq !== modalRequestSeq) return;
+      if (!manga.synopsis) {
+        const detectedSyn = extractSynopsisFromHtml(html);
+        if (detectedSyn) manga.synopsis = detectedSyn;
+      }
       chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
 
       // สำหรับเว็บตระกูล Madara หรือเว็บที่โหลดตอนผ่าน AJAX หากยังไม่ได้รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที

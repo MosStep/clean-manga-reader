@@ -174,7 +174,7 @@ export default {
             body: JSON.stringify({
               model: 'nemotron-3-ultra',
               messages,
-              stream: true,
+              stream: false,
               max_tokens: maxTokens
             })
           });
@@ -184,19 +184,26 @@ export default {
             continue;
           }
 
-          const text = await resp.text();
-          let full = '';
-          const lines = text.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-              try {
-                const j = JSON.parse(line.slice(6));
-                const delta = j.choices?.[0]?.delta?.content || '';
-                full += delta;
-              } catch (e) {}
+          const raw = await resp.text();
+          try {
+            const j = JSON.parse(raw);
+            const content = j.choices?.[0]?.message?.content;
+            if (content && content.trim()) return content.trim();
+          } catch (e) {
+            // Fallback parsing SSE chunks if returned as stream
+            let full = '';
+            const lines = raw.split('\n');
+            for (const line of lines) {
+              if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+                try {
+                  const j = JSON.parse(line.slice(6));
+                  const delta = j.choices?.[0]?.delta?.content || '';
+                  full += delta;
+                } catch (err) {}
+              }
             }
+            if (full.trim()) return full.trim();
           }
-          if (full.trim()) return full.trim();
         } catch (e) {
           console.warn(`Tenixe chat error with key:`, e);
         }
@@ -349,6 +356,7 @@ export default {
             isAiSessionActive = true;
           }
 
+          let needAiReply = false;
           if (isStop && (isSummon || isAiSessionActive)) {
             // สั่งให้น้องมังงะหยุดคุย / ไปพักผ่อน
             aiChatActiveUntil = 0;
@@ -373,7 +381,7 @@ export default {
               } catch (e) {}
             }
           } else if (!isBotNick && (isSummon || isAiSessionActive)) {
-            // เปิดหรือต่อเวลาเซสชันคุยต่ออีก 2.5 นาที (ถ้าไม่มีใครคุยต่อจะเงียบหยุดเอง)
+            needAiReply = true;
             const newActiveUntil = Date.now() + 150000;
             aiChatActiveUntil = newActiveUntil;
             if (env && env.CHAT_KV) {
@@ -383,50 +391,13 @@ export default {
                 });
               } catch (e) {}
             }
-
-            // รวบรวมบริบทแชท 6 ข้อความล่าสุด (Prompt-Engineered Context)
-            const recentContext = updatedMessages.slice(0, 6).reverse().map(m => ({
-              role: (m.nickname && (m.nickname.includes('AI') || m.nickname.includes('น้องมังงะ'))) ? 'assistant' : 'user',
-              content: `${m.nickname}: ${m.text}${m.mangaTitle ? ` (กำลังดูเรื่อง: ${m.mangaTitle})` : ''}`
-            }));
-
-            const systemPrompt = `คุณคือ "น้องมังงะ AI ✨" เพื่อนสนิทประจำห้องแชท CleanManga
-บุคลิกภาพและการตอบ:
-- ร่าเริง สดใส เป็นกันเอง คุยเล่นทั่วไปได้ สัพเพเหระ ให้กำลังใจ เหมือนเพื่อนในแชทกลุ่ม
-- รู้จักมังงะ มังฮวา อนิเมะ ทุกแนว ป้ายยาหรือแนะนำได้ตรงใจ
-- สไตล์การตอบ: สั้นกระชับ 1-3 ประโยคเสมอ เพื่อให้แชทลื่นไหล ไม่พิมพ์ยาวเกินไป
-- ใส่อีโมจิที่เข้ากับอารมณ์อย่างน่ารักเป็นธรรมชาติ เช่น ✨, 😆, 📖, 🔥
-- ไม่พูดซ้ำซาก ไม่เป็นทางการ ไม่ทำตัวเป็นหุ่นยนต์ตอบข้อสอบ`;
-
-            const aiReply = await callTenixeChat([
-              { role: 'system', content: systemPrompt },
-              ...recentContext
-            ], 250);
-
-            if (aiReply) {
-              const botMsg = {
-                id: 'ai_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-                nickname: 'น้องมังงะ AI ✨',
-                text: aiReply,
-                mangaTitle: newMsg.mangaTitle || '',
-                mangaUrl: newMsg.mangaUrl || '',
-                time: Date.now()
-              };
-              updatedMessages = filterValidMessages([botMsg, ...updatedMessages]);
-              chatMessages = updatedMessages;
-              if (env && env.CHAT_KV) {
-                try {
-                  await env.CHAT_KV.put('chat_messages', JSON.stringify(updatedMessages), {
-                    expirationTtl: TWO_MONTHS_SECONDS
-                  });
-                } catch (e) {}
-              }
-            }
           }
 
+          // ส่งข้อความของผู้ใช้กลับทันที (<50ms) เพื่อให้ขึ้นในจอทันใจ ไม่ต้องรอ AI
           return new Response(JSON.stringify({ 
             success: true, 
             messages: updatedMessages,
+            needAiReply,
             storage: isKvActive ? "kv" : "ram"
           }), {
             status: 200,
@@ -441,6 +412,101 @@ export default {
             headers: { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*" }
           });
         }
+      }
+    }
+
+    // 1.1 ตอบแชทแบบมีชีวิตชีวาด้วย น้องมังงะ AI ✨ (/api/chat/ai)
+    if (url.pathname === '/api/chat/ai' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const mangaTitle = (body.mangaTitle || '').trim().slice(0, 80);
+        const mangaUrl = (body.mangaUrl || '').trim().slice(0, 300);
+        const readHistory = Array.isArray(body.readHistory) ? body.readHistory : [];
+
+        let currentList = chatMessages;
+        if (env && env.CHAT_KV) {
+          try {
+            const kvData = await env.CHAT_KV.get('chat_messages', { type: 'json' });
+            if (Array.isArray(kvData) && kvData.length > 0) {
+              currentList = filterValidMessages(kvData);
+              chatMessages = currentList;
+            }
+          } catch (e) {}
+        }
+
+        // บริบทแชท 6 ข้อความล่าสุด
+        const recentContext = currentList.slice(0, 6).reverse().map(m => {
+          const isBot = (m.nickname && (m.nickname.includes('AI') || m.nickname.includes('น้องมังงะ') || m.nickname.includes('Bot')));
+          return {
+            role: isBot ? 'assistant' : 'user',
+            content: isBot ? m.text : `${m.nickname}: ${m.text}${m.mangaTitle ? ` (กำลังดูเรื่อง: ${m.mangaTitle})` : ''}`
+          };
+        });
+
+        const historyPrompt = readHistory.length > 0 
+          ? `\nประวัติการอ่านของผู้ใช้นี้ (เรื่องที่อ่านแล้ว ห้ามแนะนำซ้ำเด็ดขาด!):\n${readHistory.slice(0, 30).map(t => `- ${t}`).join('\n')}\nกฎสำคัญสำหรับการแนะนำเรื่อง:\n- หากผู้ใช้ถามหาเรื่องอ่าน หรือขอให้แนะนำการ์ตูน/มังงะ ห้ามแนะนำเรื่องที่มีชื่ออยู่ในประวัติการอ่านด้านบนเด็ดขาด! ให้แนะนำเรื่องใหม่ที่ยังไม่เคยอ่าน พร้อมเหตุผลสั้นๆ\n- หากผู้ใช้ถามเรื่องที่ตนเคยอ่าน สามารถตอบอ้างอิงจากประวัติการอ่านได้`
+          : '';
+
+        const systemPrompt = `คุณคือ "น้องมังงะ AI ✨" เพื่อนสนิทประจำห้องแชท CleanManga
+บุคลิกภาพและการตอบ:
+- ร่าเริง สดใส เป็นกันเอง คุยเล่นทั่วไปได้ สัพเพเหระ ให้กำลังใจ เหมือนเพื่อนในแชทกลุ่ม
+- รู้จักมังงะ มังฮวา อนิเมะ ทุกแนว ป้ายยาหรือแนะนำได้ตรงใจ
+- สไตล์การตอบ: สั้นกระชับ 1-3 ประโยคเสมอ เพื่อให้แชทลื่นไหล ไม่พิมพ์ยาวเกินไป
+- ใส่อีโมจิที่เข้ากับอารมณ์อย่างน่ารักเป็นธรรมชาติ เช่น ✨, 😆, 📖, 🔥
+- ไม่พูดซ้ำซาก ไม่เป็นทางการ ไม่ทำตัวเป็นหุ่นยนต์ตอบข้อสอบ
+- กฎเหล็กสำคัญ: ห้ามใส่ชื่อตนเองหรือคำนำหน้าใดๆ เช่น "น้องมังงะ AI ✨:", "น้องบอท :", "AI:" ในคำตอบเด็ดขาด ให้เริ่มตอบเนื้อความทันที เพราะหน้าต่างแชทมีชื่อแสดงอยู่แล้ว!${historyPrompt}`;
+
+        const aiReply = await callTenixeChat([
+          { role: 'system', content: systemPrompt },
+          ...recentContext
+        ], 280);
+
+        if (!aiReply) {
+          return new Response(JSON.stringify({ success: false, error: "AI ไม่สามารถตอบได้ในขณะนี้" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*" }
+          });
+        }
+
+        // ตัด prefix ใดๆ ที่ AI อาจหลุดส่งมาออกให้หมดจด
+        const cleanReply = aiReply.replace(/^(?:น้อง(?:บอท|มังงะ(?:\s*AI)?(?:\s*✨)?)|CleanManga\s*Bot|บอท|AI|Bot)\s*[:：\-]\s*/i, '').trim();
+
+        const botMsg = {
+          id: 'ai_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          nickname: 'น้องมังงะ AI ✨',
+          text: cleanReply,
+          mangaTitle: mangaTitle || '',
+          mangaUrl: mangaUrl || '',
+          time: Date.now()
+        };
+
+        const updatedMessages = filterValidMessages([botMsg, ...currentList]);
+        chatMessages = updatedMessages;
+
+        if (env && env.CHAT_KV) {
+          try {
+            await env.CHAT_KV.put('chat_messages', JSON.stringify(updatedMessages), {
+              expirationTtl: TWO_MONTHS_SECONDS
+            });
+          } catch (e) {}
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          botMessage: botMsg,
+          messages: updatedMessages
+        }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Access-Control-Allow-Origin": "*"
+          }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ success: false, error: err.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*" }
+        });
       }
     }
 
@@ -850,10 +916,11 @@ export default {
           role: 'system',
           content: `You are an expert manga semantic search engine.
 The user searches for manga using story plots, character concepts, feelings, or tropes in Thai or English.
-1. Extract "coreKeywords": The MUST-HAVE primary subject or character terms in BOTH English and Thai (e.g. if query has "elf", include ["elf", "elves", "เอลฟ์"]).
-2. Extract "qualifiers": Secondary attributes, age rating, tropes in BOTH English and Thai (e.g. if query has "18+", include ["18+", "adult", "erotica", "mature", "ecchi", "hentai", "ติดเรท", "ผู้ใหญ่"]).
-3. Extract "genres": High-level broad genres (e.g. ["fantasy", "romance"]).
-4. Provide "summary": 1-line punchy Thai summary.
+1. Extract "coreKeywords": The MUST-HAVE primary subject or character terms in BOTH English and Thai (e.g. if query has "elf", include ["elf", "elves", "เอลฟ์"]). If query has adult themes ("sex", "18+"), put adult terms here too.
+2. Extract "qualifiers": Secondary attributes, age rating, tropes in BOTH English and Thai (e.g. if query has "18+" or "sex", include ["18+", "adult", "erotica", "mature", "ecchi", "hentai", "ติดเรท", "ผู้ใหญ่", "sex"]).
+3. Extract "genres": High-level broad genres (e.g. ["fantasy", "romance", "erotica"]).
+4. Set "isAdult": boolean true if query relates to 18+, sex, erotica, hentai, ecchi, adult themes; false otherwise.
+5. Provide "summary": 1-line punchy Thai summary.
 
 Output ONLY valid JSON in format:
 {
@@ -861,6 +928,7 @@ Output ONLY valid JSON in format:
   "qualifiers": ["qualifier1", "qualifier2"],
   "genres": ["genre1"],
   "keywords": ["all", "combined", "keywords"],
+  "isAdult": false,
   "summary": "คำอธิบายแนวเรื่องสั้นๆ 1 บรรทัด"
 }`
         },
@@ -977,7 +1045,7 @@ Output ONLY valid JSON in format:
         } catch (e) {}
       }
       title = String(title).trim().slice(0, 150);
-      synopsis = String(synopsis).trim().slice(0, 1000);
+      synopsis = String(synopsis).trim().slice(0, 1500);
 
       if (!title) {
         return new Response(JSON.stringify({ success: false, error: "กรุณาระบุชื่อเรื่องมังงะ" }), {
@@ -986,13 +1054,13 @@ Output ONLY valid JSON in format:
         });
       }
 
-      const cacheKey = 'ai_summary_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
+      const cacheKey = 'ai_summary_v2_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
 
-      // ตรวจสอบ KV Cache
+      // ตรวจสอบ KV Cache (ข้ามถ้าเป็น template ซ้ำซากเดิม)
       if (env && env.CHAT_KV) {
         try {
           const cached = await env.CHAT_KV.get(cacheKey, { type: 'json' });
-          if (cached && cached.summary) {
+          if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ')) {
             return new Response(JSON.stringify({ success: true, ...cached, fromCache: true }), {
               headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
             });
@@ -1000,16 +1068,42 @@ Output ONLY valid JSON in format:
         } catch (e) {}
       }
 
-      const summaryPrompt = `คุณคือผู้เชี่ยวชาญการ์ตูนและมังงะ หน้าที่ของคุณคือสร้างบทสรุปเรื่องย่อสั้นๆ ไม่สปอยล์จุดสำคัญ โดยสรุปเนื้อเรื่องหลัก จุดเด่น และความน่าติดตาม
-ความยาว 3 บรรทัดพอดี (แต่ละบรรทัดขึ้นต้นด้วย bullet •) พร้อมแท็กอารมณ์เรื่อง (Mood Tags) 3 แท็ก
+      // หากไม่มีเรื่องย่อส่งมา ให้ลองค้นหาจาก MangaDex API โดยตรง
+      if (!synopsis || synopsis.length < 25) {
+        try {
+          const dexRes = await fetch(`https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=3`);
+          if (dexRes.ok) {
+            const dexJson = await dexRes.json();
+            if (Array.isArray(dexJson.data) && dexJson.data.length > 0) {
+              for (const item of dexJson.data) {
+                const desc = item.attributes?.description?.th || item.attributes?.description?.en || Object.values(item.attributes?.description || {})[0];
+                if (desc && desc.trim().length > 25) {
+                  synopsis = desc.trim().slice(0, 1500);
+                  break;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('MangaDex synopsis lookup error:', e);
+        }
+      }
+
+      const summaryPrompt = `คุณคือผู้เชี่ยวชาญการ์ตูนและมังงะตัวจริง สรุปเนื้อเรื่องย่อของมังงะเรื่องนี้ให้กระชับ ดึงดูด ได้ใจความจริง ไม่สปอยล์จุดไคลแมกซ์
+ความยาว 3 บรรทัดพอดี (แต่ละบรรทัดขึ้นต้นด้วย bullet •)
+• บรรทัด 1: แนะนำตัวเอก ภูมิหลัง และจุดเริ่มต้นของเรื่อง
+• บรรทัด 2: ปัญหา อุปสรรค พลังพิเศษ หรือความขัดแย้งหลัก
+• บรรทัด 3: จุดเปลี่ยน เป้าหมาย หรือความน่าติดตามที่ห้ามพลาด
+พร้อมแท็กอารมณ์เรื่อง (Mood Tags) 3 แท็ก และคำโปรย 1 ประโยค (oneLiner)
+ข้อห้ามเด็ดขาด: ห้ามใช้ข้อความสำเร็จรูปทั่วไป เช่น "เรื่องราวการเดินทางสุดเข้มข้นของ..." หรือประโยคลอยๆ เด็ดขาด ต้องอิงเนื้อหาจริงของเรื่องนี้เท่านั้น
 ตอบเป็น JSON เท่านั้นในรูปแบบ:
 {"summary":"• บรรทัดที่ 1...\\n• บรรทัดที่ 2...\\n• บรรทัดที่ 3...","moodTags":["#แท็ก1","#แท็ก2","#แท็ก3"],"oneLiner":"คำโปรย 1 ประโยค"}`;
 
-      const promptUserContent = `มังงะ: "${title}"${synopsis ? `\nเนื้อเรื่องย่อเบื้องต้น: ${synopsis}` : ''}`;
+      const promptUserContent = `มังงะ: "${title}"${synopsis ? `\nเนื้อเรื่องย่อจริงจากต้นทาง:\n${synopsis}` : ''}`;
       const aiText = await callTenixeChat([
         { role: 'system', content: summaryPrompt },
         { role: 'user', content: promptUserContent }
-      ], 300);
+      ], 700);
 
       let parsedResult = null;
       if (aiText) {
@@ -1017,14 +1111,53 @@ Output ONLY valid JSON in format:
           const jsonMatch = aiText.match(/\{[\s\S]*\}/);
           if (jsonMatch) parsedResult = JSON.parse(jsonMatch[0]);
         } catch (e) {}
+
+        // กรณี JSON โดนตัดท้าย ให้ดึงฟิลด์ summary ออกมาด้วย regex
+        if (!parsedResult || !parsedResult.summary) {
+          const summaryMatch = aiText.match(/"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+          if (summaryMatch) {
+            try {
+              const extractedSummary = JSON.parse(`"${summaryMatch[1]}"`);
+              const moodMatch = aiText.match(/"moodTags"\s*:\s*\[([\s\S]*?)\]/);
+              let moodTags = ["#น่าติดตาม", "#เรื่องเด็ด", "#มังงะแนะนำ"];
+              if (moodMatch) {
+                try { moodTags = JSON.parse(`[${moodMatch[1]}]`); } catch (e) {}
+              }
+              const oneLinerMatch = aiText.match(/"oneLiner"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+              let oneLiner = oneLinerMatch ? JSON.parse(`"${oneLinerMatch[1]}"`) : `เรื่องราวของ ${title}`;
+              parsedResult = { summary: extractedSummary, moodTags, oneLiner };
+            } catch (e) {}
+          }
+        }
       }
 
       if (!parsedResult || !parsedResult.summary) {
-        parsedResult = {
-          summary: `• เรื่องราวการเดินทางสุดเข้มข้นของ ${title}\n• เผชิญหน้ากับความท้าทายและพัฒนาการของตัวละครที่น่าติดตาม\n• เรื่องราวชวนลุ้นระทึกและสนุกจนวางไม่ลง`,
-          moodTags: ["#น่าติดตาม", "#สนุกเข้มข้น", "#มังงะแนะนำ"],
-          oneLiner: `เรื่องราวสุดตื่นเต้นของ ${title}`
-        };
+        // หากมี bullet แต่ไม่ได้ JSON ให้ดึงเฉพาะบรรทัด bullet
+        const bulletLines = (aiText || '').split('\n')
+          .map(l => l.trim())
+          .filter(l => l.startsWith('•'))
+          .map(l => l.replace(/^•\s*/, '• '));
+        
+        if (bulletLines.length > 0) {
+          parsedResult = {
+            summary: bulletLines.slice(0, 3).join('\n'),
+            moodTags: ["#มังงะน่าอ่าน", "#เรื่องเด็ด", "#อัปเดตล่าสุด"],
+            oneLiner: `เรื่องราวของ ${title}`
+          };
+        } else if (synopsis && synopsis.length > 30) {
+          const sentences = synopsis.split(/[.\n]+/).map(s => s.trim()).filter(s => s.length > 10).slice(0, 3);
+          parsedResult = {
+            summary: sentences.map(s => `• ${s}`).join('\n'),
+            moodTags: ["#เรื่องย่อ", "#แนะนำ", "#น่าติดตาม"],
+            oneLiner: sentences[0] || `เรื่องราวของ ${title}`
+          };
+        } else {
+          parsedResult = {
+            summary: `• เรื่องย่อของ "${title}" ติดตามการผจญภัยและการต่อสู้สุดเข้มข้น\n• เผชิญกับศัตรูและปริศนาที่ท้าทายขีดจำกัดของตัวละคร\n• จุดเปลี่ยนสำคัญที่จะเปลี่ยนชะตากรรมของเรื่องราว`,
+            moodTags: ["#การ์ตูน", "#น่าติดตาม", "#เรื่องฮิต"],
+            oneLiner: `มังงะเรื่องดัง ${title}`
+          };
+        }
       }
 
       // บันทึกลง KV Cache (เก็บไว้ 30 วัน)
