@@ -1918,6 +1918,137 @@ async function searchMangaDex(query, limit = 20) {
 
 // ฟังก์ชันตรวจสอบความตรงของคำค้นหาอย่างแม่นยำ (Relevance Match Engine)
 // รองรับชื่อเรื่องหลัก, ชื่อทางเลือก (altTitles), URL slug, UUID และการค้นหาแบบแยกคำ (Tokenized Match เช่น "gundam hathaway")
+// ตัวแปรควบคุมระบบ AI Semantic Search & Placeholders
+let currentSearchMode = 'title'; // 'title' | 'ai'
+let currentAiSearchData = null;   // { keywords: [], genres: [], summary: '' }
+let aiSearchDebounceTimer = null;
+const AI_PLACEHOLDER_EXAMPLES = [
+  "✨ พิมพ์พล็อต: พระเอกเกิดใหม่สร้างเมืองแนวชิลๆ...",
+  "✨ พิมพ์พล็อต: นางเอกย้อนเวลามาแก้แค้นตระกูล...",
+  "✨ พิมพ์พล็อต: ตัวเอกโดนหักหลังแล้วกลับมาเทพ...",
+  "✨ พิมพ์พล็อต: แนวฟาร์มมิ่ง สโลว์ไลฟ์ ต่างโลก...",
+  "✨ พิมพ์พล็อต: พระเอกมีพลังเงา โคตรเท่..."
+];
+let aiPlaceholderInterval = null;
+let aiPlaceholderIdx = 0;
+
+function startAiPlaceholderRotation(inputEl) {
+  if (!inputEl) return;
+  stopAiPlaceholderRotation(inputEl);
+  inputEl.placeholder = AI_PLACEHOLDER_EXAMPLES[0];
+  aiPlaceholderInterval = setInterval(() => {
+    if (!inputEl.value) {
+      aiPlaceholderIdx = (aiPlaceholderIdx + 1) % AI_PLACEHOLDER_EXAMPLES.length;
+      inputEl.placeholder = AI_PLACEHOLDER_EXAMPLES[aiPlaceholderIdx];
+    }
+  }, 4000);
+}
+
+function stopAiPlaceholderRotation(inputEl) {
+  if (aiPlaceholderInterval) {
+    clearInterval(aiPlaceholderInterval);
+    aiPlaceholderInterval = null;
+  }
+}
+
+// ตรวจสอบว่ามังงะตรงกับแนวพล็อตที่ AI วิเคราะห์หรือไม่
+function isMangaMatchAiSemantic(m, aiData) {
+  if (!m || !aiData || !Array.isArray(aiData.keywords) || aiData.keywords.length === 0) return false;
+  const title = (m.title || '').toLowerCase();
+  const altTitles = Array.isArray(m.altTitles) ? m.altTitles.map(t => String(t).toLowerCase()) : [];
+  const tags = Array.isArray(m.tags) ? m.tags.map(t => String(t).toLowerCase()) : [];
+  const genreTag = (m.genreTag || '').toLowerCase();
+  const type = (m.type || '').toLowerCase();
+  const pool = [title, ...altTitles, ...tags, genreTag, type].join(' ');
+
+  for (const kw of aiData.keywords) {
+    const cleanKw = String(kw).toLowerCase().replace(/[()]/g, '').trim();
+    if (!cleanKw) continue;
+    const subWords = cleanKw.split(/[\s/]+/).filter(w => w.length >= 2);
+    for (const sw of subWords) {
+      if (pool.includes(sw)) {
+        m._aiMatchTag = sw;
+        return true;
+      }
+    }
+  }
+
+  if (Array.isArray(aiData.genres)) {
+    for (const g of aiData.genres) {
+      const gLower = String(g).toLowerCase();
+      if (pool.includes(gLower)) {
+        m._aiMatchTag = g;
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// ส่งคำค้นหาพล็อตเรื่องไปให้ AI วิเคราะห์ผ่านระบบหลังบ้าน
+async function performAiSemanticSearch(query) {
+  if (!query || query.length < 2) return;
+  const banner = document.getElementById('aiSearchBanner');
+  const summaryEl = document.getElementById('aiSearchSummary');
+  const tagsEl = document.getElementById('aiSearchTags');
+
+  if (banner) {
+    banner.style.display = 'flex';
+    if (summaryEl) summaryEl.innerHTML = `<span class="spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> AI กำลังวิเคราะห์พล็อต "${escapeHtmlText(query)}"... `;
+    if (tagsEl) tagsEl.innerHTML = '';
+  }
+
+  try {
+    const apiUrl = (CONFIG.AI_API_BASE || '/api/ai') + '/search?q=' + encodeURIComponent(query);
+    const res = await fetch(apiUrl);
+    if (!res.ok) throw new Error('AI search request failed');
+    const data = await res.json();
+    if (data && data.success && Array.isArray(data.keywords)) {
+      currentAiSearchData = data;
+      if (summaryEl) summaryEl.textContent = `✨ วิเคราะห์พล็อต: ${data.summary || query}`;
+      if (tagsEl) {
+        tagsEl.innerHTML = data.keywords.map(kw => `<span class="ai-keyword-chip">#${escapeHtmlText(kw)}</span>`).join('');
+      }
+      applyFilters();
+    }
+  } catch (err) {
+    console.warn('[AISearch] Error:', err);
+    if (summaryEl) summaryEl.textContent = `✨ ค้นหา: "${query}"`;
+  }
+}
+
+// ดึงภาพปกพิเศษที่เจนโดย AI เมื่อรูปต้นทางพังจริง
+const _aiCoverInFlight = new Map();
+async function fetchAiCoverByTitle(title) {
+  if (!title) return null;
+  const cleanTitle = title.trim();
+  const cached = localStorage.getItem('ai_cover_' + cleanTitle);
+  if (cached) return cached;
+  if (_aiCoverInFlight.has(cleanTitle)) return _aiCoverInFlight.get(cleanTitle);
+
+  const promise = (async () => {
+    try {
+      const apiUrl = (CONFIG.AI_API_BASE || '/api/ai') + '/cover?title=' + encodeURIComponent(cleanTitle);
+      const res = await fetch(apiUrl);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data && data.success && data.coverUrl) {
+        try {
+          localStorage.setItem('ai_cover_' + cleanTitle, data.coverUrl);
+        } catch (e) {}
+        return data.coverUrl;
+      }
+    } catch (e) {
+      console.warn('AI cover fetch error:', e);
+    }
+    return null;
+  })();
+
+  _aiCoverInFlight.set(cleanTitle, promise);
+  return promise;
+}
+
 function isMangaMatchQuery(m, query) {
   if (!query || !query.trim()) return true;
   if (!m) return false;
@@ -4418,9 +4549,13 @@ function applyFilters() {
       }
     }
 
-    // 3. Search query (ค้นหาอย่างแม่นยำด้วย isMangaMatchQuery - กรองเฉพาะเรื่องที่ตรงกับคำค้นหาจริง)
+    // 3. Search query (รองรับทั้งโหมดชื่อเรื่องปกติ และโหมด AI Semantic Search)
     if (currentSearchQuery) {
-      if (!isMangaMatchQuery(m, currentSearchQuery)) return false;
+      if (currentSearchMode === 'ai' && currentAiSearchData) {
+        if (!isMangaMatchAiSemantic(m, currentAiSearchData)) return false;
+      } else {
+        if (!isMangaMatchQuery(m, currentSearchQuery)) return false;
+      }
     }
 
     return true;
@@ -5775,8 +5910,52 @@ async function initAggregatorPage() {
     let searchDebounceTimer = null;
     let searchRequestSeq = 0;
 
+    // ผูกปุ่มสลับโหมดค้นหาด้วย AI
+    const btnToggleAiSearch = document.getElementById('btnToggleAiSearch');
+    const searchWrapper = document.getElementById('searchWrapper');
+    if (btnToggleAiSearch && !btnToggleAiSearch.dataset.bound) {
+      btnToggleAiSearch.dataset.bound = "1";
+      btnToggleAiSearch.addEventListener('click', () => {
+        currentSearchMode = currentSearchMode === 'title' ? 'ai' : 'title';
+        const isAi = currentSearchMode === 'ai';
+        if (searchWrapper) searchWrapper.classList.toggle('is-ai-mode', isAi);
+        btnToggleAiSearch.classList.toggle('active', isAi);
+        const aiLabel = btnToggleAiSearch.querySelector('.ai-label');
+        if (aiLabel) aiLabel.textContent = isAi ? 'พล็อต AI (เปิด)' : 'พล็อต AI';
+
+        if (isAi) {
+          startAiPlaceholderRotation(searchInput);
+          if (currentSearchQuery && currentSearchQuery.length >= 2) {
+            performAiSemanticSearch(currentSearchQuery);
+          }
+        } else {
+          stopAiPlaceholderRotation(searchInput);
+          searchInput.placeholder = "ค้นหาชื่อมังงะจากทุกเว็บ...";
+          currentAiSearchData = null;
+          const banner = document.getElementById('aiSearchBanner');
+          if (banner) banner.style.display = 'none';
+          applyFilters();
+        }
+      });
+    }
+
     searchInput.addEventListener('input', (e) => {
       currentSearchQuery = e.target.value.trim();
+      if (currentSearchMode === 'ai') {
+        if (clearSearchBtn) clearSearchBtn.style.display = currentSearchQuery ? 'block' : 'none';
+        if (aiSearchDebounceTimer) clearTimeout(aiSearchDebounceTimer);
+        if (currentSearchQuery.length >= 2) {
+          aiSearchDebounceTimer = setTimeout(() => {
+            performAiSemanticSearch(currentSearchQuery);
+          }, 450);
+        } else {
+          currentAiSearchData = null;
+          const banner = document.getElementById('aiSearchBanner');
+          if (banner) banner.style.display = 'none';
+          applyFilters();
+        }
+        return;
+      }
       const currentSearchSeq = ++searchRequestSeq;
       if (clearSearchBtn) clearSearchBtn.style.display = currentSearchQuery ? 'block' : 'none';
       try {
@@ -5861,6 +6040,9 @@ async function initAggregatorPage() {
       } catch (err) {}
       const globalSearchBanner = document.getElementById('globalSearchBanner');
       if (globalSearchBanner) globalSearchBanner.style.display = 'none';
+      const aiSearchBanner = document.getElementById('aiSearchBanner');
+      if (aiSearchBanner) aiSearchBanner.style.display = 'none';
+      currentAiSearchData = null;
       applyFilters();
     });
   }
@@ -6474,7 +6656,14 @@ window.handleCoverError = function(img) {
 
   const rawTitle = img.getAttribute('data-title');
   if (rawTitle) {
-    fetchMangaDexCoverByTitle(rawTitle).then(coverUrl => {
+    const cleanTitle = rawTitle.trim();
+    const cachedAiCover = localStorage.getItem('ai_cover_' + cleanTitle);
+    if (cachedAiCover) {
+      img.src = cachedAiCover;
+      return;
+    }
+
+    fetchMangaDexCoverByTitle(cleanTitle).then(coverUrl => {
       if (coverUrl && img.isConnected) {
         img.onerror = () => {
           img.onerror = null;
@@ -6482,9 +6671,21 @@ window.handleCoverError = function(img) {
         };
         img.src = coverUrl;
         if (typeof allMangaList !== 'undefined' && Array.isArray(allMangaList)) {
-          const item = allMangaList.find(x => x.title === rawTitle);
+          const item = allMangaList.find(x => x.title === cleanTitle);
           if (item) item.cover = coverUrl;
         }
+      } else if (!coverUrl && img.isConnected) {
+        // หากไม่มีปก MangaDex และภาพต้นทางพังจริง ให้ดึง AI Cover ผ่าน /api/ai/cover
+        fetchAiCoverByTitle(cleanTitle).then(aiCover => {
+          if (aiCover && img.isConnected) {
+            img.onerror = null;
+            img.src = aiCover;
+            if (typeof allMangaList !== 'undefined' && Array.isArray(allMangaList)) {
+              const item = allMangaList.find(x => x.title === cleanTitle);
+              if (item) item.cover = aiCover;
+            }
+          }
+        }).catch(() => {});
       }
     }).catch(() => {});
   }
@@ -6669,6 +6870,7 @@ function renderMangaCards() {
           <span style="font-size: 0.75rem; color: #888;">อ่าน →</span>
         </div>
         ${historyBadgeHtml}
+        ${m._aiMatchTag ? `<div class="ai-match-badge" title="ตรงกับพล็อตเรื่องที่ AI วิเคราะห์">✨ ตรงกับ: ${escapeHtmlText(m._aiMatchTag)}</div>` : ''}
       </div>
     `;
 

@@ -15,6 +15,11 @@ const CONFIG = {
     ? '/api/sync'
     : 'https://clean-manga-reader.mosstep.workers.dev/api/sync',
 
+  // Base URL สำหรับระบบ AI (Semantic Search & Cover Generation)
+  AI_API_BASE: (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1') || window.location.hostname.endsWith('workers.dev') || window.location.hostname.endsWith('pages.dev'))
+    ? '/api/ai'
+    : 'https://clean-manga-reader.mosstep.workers.dev/api/ai',
+
   // รายการเว็บต้นทางทั้งหมด (ภาษาไทย)
   // เว็บที่ readable: true สามารถอ่านภาพแนวตั้งได้สมบูรณ์แบบในเว็บนี้ 100%
   // เว็บที่ readable: false เป็นเว็บที่มีระบบเหรียญหรือเข้ารหัสของค่ายต้นทาง (มีปุ่มเปิดอ่านเว็บต้นทางให้)

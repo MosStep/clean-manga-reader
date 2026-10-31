@@ -625,6 +625,233 @@ export default {
       }
     }
 
+    // ============================================================
+    // 3. Tenixe AI Integrations: Semantic Search & AI Cover Generation
+    // ============================================================
+    const TENIXE_KEYS = [
+      (env && env.TENIXE_KEY_1) || 'txc_a9b58666d7af0a1ef12675757074c61b',
+      (env && env.TENIXE_KEY_2) || 'txc_9fec4ca9adfabf57f99a27fc0161e95a',
+      (env && env.TENIXE_KEY_3) || 'txc_bd70db10dc2355f995bc3f9ad81558b3'
+    ].filter(Boolean);
+
+    // ฟังก์ชันเรียก Tenixe Chat (สลับคีย์อัตโนมัติ + Streaming Parser ประหยัด Token)
+    const callTenixeChat = async (messages, maxTokens = 350) => {
+      for (const key of TENIXE_KEYS) {
+        try {
+          const resp = await fetch('https://api.tenixe.com/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${key}`
+            },
+            body: JSON.stringify({
+              model: 'nemotron-3-ultra',
+              messages,
+              stream: true,
+              max_tokens: maxTokens
+            })
+          });
+
+          if (!resp.ok) {
+            console.warn(`Tenixe key ${key.slice(0, 8)} returned ${resp.status}`);
+            continue;
+          }
+
+          const text = await resp.text();
+          let full = '';
+          const lines = text.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const j = JSON.parse(line.slice(6));
+                const delta = j.choices?.[0]?.delta?.content || '';
+                full += delta;
+              } catch (e) {}
+            }
+          }
+          if (full.trim()) return full.trim();
+        } catch (e) {
+          console.warn(`Tenixe chat error with key:`, e);
+        }
+      }
+      return null;
+    };
+
+    // ฟังก์ชันเรียก Tenixe Image Generation (gpt-image-1)
+    const callTenixeImage = async (prompt) => {
+      for (const key of TENIXE_KEYS) {
+        try {
+          const resp = await fetch('https://api.tenixe.com/api/v1/images/generations', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${key}`
+            },
+            body: JSON.stringify({
+              model: 'gpt-image-1',
+              prompt,
+              size: '1024x1024',
+              n: 1
+            })
+          });
+
+          if (!resp.ok) {
+            const errBody = await resp.json().catch(() => ({}));
+            console.warn(`Tenixe image key ${key.slice(0, 8)} status ${resp.status}:`, errBody);
+            if (resp.status === 402) {
+              return { success: false, reason: 'quota_exceeded' };
+            }
+            continue;
+          }
+
+          const data = await resp.json();
+          const imgUrl = data?.data?.[0]?.url || data?.data?.[0]?.b64_json;
+          if (imgUrl) return { success: true, url: imgUrl };
+        } catch (e) {
+          console.warn(`Tenixe image error:`, e);
+        }
+      }
+      return { success: false, reason: 'service_unavailable' };
+    };
+
+    // 3.1 AI Semantic Search Endpoint (/api/ai/search)
+    if (url.pathname === '/api/ai/search') {
+      let query = url.searchParams.get('q') || '';
+      if (!query && request.method === 'POST') {
+        try {
+          const body = await request.json();
+          query = body.query || body.q || '';
+        } catch (e) {}
+      }
+      query = String(query).trim().slice(0, 200);
+
+      if (!query) {
+        return new Response(JSON.stringify({ success: false, error: "กรุณาระบุคำค้นหาพล็อตเรื่อง" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      const cacheKey = 'ai_search_' + encodeURIComponent(query.toLowerCase().replace(/\s+/g, '_').slice(0, 70));
+
+      // ตรวจสอบ KV Cache
+      if (env && env.CHAT_KV) {
+        try {
+          const cached = await env.CHAT_KV.get(cacheKey, { type: 'json' });
+          if (cached && Array.isArray(cached.keywords)) {
+            return new Response(JSON.stringify({ success: true, ...cached, fromCache: true }), {
+              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=86400" }
+            });
+          }
+        } catch (e) {}
+      }
+
+      const messages = [
+        {
+          role: 'system',
+          content: 'You are an intelligent manga recommendation parser. The user searches for manga using story plots, feelings, or tropes in Thai or English. Extract 4-7 relevant search keywords (both Thai and English concepts), genres, and a 1-line Thai summary of the concept. Output ONLY valid JSON in format: {"keywords":["keyword1","keyword2","keyword3"],"genres":["action","fantasy"],"summary":"สรุปแนวสั้นๆ 1 บรรทัด"}'
+        },
+        {
+          role: 'user',
+          content: query
+        }
+      ];
+
+      const aiText = await callTenixeChat(messages, 300);
+      let parsedResult = null;
+      if (aiText) {
+        try {
+          const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) parsedResult = JSON.parse(jsonMatch[0]);
+        } catch (e) {}
+      }
+
+      if (!parsedResult) {
+        const basicKeywords = query.split(/[\s,+/]+/).filter(w => w.length >= 2);
+        parsedResult = {
+          keywords: basicKeywords,
+          genres: [],
+          summary: query
+        };
+      }
+
+      // บันทึกลง KV Cache (เก็บไว้ 7 วัน ประหยัดโควต้า 100%)
+      if (env && env.CHAT_KV) {
+        try {
+          await env.CHAT_KV.put(cacheKey, JSON.stringify(parsedResult), {
+            expirationTtl: 604800 // 7 วัน
+          });
+        } catch (e) {}
+      }
+
+      return new Response(JSON.stringify({ success: true, ...parsedResult, fromCache: false }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=86400" }
+      });
+    }
+
+    // 3.2 AI Cover Generation Endpoint (/api/ai/cover)
+    if (url.pathname === '/api/ai/cover') {
+      let title = url.searchParams.get('title') || '';
+      if (!title && request.method === 'POST') {
+        try {
+          const body = await request.json();
+          title = body.title || '';
+        } catch (e) {}
+      }
+      title = String(title).trim().slice(0, 150);
+
+      if (!title) {
+        return new Response(JSON.stringify({ success: false, error: "กรุณาระบุชื่อเรื่องมังงะ" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      const cacheKey = 'ai_cover_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
+
+      // ตรวจสอบ KV Cache
+      if (env && env.CHAT_KV) {
+        try {
+          const cachedCover = await env.CHAT_KV.get(cacheKey);
+          if (cachedCover) {
+            return new Response(JSON.stringify({ success: true, coverUrl: cachedCover, cached: true }), {
+              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
+            });
+          }
+        } catch (e) {}
+      }
+
+      // Prompt Engineering สำหรับภาพปกการ์ตูนคุณภาพสูง
+      const imagePrompt = `Masterpiece official anime manga cover art, high-end Korean webtoon key visual, highly detailed character portrait, dramatic cinematic lighting, clean vibrant background, official light novel illustration for the title: "${title}", trending on pixiv, 8k resolution, no watermark, no text distortion, clean aesthetic`;
+
+      const genResult = await callTenixeImage(imagePrompt);
+
+      if (genResult.success && genResult.url) {
+        // บันทึกลง KV Cache (เก็บไว้ 60 วัน ไม่ต้องเจนซ้ำ)
+        if (env && env.CHAT_KV) {
+          try {
+            await env.CHAT_KV.put(cacheKey, genResult.url, {
+              expirationTtl: 5184000 // 60 วัน
+            });
+          } catch (e) {}
+        }
+
+        return new Response(JSON.stringify({ success: true, coverUrl: genResult.url, cached: false }), {
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      return new Response(JSON.stringify({ 
+        success: false, 
+        reason: genResult.reason || 'failed',
+        message: genResult.reason === 'quota_exceeded' 
+          ? 'โควต้าเจนภาพชั่วคราวเต็ม (รอรอบรีเซ็ต)' 
+          : 'ไม่สามารถสร้างภาพปกได้ในขณะนี้'
+      }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
     const targetUrl = url.searchParams.get("url");
 
     if (!targetUrl) {

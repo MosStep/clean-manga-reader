@@ -152,6 +152,141 @@ body {
   line-height: 1;
 }
 
+/* AI Search Toggle & States */
+.btn-ai-search-toggle {
+  position: absolute;
+  right: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 20px;
+  padding: 5px 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #a1a8c0;
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+  z-index: 2;
+}
+
+.btn-ai-search-toggle:hover {
+  background: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: #f3e8ff;
+  transform: translateY(-1px);
+}
+
+.btn-ai-search-toggle .ai-sparkle {
+  font-size: 0.85rem;
+  transition: transform 0.3s ease;
+}
+
+.btn-ai-search-toggle:hover .ai-sparkle {
+  transform: rotate(20deg) scale(1.15);
+}
+
+.search-wrapper.is-ai-mode .btn-ai-search-toggle {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.35), rgba(59, 130, 246, 0.35));
+  border-color: #a855f7;
+  color: #fff;
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.4);
+}
+
+.search-wrapper.is-ai-mode .btn-ai-search-toggle .ai-sparkle {
+  animation: sparkleGlow 1.8s infinite alternate;
+}
+
+@keyframes sparkleGlow {
+  0% { transform: scale(1); filter: drop-shadow(0 0 2px #c084fc); }
+  100% { transform: scale(1.2) rotate(15deg); filter: drop-shadow(0 0 8px #e879f9); }
+}
+
+.search-wrapper input {
+  padding-right: 120px !important;
+}
+
+.search-wrapper.is-ai-mode input {
+  border-color: rgba(168, 85, 247, 0.7) !important;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.25), 0 0 16px rgba(168, 85, 247, 0.15) !important;
+  background-color: #151322 !important;
+}
+
+.search-wrapper.is-ai-mode .search-icon {
+  color: #c084fc !important;
+}
+
+.search-wrapper.is-ai-mode .clear-search {
+  right: 115px;
+}
+
+/* AI Semantic Search Banner */
+.ai-search-banner {
+  background: linear-gradient(135deg, rgba(22, 19, 36, 0.95), rgba(15, 23, 42, 0.95));
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  border-radius: 14px;
+  padding: 14px 18px;
+  margin: 12px 0 22px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 0 16px rgba(168, 85, 247, 0.12);
+  animation: fadeInDown 0.3s ease;
+}
+
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.ai-search-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.92rem;
+  color: #f3e8ff;
+  font-weight: 500;
+}
+
+.ai-search-icon {
+  font-size: 1.15rem;
+  animation: sparkleGlow 2s infinite alternate;
+}
+
+.ai-search-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-keyword-chip {
+  background: rgba(168, 85, 247, 0.18);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  color: #e9d5ff;
+  border-radius: 14px;
+  padding: 3px 10px;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+/* AI Match Badge on Manga Card */
+.ai-match-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #e9d5ff;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.25), rgba(99, 102, 241, 0.25));
+  border: 1px solid rgba(168, 85, 247, 0.5);
+  padding: 3px 8px;
+  border-radius: 10px;
+  margin-top: 6px;
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.2);
+}
+
 /* Hero Spotlight */
 .hero-section {
   position: relative;
