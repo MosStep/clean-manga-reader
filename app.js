@@ -6172,7 +6172,7 @@ async function initAggregatorPage() {
         if (searchWrapper) searchWrapper.classList.toggle('is-ai-mode', isAi);
         btnToggleAiSearch.classList.toggle('active', isAi);
         const aiLabel = btnToggleAiSearch.querySelector('.ai-label');
-        if (aiLabel) aiLabel.textContent = isAi ? 'พล็อต AI (เปิด)' : 'พล็อต AI';
+        if (aiLabel) aiLabel.textContent = 'พล็อต AI';
 
         if (isAi) {
           startAiPlaceholderRotation(searchInput);

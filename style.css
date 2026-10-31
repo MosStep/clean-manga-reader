@@ -19,6 +19,12 @@
   padding: 0;
 }
 
+html {
+  overflow-x: hidden;
+  max-width: 100%;
+  width: 100%;
+}
+
 body {
   background-color: var(--bg-color);
   color: var(--text-main);
@@ -27,6 +33,9 @@ body {
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
+  max-width: 100%;
+  width: 100%;
+  position: relative;
 }
 
 /* Navbar */
@@ -51,6 +60,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
+  position: relative;
 }
 
 .brand {
@@ -95,31 +105,73 @@ body {
 }
 
 @media (max-width: 650px) {
+  .nav-container {
+    padding: 0 10px;
+    gap: 8px;
+  }
+  .brand {
+    font-size: 1.12rem;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .brand-icon {
+    font-size: 1.15rem;
+  }
+  .brand-badge {
+    font-size: 0.6rem;
+    padding: 2px 6px;
+    letter-spacing: 0.2px;
+  }
   .nav-search {
-    max-width: 170px;
+    flex: 1;
+    min-width: 0;
+    max-width: 155px;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .nav-search:focus-within {
     position: absolute;
-    left: 15px;
-    right: 15px;
-    max-width: calc(100% - 30px);
+    left: 10px;
+    right: 10px;
+    max-width: calc(100% - 20px);
     z-index: 150;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
   }
-  .btn-ai-search-toggle {
-    right: 6px;
-    padding: 4px 8px;
-    font-size: 0.72rem;
-    gap: 3px;
-  }
-  .clear-search {
-    right: 86px;
-    width: 28px;
-    height: 28px;
+  .search-wrapper {
+    min-width: 0;
+    width: 100%;
   }
   .search-wrapper input {
-    padding-right: 118px !important;
+    padding-right: 98px !important;
+    padding-left: 32px !important;
+    font-size: 0.82rem;
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+  .search-icon {
+    left: 10px;
+    width: 15px;
+    height: 15px;
+  }
+  .btn-ai-search-toggle {
+    right: 5px;
+    padding: 4px 7px;
+    font-size: 0.68rem;
+    gap: 2px;
+  }
+  .clear-search {
+    right: 74px;
+    width: 22px;
+    height: 22px;
+    font-size: 1.05rem;
+  }
+  .search-wrapper.is-ai-mode .clear-search {
+    right: 74px;
+  }
+  .container {
+    padding: 16px 10px 50px 10px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 }
 
