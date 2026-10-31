@@ -107,6 +107,20 @@ body {
     z-index: 150;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
   }
+  .btn-ai-search-toggle {
+    right: 6px;
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    gap: 3px;
+  }
+  .clear-search {
+    right: 86px;
+    width: 28px;
+    height: 28px;
+  }
+  .search-wrapper input {
+    padding-right: 118px !important;
+  }
 }
 
 .search-wrapper {
@@ -143,13 +157,31 @@ body {
 
 .clear-search {
   position: absolute;
-  right: 12px;
-  background: none;
+  right: 98px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.12);
   border: none;
-  color: var(--text-sub);
-  font-size: 1.2rem;
-  cursor: pointer;
+  border-radius: 50%;
+  color: #cbd5e1;
+  font-size: 1.15rem;
   line-height: 1;
+  cursor: pointer;
+  z-index: 3;
+  transition: all 0.2s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.clear-search:hover, .clear-search:active {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  transform: translateY(-50%) scale(1.08);
 }
 
 /* AI Search Toggle & States */
@@ -205,7 +237,7 @@ body {
 }
 
 .search-wrapper input {
-  padding-right: 120px !important;
+  padding-right: 130px !important;
 }
 
 .search-wrapper.is-ai-mode input {
@@ -219,7 +251,7 @@ body {
 }
 
 .search-wrapper.is-ai-mode .clear-search {
-  right: 115px;
+  right: 98px;
 }
 
 /* AI Semantic Search Banner */

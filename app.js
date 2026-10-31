@@ -60,6 +60,29 @@ function saveCachedMangaFeed() {
   }
 }
 
+function cleanupStaleSummaryCache() {
+  try {
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith('manga_ai_summary_') || key.startsWith('ai_summary_'))) {
+        if (!key.startsWith('manga_ai_summary_v3_')) {
+          toRemove.push(key);
+        } else {
+          try {
+            const val = localStorage.getItem(key);
+            if (val && (val.includes('การเดินทางสุดเข้มข้นของ') || val.includes('• เรื่องราวการเดินทาง') || val.includes('• เรื่องย่อของ "'))) {
+              toRemove.push(key);
+            }
+          } catch (_) {}
+        }
+      }
+    }
+    toRemove.forEach(k => localStorage.removeItem(k));
+  } catch (e) {}
+}
+cleanupStaleSummaryCache();
+
 function restoreCachedMangaFeed() {
   let list = [];
   try {
@@ -3850,28 +3873,40 @@ function parseDongMangaHtml(html, sourceInfo) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const items = [];
   const seen = new Set();
-  const links = doc.querySelectorAll('a[href*="forum-"][href*="-1.html"], a[href*="mod=forumdisplay"][href*="fid="], a[href*="forum.php"][href*="fid="], .dz8-fslide-inner a, .dz8-fslide-title a, .dz8-rec-card a');
-  links.forEach(anchor => {
-    const href = (anchor.getAttribute('href') || '').trim();
+  const nodes = doc.querySelectorAll('a.dz8-card, .dz8-card, a[href*="forum-"][href*="-1.html"], a[href*="mod=forumdisplay"][href*="fid="], a[href*="forum.php"][href*="fid="], .dz8-fslide-inner a, .dz8-fslide-title a, .dz8-rec-card a');
+  nodes.forEach(node => {
+    const anchor = node.tagName === 'A' ? node : node.querySelector('a') || node;
+    const href = (anchor.getAttribute('href') || node.getAttribute('href') || '').trim();
     if (!href || href === '#' || /home\.php|ranking|guide|member/i.test(href)) return;
     let target;
     try { target = new URL(href, sourceInfo.url); } catch (e) { return; }
     if (!matchesSourceHost(target.href, sourceInfo.url) || seen.has(target.href)) return;
-    const card = anchor.closest('.dz8-fslide-inner, .dz8-rec-card, .dz8-latest-card, .bm, .fl_row, article, li, .item, .manga-card') || anchor.parentElement;
-    const image = (card && card.querySelector('img')) || (anchor.querySelector('img'));
-    const heading = (card && card.querySelector('h1, h2, h3, h4, .dz8-fslide-title, .title, .xs3, .xs2')) || anchor;
-    let title = (heading && heading.textContent || anchor.getAttribute('title') || anchor.textContent || (image && image.alt) || '').trim().replace(/\s+/g, ' ');
+    const card = node.classList?.contains('dz8-card') ? node : (anchor.closest('.dz8-card, .dz8-fslide-inner, .dz8-rec-card, .dz8-latest-card, .bm, .fl_row, article, li, .item, .manga-card') || anchor.parentElement);
+    const image = (card && card.querySelector('.dz8-card-cov img, img')) || (anchor.querySelector('img'));
+    const titleNode = card?.querySelector('.dz8-card-t') || anchor.querySelector('.dz8-card-t') || (card && card.querySelector('h1, h2, h3, h4, .dz8-fslide-title, .title, .xs3, .xs2'));
+    let title = (titleNode?.textContent || anchor.getAttribute('title') || (image && image.alt) || anchor.textContent || '').trim().replace(/\s+/g, ' ');
     title = title.replace(/^ปก\s+/i, '').replace(/[\r\n\t]+/g, ' ').trim();
+    title = title.replace(/^\d+\s*ตอน\s+/i, '').trim();
     if (title.length < 2 || title.length > 180 || /^(คลังมังงะ|หน้าแรก|สุ่มเรื่องอ่าน|ดูรายละเอียด|อ่านเลย|จัดอันดับ)$/i.test(title)) return;
+    const epNode = card?.querySelector('.dz8-card-ch') || anchor.querySelector('.dz8-card-ch');
+    let latestEp = '';
+    if (epNode && epNode.textContent.trim()) {
+      const epText = epNode.textContent.trim();
+      const numMatch = epText.match(/(\d+(?:\.\d+)?)/);
+      latestEp = numMatch ? `ตอนที่ ${numMatch[1]}` : epText;
+    } else {
+      const text = (card && card.textContent || anchor.textContent || '').replace(/\s+/g, ' ');
+      const chapter = text.match(/(?:ตอนที่|ตอน|chapter|ch\.?|episode)\s*#?\s*(\d+(?:\.\d+)?)/i) || text.match(/(\d+(?:\.\d+)?)\s*ตอน/i);
+      latestEp = chapter ? `ตอนที่ ${chapter[1]}` : 'ตอนล่าสุด';
+    }
     const text = (card && card.textContent || anchor.textContent || '').replace(/\s+/g, ' ');
-    const chapter = text.match(/(?:ตอนที่|ตอน|chapter|ch\.?|episode)\s*\d+(?:\.\d+)?/i) || text.match(/(\d+)\s*ตอน/i);
     const type = text.match(/\b(Manhwa|Manhua|Manga|Webtoon)\b/i);
     seen.add(target.href);
     items.push({
       title,
       mangaUrl: target.href,
       cover: extractCoverUrl(image, sourceInfo.url),
-      latestEp: chapter ? (chapter[0].includes('ตอนที่') ? chapter[0] : `ตอนที่ ${chapter[1]}`) : 'ตอนล่าสุด',
+      latestEp: latestEp || 'ตอนล่าสุด',
       type: type ? type[1] : 'Manga',
       sourceId: sourceInfo.id,
       sourceName: sourceInfo.name,
@@ -4072,19 +4107,34 @@ async function fetchNekopostReaderData(chapterUrl) {
   const matchingChapter = chapterEntries.find(match => match[2] === chapterNo);
   if (!matchingChapter) throw new Error('หน้า Nekopost ไม่ส่งรหัสตอนมาให้ตัวอ่าน');
   const chapterId = matchingChapter[1];
-  const encrypted = await fetchViaProxy(`${route.origin}/handler/cinfo`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ p: Number(mangaId), c: Number(chapterId) })
-  }, 15000);
+  let encrypted = '';
+  try {
+    encrypted = await fetchViaProxy(`${route.origin}/api/handler/cinfo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Referer': chapterUrl },
+      body: JSON.stringify({ p: Number(mangaId), c: Number(chapterId) })
+    }, 15000);
+  } catch (apiErr) {
+    encrypted = await fetchViaProxy(`${route.origin}/handler/cinfo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Referer': chapterUrl },
+      body: JSON.stringify({ p: Number(mangaId), c: Number(chapterId) })
+    }, 15000);
+  }
   const payload = await decryptNekopostPayload(encrypted);
   const pageItems = Array.isArray(payload?.pageItem) ? payload.pageItem : [];
   const cdn = Number(mangaId) > 17500 ? 'https://fs.osemocphoto.com/collectManga/' : 'https://www.osemocphoto.com/collectManga/';
   const nav = getNekopostChapterNavigation(html, chapterUrl, mangaId, chapterNo);
   const images = pageItems
-    .map(item => item?.pageName || item?.fileName)
-    .filter(name => typeof name === 'string' && /^[a-z0-9._-]+$/i.test(name))
-    .map(name => getProxyUrl(`${cdn}${mangaId}/${chapterId}/${name}`, 'https://www.nekopost.net/'));
+    .map(item => {
+      const pageVal = String(item?.pageName || item?.fileName || '').trim();
+      if (!pageVal) return '';
+      if (pageVal.startsWith('http://') || pageVal.startsWith('https://')) {
+        return getProxyUrl(pageVal, 'https://www.nekopost.net/');
+      }
+      return getProxyUrl(`${cdn}${mangaId}/${chapterId}/${pageVal}`, 'https://www.nekopost.net/');
+    })
+    .filter(Boolean);
   return { ...nav, images };
 }
 
@@ -6143,7 +6193,7 @@ async function initAggregatorPage() {
     searchInput.addEventListener('input', (e) => {
       currentSearchQuery = e.target.value.trim();
       if (currentSearchMode === 'ai') {
-        if (clearSearchBtn) clearSearchBtn.style.display = currentSearchQuery ? 'block' : 'none';
+        if (clearSearchBtn) clearSearchBtn.style.display = currentSearchQuery ? 'inline-flex' : 'none';
         if (aiSearchDebounceTimer) clearTimeout(aiSearchDebounceTimer);
         if (currentSearchQuery.length >= 2) {
           aiSearchDebounceTimer = setTimeout(() => {
@@ -6158,7 +6208,7 @@ async function initAggregatorPage() {
         return;
       }
       const currentSearchSeq = ++searchRequestSeq;
-      if (clearSearchBtn) clearSearchBtn.style.display = currentSearchQuery ? 'block' : 'none';
+      if (clearSearchBtn) clearSearchBtn.style.display = currentSearchQuery ? 'inline-flex' : 'none';
       try {
         sessionStorage.setItem('activeSearchQuery', currentSearchQuery);
       } catch (err) {}
@@ -6650,7 +6700,7 @@ function restoreActiveModal() {
       const searchInput = document.getElementById('searchInput');
       if (searchInput) searchInput.value = savedSearch;
       const clearSearchBtn = document.getElementById('clearSearchBtn');
-      if (clearSearchBtn) clearSearchBtn.style.display = 'block';
+      if (clearSearchBtn) clearSearchBtn.style.display = 'inline-flex';
     }
     if (savedTag) {
       currentTagFilter = savedTag;
@@ -7408,28 +7458,64 @@ function parseChaptersFromHtml(html, baseUrl, sourceType, mangaUrl = '') {
       }
     });
   } else if (sourceType === 'dongmanga' || /dongmanga\.com/i.test(baseUrl)) {
-    const links = doc.querySelectorAll('a[href*="thread-"][href*="-1-1.html"], a[href*="mod=viewthread"][href*="tid="], a[href*="forum.php"][href*="tid="]');
-    links.forEach(a => {
-      const rawHref = (a.getAttribute('href') || '').trim();
-      if (!rawHref || /mod=forumdisplay|mod=redirect|home\.php/i.test(rawHref)) return;
-      let url;
-      try { url = new URL(rawHref, baseUrl).href; } catch (e) { return; }
-      const text = (a.textContent || a.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
-      if (text.length < 2 || /^(?:ตอบกลับ|ดู|อ่านเพิ่มเติม|next|previous|ถัดไป|ก่อนหน้า|ดูทั้งหมด)$/i.test(text)) return;
-      const numMatch = text.match(/(?:ตอนที่|ตอน|chapter|ch\.?|ep\.?)[\s#]*(\d+(?:\.\d+)?)/i) ||
-        url.match(/thread-(\d+)/i) || url.match(/chapter[-_ ]?(\d+(?:\.\d+)?)/i);
-      const title = numMatch ? (text.includes('ตอนที่') ? text : `ตอนที่ ${numMatch[1]}`) : text.slice(0, 120);
-      if (seenUrls.has(url)) return;
-      seenUrls.add(url);
-      chapters.push({
-        title,
-        url,
-        num: numMatch ? parseFloat(numMatch[1]) : undefined,
-        isLocked: false,
-        badge: '✨ ฟรี',
-        sourceType: 'dongmanga'
+    const chListItems = doc.querySelectorAll('li.dz8-chr');
+    if (chListItems && chListItems.length > 0) {
+      chListItems.forEach(li => {
+        const a = li.querySelector('a');
+        if (!a) return;
+        const rawHref = (a.getAttribute('href') || '').trim();
+        if (!rawHref) return;
+        let url;
+        try { url = new URL(rawHref, baseUrl).href; } catch (e) { return; }
+        if (seenUrls.has(url)) return;
+
+        const chNo = li.getAttribute('data-chno') || li.querySelector('.dz8-chr-n')?.textContent?.trim() || '';
+        const titleEl = li.querySelector('.dz8-chr-t');
+        let text = (titleEl ? titleEl.textContent : a.textContent || '').replace(/\s+/g, ' ').trim();
+        text = text.replace(/ใหม่/g, '').trim();
+
+        const numVal = chNo ? parseFloat(chNo) : undefined;
+        const title = text ? text : (chNo ? `ตอนที่ ${chNo}` : 'อ่านตอนนี้');
+
+        seenUrls.add(url);
+        chapters.push({
+          title,
+          url,
+          num: !isNaN(numVal) ? numVal : undefined,
+          isLocked: false,
+          badge: '✨ ฟรี',
+          sourceType: 'dongmanga'
+        });
       });
-    });
+    }
+
+    if (chapters.length === 0) {
+      const links = doc.querySelectorAll('a[href*="thread-"][href*="-1-1.html"], a[href*="mod=viewthread"][href*="tid="], a[href*="forum.php"][href*="tid="]');
+      links.forEach(a => {
+        if (a.closest('.dz8-starb, #dz8contbtn') || a.classList.contains('dz8-btn')) return;
+        const text = (a.textContent || a.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+        if (/อ่านตอนแรก|ตอนล่าสุด|อ่านต่อ|ตอบกลับ|ดู|อ่านเพิ่มเติม|next|previous|ถัดไป|ก่อนหน้า|ดูทั้งหมด/i.test(text)) return;
+        const rawHref = (a.getAttribute('href') || '').trim();
+        if (!rawHref || /mod=forumdisplay|mod=redirect|home\.php/i.test(rawHref)) return;
+        let url;
+        try { url = new URL(rawHref, baseUrl).href; } catch (e) { return; }
+        if (seenUrls.has(url)) return;
+
+        const numMatch = text.match(/(?:ตอนที่|ตอน|chapter|ch\.?|ep\.?)[\s#]*(\d+(?:\.\d+)?)/i) ||
+          url.match(/chapter[-_ ]?(\d+(?:\.\d+)?)/i);
+        const title = numMatch ? (text.includes('ตอนที่') ? text : `ตอนที่ ${numMatch[1]}`) : text.slice(0, 120);
+
+        seenUrls.add(url);
+        chapters.push({
+          title,
+          url,
+          num: numMatch ? parseFloat(numMatch[1]) : undefined,
+          isLocked: false,
+          badge: '✨ ฟรี',
+          sourceType: 'dongmanga'
+        });
+      });
+    }
   } else if (sourceType === 'madara') {
     const chapterContainers = doc.querySelectorAll('#manga-chapters-holder, .listing-chapters_wrap, .page-content-listing, .c-sub-content, .version-chap, .chapter-list');
     let links = [];
@@ -8003,54 +8089,69 @@ async function openChapterModal(manga, activeSource = null) {
       summaryBox.style.display = 'block';
       btnAiSummary.classList.add('active');
 
-      const cacheKey = 'manga_ai_summary_v2_' + encodeURIComponent(manga.title || '');
+      const cacheKey = 'manga_ai_summary_v3_' + encodeURIComponent(manga.title || '');
       let cached = null;
       try {
         const raw = localStorage.getItem(cacheKey);
         if (raw) cached = JSON.parse(raw);
       } catch (err) {}
 
+      const fetchFreshSummary = async (isForceRefresh = false) => {
+        if (summaryBody) {
+          summaryBody.innerHTML = `<div class="summary-loading"><span class="spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> น้องมังงะ AI กำลังอ่านและสรุปเรื่องย่อ 3 บรรทัด...</div>`;
+        }
+        if (summaryMoodTags) summaryMoodTags.innerHTML = '';
+
+        try {
+          const queryParams = new URLSearchParams({
+            title: manga.title || '',
+            synopsis: manga.synopsis || ''
+          });
+          if (isForceRefresh) queryParams.set('refresh', '1');
+          const resp = await fetch(`/api/ai/summary?${queryParams.toString()}`);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          if (data.success && data.summary) {
+            try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (err) {}
+            renderSummaryData(data);
+          } else {
+            throw new Error(data.error || 'ไม่สามารถสรุปเนื้อหาได้');
+          }
+        } catch (err) {
+          if (summaryBody) {
+            summaryBody.innerHTML = `<div style="color: #f87171; padding: 6px 0;">⚠️ ไม่สามารถสรุปเรื่องย่อได้ในขณะนี้ (${escapeHtmlText(err.message)})</div>`;
+          }
+        }
+      };
+
       const renderSummaryData = (data) => {
         if (!summaryBody) return;
         const rawLines = (data.summary || '').split('\n').map(l => l.trim()).filter(Boolean);
         const linesHtml = rawLines.map(line => `<div class="summary-line">${escapeHtmlText(line)}</div>`).join('');
         const oneLinerHtml = data.oneLiner ? `<div class="summary-oneliner">💡 ${escapeHtmlText(data.oneLiner)}</div>` : '';
-        summaryBody.innerHTML = linesHtml + oneLinerHtml;
+        const refreshBtnHtml = `<div style="display:flex; justify-content:flex-end; margin-top:8px;"><button type="button" class="btn-refresh-summary" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); color:#94a3b8; font-size:0.75rem; padding:3px 10px; border-radius:12px; cursor:pointer; display:inline-flex; align-items:center; gap:4px; transition:all 0.2s ease;">🔄 สรุปใหม่</button></div>`;
+        summaryBody.innerHTML = linesHtml + oneLinerHtml + refreshBtnHtml;
+
+        const btnRefresh = summaryBody.querySelector('.btn-refresh-summary');
+        if (btnRefresh) {
+          btnRefresh.onclick = (ev) => {
+            ev.stopPropagation();
+            try { localStorage.removeItem(cacheKey); } catch (_) {}
+            fetchFreshSummary(true);
+          };
+        }
 
         if (summaryMoodTags && Array.isArray(data.moodTags)) {
           summaryMoodTags.innerHTML = data.moodTags.map(tag => `<span class="summary-mood-chip">${escapeHtmlText(tag)}</span>`).join('');
         }
       };
 
-      if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ')) {
+      if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ') && !cached.summary.includes('• เรื่องราวการเดินทาง') && !cached.summary.includes('• เรื่องย่อของ "')) {
         renderSummaryData(cached);
         return;
       }
 
-      if (summaryBody) {
-        summaryBody.innerHTML = `<div class="summary-loading"><span class="spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> น้องมังงะ AI กำลังอ่านและสรุปเรื่องย่อ 3 บรรทัด...</div>`;
-      }
-      if (summaryMoodTags) summaryMoodTags.innerHTML = '';
-
-      try {
-        const queryParams = new URLSearchParams({
-          title: manga.title || '',
-          synopsis: manga.synopsis || ''
-        });
-        const resp = await fetch(`/api/ai/summary?${queryParams.toString()}`);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        if (data.success && data.summary) {
-          try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (err) {}
-          renderSummaryData(data);
-        } else {
-          throw new Error(data.error || 'ไม่สามารถสรุปเนื้อหาได้');
-        }
-      } catch (err) {
-        if (summaryBody) {
-          summaryBody.innerHTML = `<div style="color: #f87171; padding: 6px 0;">⚠️ ไม่สามารถสรุปเรื่องย่อได้ในขณะนี้ (${escapeHtmlText(err.message)})</div>`;
-        }
-      }
+      await fetchFreshSummary(false);
     };
   }
 

@@ -1054,13 +1054,14 @@ Output ONLY valid JSON in format:
         });
       }
 
-      const cacheKey = 'ai_summary_v2_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
+      const forceRefresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('refresh') === 'true';
+      const cacheKey = 'ai_summary_v3_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
 
-      // ตรวจสอบ KV Cache (ข้ามถ้าเป็น template ซ้ำซากเดิม)
-      if (env && env.CHAT_KV) {
+      // ตรวจสอบ KV Cache (ข้ามถ้าเป็น template ซ้ำซากเดิม หรือสั่ง forceRefresh)
+      if (!forceRefresh && env && env.CHAT_KV) {
         try {
           const cached = await env.CHAT_KV.get(cacheKey, { type: 'json' });
-          if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ')) {
+          if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ') && !cached.summary.includes('• เรื่องย่อของ "') && !cached.summary.includes('• เรื่องราวการเดินทาง')) {
             return new Response(JSON.stringify({ success: true, ...cached, fromCache: true }), {
               headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
             });
@@ -1225,7 +1226,9 @@ Output ONLY valid JSON in format:
 
       const customReferer = url.searchParams.get("referer") || request.headers.get("x-referer");
       let refererHeader = origin + "/";
-      if (customReferer) {
+      if (origin.includes("osemocphoto") || targetUrl.includes("osemocphoto") || origin.includes("nekopost") || targetUrl.includes("nekopost")) {
+        refererHeader = "https://www.nekopost.net/";
+      } else if (customReferer) {
         refererHeader = customReferer;
       } else if (origin.includes("webtoon168") || targetUrl.includes("webtoon168")) {
         refererHeader = "https://ped-manga.com/";
