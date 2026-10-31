@@ -879,6 +879,87 @@ export default {
     // 3. Tenixe AI Integrations: Semantic Search, AI Cover & Manga Summary
     // ============================================================
 
+    function repairTruncatedJson(str) {
+      if (!str) return null;
+      const jsonMatch = str.match(/\{[\s\S]*/);
+      if (!jsonMatch) return null;
+      let jsonStr = jsonMatch[0].trim();
+
+      try {
+        return JSON.parse(jsonStr);
+      } catch (e) {}
+
+      const lastColon = jsonStr.lastIndexOf(':');
+      if (lastColon !== -1) {
+        const afterColon = jsonStr.slice(lastColon + 1).trim();
+        if (afterColon.startsWith('"')) {
+          jsonStr = jsonStr + '"';
+        } else if (afterColon.startsWith('[')) {
+          jsonStr = jsonStr + ']';
+        }
+      }
+
+      let openBraces = 0;
+      let openBrackets = 0;
+      let inString = false;
+      let escape = false;
+
+      for (let i = 0; i < jsonStr.length; i++) {
+        const c = jsonStr[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (c === '\\') {
+          escape = true;
+          continue;
+        }
+        if (c === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (c === '{') openBraces++;
+          else if (c === '}') openBraces--;
+          else if (c === '[') openBrackets++;
+          else if (c === ']') openBrackets--;
+        }
+      }
+
+      if (inString) jsonStr += '"';
+      while (openBrackets > 0) {
+        jsonStr += ']';
+        openBrackets--;
+      }
+      while (openBraces > 0) {
+        jsonStr += '}';
+        openBraces--;
+      }
+
+      try {
+        return JSON.parse(jsonStr);
+      } catch (err) {
+        const coreKeywordsMatch = str.match(/"coreKeywords"\s*:\s*\[([\s\S]*?)\]/);
+        const famousTitlesMatch = str.match(/"famousTitles"\s*:\s*\[([\s\S]*?)\]/);
+        const keywordsMatch = str.match(/"keywords"\s*:\s*\[([\s\S]*?)\]/);
+        const summaryMatch = str.match(/"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)/);
+
+        const safeParseArray = (s) => {
+          try { return JSON.parse(`[${s}]`); } catch (_) { return []; }
+        };
+
+        if (coreKeywordsMatch || famousTitlesMatch || keywordsMatch) {
+          return {
+            coreKeywords: safeParseArray(coreKeywordsMatch ? coreKeywordsMatch[1] : ''),
+            famousTitles: safeParseArray(famousTitlesMatch ? famousTitlesMatch[1] : ''),
+            keywords: safeParseArray(keywordsMatch ? keywordsMatch[1] : ''),
+            summary: summaryMatch ? summaryMatch[1] : ''
+          };
+        }
+      }
+      return null;
+    }
+
     // 3.1 AI Semantic Search Endpoint (/api/ai/search)
     if (url.pathname === '/api/ai/search') {
       let query = url.searchParams.get('q') || '';
@@ -897,13 +978,13 @@ export default {
         });
       }
 
-      const cacheKey = 'ai_search_' + encodeURIComponent(query.toLowerCase().replace(/\s+/g, '_').slice(0, 70));
+      const cacheKey = 'ai_search_v3_' + encodeURIComponent(query.toLowerCase().replace(/\s+/g, '_').slice(0, 70));
 
-      // ตรวจสอบ KV Cache
+      // ตรวจสอบ KV Cache (ข้ามถ้าเป็น fallback ว่างเปล่า)
       if (env && env.CHAT_KV) {
         try {
           const cached = await env.CHAT_KV.get(cacheKey, { type: 'json' });
-          if (cached && Array.isArray(cached.keywords)) {
+          if (cached && Array.isArray(cached.keywords) && (Array.isArray(cached.coreKeywords) || Array.isArray(cached.famousTitles) || (cached.genres && cached.genres.length > 0))) {
             return new Response(JSON.stringify({ success: true, ...cached, fromCache: true }), {
               headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=86400" }
             });
@@ -916,20 +997,22 @@ export default {
           role: 'system',
           content: `You are an expert manga semantic search engine.
 The user searches for manga using story plots, character concepts, feelings, or tropes in Thai or English.
-1. Extract "coreKeywords": The MUST-HAVE primary subject or character terms in BOTH English and Thai (e.g. if query has "elf", include ["elf", "elves", "เอลฟ์"]). If query has adult themes ("sex", "18+"), put adult terms here too.
-2. Extract "qualifiers": Secondary attributes, age rating, tropes in BOTH English and Thai (e.g. if query has "18+" or "sex", include ["18+", "adult", "erotica", "mature", "ecchi", "hentai", "ติดเรท", "ผู้ใหญ่", "sex"]).
-3. Extract "genres": High-level broad genres (e.g. ["fantasy", "romance", "erotica"]).
-4. Set "isAdult": boolean true if query relates to 18+, sex, erotica, hentai, ecchi, adult themes; false otherwise.
-5. Provide "summary": 1-line punchy Thai summary.
+1. Extract "coreKeywords": The MUST-HAVE primary subject, tropes, or themes in BOTH English and Thai (e.g. if query has "พนัน", include ["gambling", "gamble", "casino", "พนัน", "การพนัน"]).
+2. Extract "famousTitles": Famous manga titles matching this trope in English / Japanese Romaji (e.g. for "พนัน" / gambling, include ["Kakegurui", "Kaiji", "Liar Game", "Usogui", "Gamble Fish"]).
+3. Extract "qualifiers": Secondary attributes, tropes, tags in BOTH English and Thai.
+4. Extract "genres": High-level broad genres (e.g. ["Psychological", "Drama", "Seinen"]).
+5. Set "isAdult": boolean true if query relates to 18+, sex, erotica, hentai, ecchi; false otherwise.
+6. Provide "summary": 1-line punchy Thai summary.
 
 Output ONLY valid JSON in format:
 {
-  "coreKeywords": ["keyword_en", "keyword_th"],
-  "qualifiers": ["qualifier1", "qualifier2"],
-  "genres": ["genre1"],
-  "keywords": ["all", "combined", "keywords"],
+  "coreKeywords": ["gambling", "gamble", "พนัน", "การพนัน"],
+  "famousTitles": ["Kakegurui", "Kaiji", "Liar Game"],
+  "qualifiers": ["psychological", "mind games", "จิตวิทยา", "เดิมพัน"],
+  "genres": ["Psychological", "Drama"],
+  "keywords": ["gambling", "พนัน", "การพนัน", "kakegurui", "kaiji"],
   "isAdult": false,
-  "summary": "คำอธิบายแนวเรื่องสั้นๆ 1 บรรทัด"
+  "summary": "มังงะแนวเดิมพันและการพนันสุดระทึก ชิงไหวชิงพริบ จิตวิทยา"
 }`
         },
         {
@@ -938,26 +1021,25 @@ Output ONLY valid JSON in format:
         }
       ];
 
-      const aiText = await callTenixeChat(messages, 300);
+      const aiText = await callTenixeChat(messages, 700);
       let parsedResult = null;
       if (aiText) {
-        try {
-          const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) parsedResult = JSON.parse(jsonMatch[0]);
-        } catch (e) {}
+        parsedResult = repairTruncatedJson(aiText);
       }
 
       if (!parsedResult) {
         const basicKeywords = query.split(/[\s,+/]+/).filter(w => w.length >= 2);
         parsedResult = {
+          coreKeywords: basicKeywords,
+          famousTitles: [],
           keywords: basicKeywords,
           genres: [],
           summary: query
         };
       }
 
-      // บันทึกลง KV Cache (เก็บไว้ 7 วัน ประหยัดโควต้า 100%)
-      if (env && env.CHAT_KV) {
+      // บันทึกลง KV Cache เฉพาะเมื่อได้ผลลัพธ์ที่มีคุณภาพ ไม่บันทึก fallback ว่างเปล่า
+      if (env && env.CHAT_KV && (parsedResult.coreKeywords?.length > 1 || parsedResult.famousTitles?.length > 0 || parsedResult.genres?.length > 0)) {
         try {
           await env.CHAT_KV.put(cacheKey, JSON.stringify(parsedResult), {
             expirationTtl: 604800 // 7 วัน

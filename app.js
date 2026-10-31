@@ -1,6 +1,7 @@
 // Clean Manga Reader - Mega Aggregator & Reader Engine
 
 let allMangaList = [];          // คลังรวมมังงะทุกเรื่องจากทุกเว็บ
+let liveSearchResults = [];     // ผลการค้นหาจากคลังใหญ่ข้ามเว็บและ AI ป้องกันการถูกรีเฟรชหน้าแรกกลบทับ
 let filteredList = [];          // มังงะที่ผ่านการค้นหาหรือฟิลเตอร์
 let currentSourceFilter = 'all';// แหล่งที่เลือก ('all' หรือ id เช่น 'go-manga', 'slow-manga')
 let currentTagFilter = 'all';   // หมวดหมู่ที่เลือก ('all', 'manhwa', 'action', ...)
@@ -2031,6 +2032,17 @@ function isMangaMatchAiSemantic(m, aiData) {
   let subjectMatched = false;
   let hasSpecificSubject = false;
 
+  // 0. ตรวจสอบ Famous Titles จาก AI (เช่น Kakegurui, Kaiji สำหรับ "พนัน")
+  const famousTitles = Array.isArray(aiData.famousTitles) ? aiData.famousTitles : [];
+  for (const ft of famousTitles) {
+    const cleanFt = String(ft).toLowerCase().trim();
+    if (cleanFt && cleanFt.length >= 2 && titlePool.includes(cleanFt)) {
+      score += 150;
+      subjectMatched = true;
+      if (!matchedTags.includes(cleanFt)) matchedTags.push(cleanFt);
+    }
+  }
+
   // 1. ตรวจสอบ Subject Core Keywords (คำสำคัญหลัก เช่น elf, เอลฟ์, มังกร)
   for (const kw of coreKws) {
     const cleanKw = String(kw).toLowerCase().trim();
@@ -2126,15 +2138,22 @@ async function performAiSemanticSearch(query) {
       }
       applyFilters();
 
-      // ดึงมังงะเรื่องใหม่ๆ จาก MangaDex ให้ตรงกับพล็อตและแนวเรื่อง (เช่น elf 18+)
+      // ดึงมังงะเรื่องใหม่ๆ จาก MangaDex ให้ตรงกับพล็อตและแนวเรื่อง (เช่น elf 18+, พนัน -> Kakegurui, Kaiji)
       try {
-        const searchTerms = [query];
-        if (Array.isArray(data.coreKeywords) && data.coreKeywords.length > 0) {
-          searchTerms.push(data.coreKeywords[0]);
+        const searchTerms = [];
+        if (Array.isArray(data.famousTitles)) {
+          searchTerms.push(...data.famousTitles.slice(0, 3));
         }
+        if (Array.isArray(data.coreKeywords)) {
+          searchTerms.push(...data.coreKeywords.filter(k => /^[a-zA-Z\s]+$/.test(k)).slice(0, 2));
+        }
+        searchTerms.push(query);
+
         for (const st of searchTerms) {
-          const mdResults = await searchMangaDex(st, 25);
+          if (!st || st.trim().length < 2) continue;
+          const mdResults = await searchMangaDex(st.trim(), 20);
           if (Array.isArray(mdResults) && mdResults.length > 0) {
+            liveSearchResults = mergeAndDeduplicate([...mdResults, ...liveSearchResults]);
             allMangaList = mergeAndDeduplicate([...mdResults, ...allMangaList]);
           }
         }
@@ -4661,6 +4680,8 @@ function applyFilters() {
     baseList = getReadingHistory();
   } else if (currentTagFilter === 'favorites') {
     baseList = getFavorites();
+  } else if (currentSearchQuery && liveSearchResults.length > 0) {
+    baseList = mergeAndDeduplicate([...liveSearchResults, ...allMangaList]);
   }
 
   const allowedLangs = getSelectedLanguages();
@@ -4674,9 +4695,9 @@ function applyFilters() {
       return true;
     }
 
-    // 0. Language filter (กรองภาษาตามปุ่มที่เลือก ทั้งตอนดูปกติและตอนค้นหา 100% เคารพปุ่มตัวกรองภาษา)
+    // 0. Language filter (กรองภาษาตามปุ่มที่เลือก แต่ในโหมด AI Search ปล่อยให้มังงะที่ AI แนะนำแสดงผลได้)
     const mangaLang = m.lang || 'th';
-    if (currentSourceFilter === 'all') {
+    if (currentSourceFilter === 'all' && currentSearchMode !== 'ai') {
       if (!allowedLangs.has(mangaLang)) return false;
     }
 
@@ -5479,6 +5500,8 @@ async function performGlobalLiveSearch(query) {
   if (btn) btn.disabled = false;
 
   if (foundItems.length > 0) {
+    // เก็บลง liveSearchResults เพื่อไม่ให้ถูกรีเฟรชหน้าแรกกลบทับ
+    liveSearchResults = mergeAndDeduplicate([...foundItems, ...liveSearchResults]);
     // นำรายการที่ค้นพบขึ้นมาอยู่ด้านหน้า เพื่อให้เห็นทันที
     allMangaList = mergeAndDeduplicate([...foundItems, ...allMangaList]);
     saveCachedMangaFeed();
@@ -6286,6 +6309,7 @@ async function initAggregatorPage() {
       searchInput.value = '';
       clearSearchBtn.style.display = 'none';
       currentSearchQuery = '';
+      liveSearchResults = [];
       try {
         sessionStorage.removeItem('activeSearchQuery');
       } catch (err) {}
@@ -6491,7 +6515,11 @@ async function initAggregatorPage() {
         // นำทุกเว็บที่ดึงเสร็จแล้วมาสลับไขว้แบบ Round-Robin โดยให้ข้อมูลสดใหม่แทนที่ข้อมูลแคชเดิมของเว็บนั้น
         const interleaved = interleaveSources(Array.from(loadedSourceMap.values()), false);
         const remainingCached = allMangaList.filter(oldItem => !loadedSourceMap.has(oldItem.sourceId));
-        allMangaList = interleaveSources([mergeAndDeduplicate([...interleaved, ...remainingCached])]);
+        let mergedFeed1 = mergeAndDeduplicate([...interleaved, ...remainingCached]);
+        if (liveSearchResults.length > 0) {
+          mergedFeed1 = mergeAndDeduplicate([...liveSearchResults, ...mergedFeed1]);
+        }
+        allMangaList = interleaveSources([mergedFeed1]);
 
         if (notifyFirstSourceReady) {
           notifyFirstSourceReady();
@@ -6530,7 +6558,11 @@ async function initAggregatorPage() {
     const refreshLoadedFeed = () => {
       const finalInterleaved = interleaveSources(Array.from(loadedSourceMap.values()));
       const remainingCached = allMangaList.filter(oldItem => !loadedSourceMap.has(oldItem.sourceId));
-      allMangaList = interleaveSources([mergeAndDeduplicate([...finalInterleaved, ...remainingCached])]);
+      let mergedFeed2 = mergeAndDeduplicate([...finalInterleaved, ...remainingCached]);
+      if (liveSearchResults.length > 0) {
+        mergedFeed2 = mergeAndDeduplicate([...liveSearchResults, ...mergedFeed2]);
+      }
+      allMangaList = interleaveSources([mergedFeed2]);
       saveCachedMangaFeed();
       updateSourceCounts();
       updateSourceHealthUi();
