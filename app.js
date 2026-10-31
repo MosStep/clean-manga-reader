@@ -4880,11 +4880,12 @@ async function fetchChatMessages() {
     container.innerHTML = '';
     messages.forEach(msg => {
       const item = document.createElement('div');
-      const isBot = (msg.nickname || '').includes('Bot') || (msg.nickname || '').includes('บอท');
-      item.className = isBot ? 'chat-item chat-item-bot' : 'chat-item';
+      const isAi = (msg.nickname || '').includes('น้องมังงะ') || (msg.nickname || '').includes('AI');
+      const isBot = isAi || (msg.nickname || '').includes('Bot') || (msg.nickname || '').includes('บอท');
+      item.className = isAi ? 'chat-item chat-item-ai' : (isBot ? 'chat-item chat-item-bot' : 'chat-item');
 
-      const botBadgeHtml = isBot ? '<span class="chat-bot-badge">BOT</span>' : '';
-      const nameClass = isBot ? 'chat-user-name bot-name' : 'chat-user-name';
+      const botBadgeHtml = isAi ? '<span class="chat-bot-badge chat-ai-badge">AI ✨</span>' : (isBot ? '<span class="chat-bot-badge">BOT</span>' : '');
+      const nameClass = isAi ? 'chat-user-name ai-name' : (isBot ? 'chat-user-name bot-name' : 'chat-user-name');
 
       let storyTagHtml = '';
       if (msg.mangaTitle) {
@@ -4969,6 +4970,18 @@ function initChatComponent(currentMangaContext = null) {
   if (refreshBtn && !refreshBtn.dataset.bound) {
     refreshBtn.dataset.bound = "1";
     refreshBtn.onclick = () => fetchChatMessages();
+  }
+
+  // ปุ่มเรียกน้องมังงะ AI
+  const aiSummonBtn = document.getElementById('chatAiSummonBtn');
+  if (aiSummonBtn && !aiSummonBtn.dataset.bound) {
+    aiSummonBtn.dataset.bound = "1";
+    aiSummonBtn.onclick = () => {
+      if (textInput) {
+        textInput.value = '@ai ';
+        textInput.focus();
+      }
+    };
   }
 
   // ฟังก์ชันให้บอทสุ่มแนะนำการ์ตูน
@@ -7749,6 +7762,82 @@ async function openChapterModal(manga, activeSource = null) {
     };
   }
 
+  // ปุ่มสรุปเรื่องย่อ 3 บรรทัดด้วย AI (Manga Synopsis & Mood Tags)
+  const btnAiSummary = document.getElementById('btnModalAiSummary');
+  const summaryBox = document.getElementById('modalAiSummaryBox');
+  const summaryBody = document.getElementById('modalSummaryBody');
+  const summaryMoodTags = document.getElementById('modalSummaryMoodTags');
+  const btnCloseSummary = document.getElementById('btnCloseSummaryBox');
+
+  if (summaryBox) summaryBox.style.display = 'none';
+  if (btnAiSummary) {
+    btnAiSummary.classList.remove('active');
+    btnAiSummary.onclick = async (e) => {
+      e.stopPropagation();
+      if (!summaryBox) return;
+      if (summaryBox.style.display !== 'none') {
+        summaryBox.style.display = 'none';
+        btnAiSummary.classList.remove('active');
+        return;
+      }
+      summaryBox.style.display = 'block';
+      btnAiSummary.classList.add('active');
+
+      const cacheKey = 'manga_ai_summary_' + encodeURIComponent(manga.title || '');
+      let cached = null;
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) cached = JSON.parse(raw);
+      } catch (err) {}
+
+      const renderSummaryData = (data) => {
+        if (!summaryBody) return;
+        const rawLines = (data.summary || '').split('\n').map(l => l.trim()).filter(Boolean);
+        const linesHtml = rawLines.map(line => `<div class="summary-line">${escapeHtmlText(line)}</div>`).join('');
+        const oneLinerHtml = data.oneLiner ? `<div class="summary-oneliner">💡 ${escapeHtmlText(data.oneLiner)}</div>` : '';
+        summaryBody.innerHTML = linesHtml + oneLinerHtml;
+
+        if (summaryMoodTags && Array.isArray(data.moodTags)) {
+          summaryMoodTags.innerHTML = data.moodTags.map(tag => `<span class="summary-mood-chip">${escapeHtmlText(tag)}</span>`).join('');
+        }
+      };
+
+      if (cached && cached.summary) {
+        renderSummaryData(cached);
+        return;
+      }
+
+      if (summaryBody) {
+        summaryBody.innerHTML = `<div class="summary-loading"><span class="spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;"></span> น้องมังงะ AI กำลังอ่านและสรุปเรื่องย่อ 3 บรรทัด...</div>`;
+      }
+      if (summaryMoodTags) summaryMoodTags.innerHTML = '';
+
+      try {
+        const resp = await fetch(`/api/ai/summary?title=${encodeURIComponent(manga.title)}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (data.success && data.summary) {
+          try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (err) {}
+          renderSummaryData(data);
+        } else {
+          throw new Error(data.error || 'ไม่สามารถสรุปเนื้อหาได้');
+        }
+      } catch (err) {
+        if (summaryBody) {
+          summaryBody.innerHTML = `<div style="color: #f87171; padding: 6px 0;">⚠️ ไม่สามารถสรุปเรื่องย่อได้ในขณะนี้ (${escapeHtmlText(err.message)})</div>`;
+        }
+      }
+    };
+  }
+
+  if (btnCloseSummary) {
+    btnCloseSummary.onclick = (e) => {
+      e.stopPropagation();
+      if (summaryBox) summaryBox.style.display = 'none';
+      if (btnAiSummary) btnAiSummary.classList.remove('active');
+    };
+  }
+
   // ตรวจสอบ URL ตอนปัจจุบันหากเปิด Modal จาก reader.html
   let currentReadingChapterUrl = null;
   try {
@@ -8414,6 +8503,10 @@ async function openChapterModal(manga, activeSource = null) {
 function closeChapterModal(shouldBackHistory = true) {
   const modal = document.getElementById('chapterModal');
   if (modal) modal.style.display = 'none';
+  const summaryBox = document.getElementById('modalAiSummaryBox');
+  if (summaryBox) summaryBox.style.display = 'none';
+  const btnAiSummary = document.getElementById('btnModalAiSummary');
+  if (btnAiSummary) btnAiSummary.classList.remove('active');
   document.body.classList.remove('modal-open');
   const scrollControls = document.getElementById('modalScrollControls');
   if (scrollControls) scrollControls.style.display = 'none';

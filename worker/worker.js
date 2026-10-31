@@ -18,6 +18,7 @@ let chatMessages = [
     time: Date.now() - 600000
   }
 ];
+let aiChatActiveUntil = 0; // เก็บเวลาหมดอายุของเซสชันคุยเล่นกับ น้องมังงะ AI ✨
 
 export default {
   async fetch(request, env, ctx) {
@@ -152,6 +153,93 @@ export default {
       return Array.from(snapshots.values()).sort((a, b) => a.updatedAt - b.updatedAt).slice(-60);
     };
 
+    // ============================================================
+    // Tenixe AI Helper Functions (สลับคีย์อัตโนมัติ + Streaming Parser ประหยัด Token)
+    // ============================================================
+    const TENIXE_KEYS = [
+      (env && env.TENIXE_KEY_1) || 'txc_a9b58666d7af0a1ef12675757074c61b',
+      (env && env.TENIXE_KEY_2) || 'txc_9fec4ca9adfabf57f99a27fc0161e95a',
+      (env && env.TENIXE_KEY_3) || 'txc_bd70db10dc2355f995bc3f9ad81558b3'
+    ].filter(Boolean);
+
+    const callTenixeChat = async (messages, maxTokens = 350) => {
+      for (const key of TENIXE_KEYS) {
+        try {
+          const resp = await fetch('https://api.tenixe.com/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${key}`
+            },
+            body: JSON.stringify({
+              model: 'nemotron-3-ultra',
+              messages,
+              stream: true,
+              max_tokens: maxTokens
+            })
+          });
+
+          if (!resp.ok) {
+            console.warn(`Tenixe key ${key.slice(0, 8)} returned ${resp.status}`);
+            continue;
+          }
+
+          const text = await resp.text();
+          let full = '';
+          const lines = text.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const j = JSON.parse(line.slice(6));
+                const delta = j.choices?.[0]?.delta?.content || '';
+                full += delta;
+              } catch (e) {}
+            }
+          }
+          if (full.trim()) return full.trim();
+        } catch (e) {
+          console.warn(`Tenixe chat error with key:`, e);
+        }
+      }
+      return null;
+    };
+
+    const callTenixeImage = async (prompt) => {
+      for (const key of TENIXE_KEYS) {
+        try {
+          const resp = await fetch('https://api.tenixe.com/api/v1/images/generations', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${key}`
+            },
+            body: JSON.stringify({
+              model: 'gpt-image-1',
+              prompt,
+              size: '1024x1024',
+              n: 1
+            })
+          });
+
+          if (!resp.ok) {
+            const errBody = await resp.json().catch(() => ({}));
+            console.warn(`Tenixe image key ${key.slice(0, 8)} status ${resp.status}:`, errBody);
+            if (resp.status === 402) {
+              return { success: false, reason: 'quota_exceeded' };
+            }
+            continue;
+          }
+
+          const data = await resp.json();
+          const imgUrl = data?.data?.[0]?.url || data?.data?.[0]?.b64_json;
+          if (imgUrl) return { success: true, url: imgUrl };
+        } catch (e) {
+          console.warn(`Tenixe image error:`, e);
+        }
+      }
+      return { success: false, reason: 'service_unavailable' };
+    };
+
     // 1. ระบบแชทส่วนกลาง (Community Chat API รองรับ Cloudflare KV + In-Memory Fallback)
     if (url.pathname === '/api/chat') {
       if (request.method === "GET") {
@@ -225,7 +313,7 @@ export default {
           }
 
           // กรองไม่เกิน 2 เดือน และจำกัดสูงสุด 50 ข้อความ
-          const updatedMessages = filterValidMessages([newMsg, ...currentList]);
+          let updatedMessages = filterValidMessages([newMsg, ...currentList]);
           chatMessages = updatedMessages;
 
           let isKvActive = false;
@@ -237,6 +325,102 @@ export default {
               isKvActive = true;
             } catch (err) {
               console.warn("KV write error:", err);
+            }
+          }
+
+          // ตรวจสอบการเรียกหรือเซสชันคุยเล่นกับ น้องมังงะ AI ✨
+          const isBotNick = nickname.includes('น้องมังงะ') || nickname.includes('Bot') || nickname.includes('AI');
+          const summonPattern = /(?:@ai|@บอท|\/ai|\bai\b|น้องมังงะ|บอท\s|เรียก\s*ai)/i;
+          const isSummon = summonPattern.test(text);
+          const stopPattern = /^(?:บาย|บ๊าย|ไปพัก|ไปนอน|เงียบก่อน|พอแล้ว|stop|\/stop|\/bye)/i;
+          const isStop = stopPattern.test(text.trim());
+
+          let now = Date.now();
+          let isAiSessionActive = false;
+          if (env && env.CHAT_KV) {
+            try {
+              const kvActiveUntil = await env.CHAT_KV.get('ai_chat_active_until');
+              if (kvActiveUntil && Number(kvActiveUntil) > now) {
+                isAiSessionActive = true;
+              }
+            } catch (e) {}
+          }
+          if (!isAiSessionActive && aiChatActiveUntil > now) {
+            isAiSessionActive = true;
+          }
+
+          if (isStop && (isSummon || isAiSessionActive)) {
+            // สั่งให้น้องมังงะหยุดคุย / ไปพักผ่อน
+            aiChatActiveUntil = 0;
+            if (env && env.CHAT_KV) {
+              try { await env.CHAT_KV.delete('ai_chat_active_until'); } catch (e) {}
+            }
+            const byeMsg = {
+              id: 'ai_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+              nickname: 'น้องมังงะ AI ✨',
+              text: 'โอเคเลยคับ ไว้เจอกันใหม่นะทุกคน พักผ่อนเยอะๆ น้า! 😴✨',
+              mangaTitle: '',
+              mangaUrl: '',
+              time: Date.now()
+            };
+            updatedMessages = filterValidMessages([byeMsg, ...updatedMessages]);
+            chatMessages = updatedMessages;
+            if (env && env.CHAT_KV) {
+              try {
+                await env.CHAT_KV.put('chat_messages', JSON.stringify(updatedMessages), {
+                  expirationTtl: TWO_MONTHS_SECONDS
+                });
+              } catch (e) {}
+            }
+          } else if (!isBotNick && (isSummon || isAiSessionActive)) {
+            // เปิดหรือต่อเวลาเซสชันคุยต่ออีก 2.5 นาที (ถ้าไม่มีใครคุยต่อจะเงียบหยุดเอง)
+            const newActiveUntil = Date.now() + 150000;
+            aiChatActiveUntil = newActiveUntil;
+            if (env && env.CHAT_KV) {
+              try {
+                await env.CHAT_KV.put('ai_chat_active_until', String(newActiveUntil), {
+                  expirationTtl: 300
+                });
+              } catch (e) {}
+            }
+
+            // รวบรวมบริบทแชท 6 ข้อความล่าสุด (Prompt-Engineered Context)
+            const recentContext = updatedMessages.slice(0, 6).reverse().map(m => ({
+              role: (m.nickname && (m.nickname.includes('AI') || m.nickname.includes('น้องมังงะ'))) ? 'assistant' : 'user',
+              content: `${m.nickname}: ${m.text}${m.mangaTitle ? ` (กำลังดูเรื่อง: ${m.mangaTitle})` : ''}`
+            }));
+
+            const systemPrompt = `คุณคือ "น้องมังงะ AI ✨" เพื่อนสนิทประจำห้องแชท CleanManga
+บุคลิกภาพและการตอบ:
+- ร่าเริง สดใส เป็นกันเอง คุยเล่นทั่วไปได้ สัพเพเหระ ให้กำลังใจ เหมือนเพื่อนในแชทกลุ่ม
+- รู้จักมังงะ มังฮวา อนิเมะ ทุกแนว ป้ายยาหรือแนะนำได้ตรงใจ
+- สไตล์การตอบ: สั้นกระชับ 1-3 ประโยคเสมอ เพื่อให้แชทลื่นไหล ไม่พิมพ์ยาวเกินไป
+- ใส่อีโมจิที่เข้ากับอารมณ์อย่างน่ารักเป็นธรรมชาติ เช่น ✨, 😆, 📖, 🔥
+- ไม่พูดซ้ำซาก ไม่เป็นทางการ ไม่ทำตัวเป็นหุ่นยนต์ตอบข้อสอบ`;
+
+            const aiReply = await callTenixeChat([
+              { role: 'system', content: systemPrompt },
+              ...recentContext
+            ], 250);
+
+            if (aiReply) {
+              const botMsg = {
+                id: 'ai_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+                nickname: 'น้องมังงะ AI ✨',
+                text: aiReply,
+                mangaTitle: newMsg.mangaTitle || '',
+                mangaUrl: newMsg.mangaUrl || '',
+                time: Date.now()
+              };
+              updatedMessages = filterValidMessages([botMsg, ...updatedMessages]);
+              chatMessages = updatedMessages;
+              if (env && env.CHAT_KV) {
+                try {
+                  await env.CHAT_KV.put('chat_messages', JSON.stringify(updatedMessages), {
+                    expirationTtl: TWO_MONTHS_SECONDS
+                  });
+                } catch (e) {}
+              }
             }
           }
 
@@ -626,93 +810,8 @@ export default {
     }
 
     // ============================================================
-    // 3. Tenixe AI Integrations: Semantic Search & AI Cover Generation
+    // 3. Tenixe AI Integrations: Semantic Search, AI Cover & Manga Summary
     // ============================================================
-    const TENIXE_KEYS = [
-      (env && env.TENIXE_KEY_1) || 'txc_a9b58666d7af0a1ef12675757074c61b',
-      (env && env.TENIXE_KEY_2) || 'txc_9fec4ca9adfabf57f99a27fc0161e95a',
-      (env && env.TENIXE_KEY_3) || 'txc_bd70db10dc2355f995bc3f9ad81558b3'
-    ].filter(Boolean);
-
-    // ฟังก์ชันเรียก Tenixe Chat (สลับคีย์อัตโนมัติ + Streaming Parser ประหยัด Token)
-    const callTenixeChat = async (messages, maxTokens = 350) => {
-      for (const key of TENIXE_KEYS) {
-        try {
-          const resp = await fetch('https://api.tenixe.com/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${key}`
-            },
-            body: JSON.stringify({
-              model: 'nemotron-3-ultra',
-              messages,
-              stream: true,
-              max_tokens: maxTokens
-            })
-          });
-
-          if (!resp.ok) {
-            console.warn(`Tenixe key ${key.slice(0, 8)} returned ${resp.status}`);
-            continue;
-          }
-
-          const text = await resp.text();
-          let full = '';
-          const lines = text.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-              try {
-                const j = JSON.parse(line.slice(6));
-                const delta = j.choices?.[0]?.delta?.content || '';
-                full += delta;
-              } catch (e) {}
-            }
-          }
-          if (full.trim()) return full.trim();
-        } catch (e) {
-          console.warn(`Tenixe chat error with key:`, e);
-        }
-      }
-      return null;
-    };
-
-    // ฟังก์ชันเรียก Tenixe Image Generation (gpt-image-1)
-    const callTenixeImage = async (prompt) => {
-      for (const key of TENIXE_KEYS) {
-        try {
-          const resp = await fetch('https://api.tenixe.com/api/v1/images/generations', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${key}`
-            },
-            body: JSON.stringify({
-              model: 'gpt-image-1',
-              prompt,
-              size: '1024x1024',
-              n: 1
-            })
-          });
-
-          if (!resp.ok) {
-            const errBody = await resp.json().catch(() => ({}));
-            console.warn(`Tenixe image key ${key.slice(0, 8)} status ${resp.status}:`, errBody);
-            if (resp.status === 402) {
-              return { success: false, reason: 'quota_exceeded' };
-            }
-            continue;
-          }
-
-          const data = await resp.json();
-          const imgUrl = data?.data?.[0]?.url || data?.data?.[0]?.b64_json;
-          if (imgUrl) return { success: true, url: imgUrl };
-        } catch (e) {
-          console.warn(`Tenixe image error:`, e);
-        }
-      }
-      return { success: false, reason: 'service_unavailable' };
-    };
 
     // 3.1 AI Semantic Search Endpoint (/api/ai/search)
     if (url.pathname === '/api/ai/search') {
@@ -849,6 +948,82 @@ export default {
           : 'ไม่สามารถสร้างภาพปกได้ในขณะนี้'
       }), {
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
+    // 3.3 AI Manga Summary Endpoint (/api/ai/summary)
+    if (url.pathname === '/api/ai/summary') {
+      let title = url.searchParams.get('title') || '';
+      let synopsis = url.searchParams.get('synopsis') || '';
+      if (!title && request.method === 'POST') {
+        try {
+          const body = await request.json();
+          title = body.title || '';
+          synopsis = body.synopsis || synopsis;
+        } catch (e) {}
+      }
+      title = String(title).trim().slice(0, 150);
+      synopsis = String(synopsis).trim().slice(0, 1000);
+
+      if (!title) {
+        return new Response(JSON.stringify({ success: false, error: "กรุณาระบุชื่อเรื่องมังงะ" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      const cacheKey = 'ai_summary_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
+
+      // ตรวจสอบ KV Cache
+      if (env && env.CHAT_KV) {
+        try {
+          const cached = await env.CHAT_KV.get(cacheKey, { type: 'json' });
+          if (cached && cached.summary) {
+            return new Response(JSON.stringify({ success: true, ...cached, fromCache: true }), {
+              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
+            });
+          }
+        } catch (e) {}
+      }
+
+      const summaryPrompt = `คุณคือผู้เชี่ยวชาญการ์ตูนและมังงะ หน้าที่ของคุณคือสร้างบทสรุปเรื่องย่อสั้นๆ ไม่สปอยล์จุดสำคัญ โดยสรุปเนื้อเรื่องหลัก จุดเด่น และความน่าติดตาม
+ความยาว 3 บรรทัดพอดี (แต่ละบรรทัดขึ้นต้นด้วย bullet •) พร้อมแท็กอารมณ์เรื่อง (Mood Tags) 3 แท็ก
+ตอบเป็น JSON เท่านั้นในรูปแบบ:
+{"summary":"• บรรทัดที่ 1...\\n• บรรทัดที่ 2...\\n• บรรทัดที่ 3...","moodTags":["#แท็ก1","#แท็ก2","#แท็ก3"],"oneLiner":"คำโปรย 1 ประโยค"}`;
+
+      const promptUserContent = `มังงะ: "${title}"${synopsis ? `\nเนื้อเรื่องย่อเบื้องต้น: ${synopsis}` : ''}`;
+      const aiText = await callTenixeChat([
+        { role: 'system', content: summaryPrompt },
+        { role: 'user', content: promptUserContent }
+      ], 300);
+
+      let parsedResult = null;
+      if (aiText) {
+        try {
+          const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) parsedResult = JSON.parse(jsonMatch[0]);
+        } catch (e) {}
+      }
+
+      if (!parsedResult || !parsedResult.summary) {
+        parsedResult = {
+          summary: `• เรื่องราวการเดินทางสุดเข้มข้นของ ${title}\n• เผชิญหน้ากับความท้าทายและพัฒนาการของตัวละครที่น่าติดตาม\n• เรื่องราวชวนลุ้นระทึกและสนุกจนวางไม่ลง`,
+          moodTags: ["#น่าติดตาม", "#สนุกเข้มข้น", "#มังงะแนะนำ"],
+          oneLiner: `เรื่องราวสุดตื่นเต้นของ ${title}`
+        };
+      }
+
+      // บันทึกลง KV Cache (เก็บไว้ 30 วัน)
+      if (env && env.CHAT_KV) {
+        try {
+          await env.CHAT_KV.put(cacheKey, JSON.stringify(parsedResult), {
+            expirationTtl: 2592000 // 30 วัน
+          });
+        } catch (e) {}
+      }
+
+      return new Response(JSON.stringify({ success: true, ...parsedResult, fromCache: false }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
       });
     }
 
