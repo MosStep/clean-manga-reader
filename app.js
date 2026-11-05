@@ -393,24 +393,68 @@ function extractMangaSlug(url) {
   }
 }
 
-// 1. ดึงข้อมูลผ่าน Proxy พร้อม Timeout และรองรับ GET / POST
+// 1. ดึงข้อมูลผ่าน Proxy พร้อม Timeout, Auto-Retry และ Backup Proxy อัตโนมัติเมื่อ Proxy หลักขัดข้อง
 async function fetchViaProxy(targetUrl, options = {}, timeoutMs = 15000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
+  const isGet = !options.method || options.method.toUpperCase() === 'GET';
+  const proxyUrl = getProxyUrl(targetUrl);
+
+  const attemptFetch = async (url, customOpts = {}, customTimeout = timeoutMs) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), customTimeout);
+    try {
+      const response = await fetch(url, {
+        ...customOpts,
+        signal: controller.signal
+      });
+      clearTimeout(id);
+      if (!response.ok) {
+        const err = new Error(`HTTP Error: ${response.status}`);
+        err.status = response.status;
+        throw err;
+      }
+      return await response.text();
+    } catch (err) {
+      clearTimeout(id);
+      throw err;
+    }
+  };
+
+  let lastError = null;
+
+  // รอบที่ 1: ดึงผ่าน Cloudflare Worker Proxy หลัก
   try {
-    const proxyUrl = getProxyUrl(targetUrl);
-    const fetchOpts = {
-      signal: controller.signal,
-      ...options
-    };
-    const response = await fetch(proxyUrl, fetchOpts);
-    clearTimeout(id);
-    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-    return await response.text();
-  } catch (err) {
-    clearTimeout(id);
-    throw err;
+    return await attemptFetch(proxyUrl, options, timeoutMs);
+  } catch (err1) {
+    lastError = err1;
+    // หากเกิด Error 5xx / 429 หรือ Network ขัดข้องชั่วคราว ให้ลองซ้ำที่ Proxy หลักอีก 1 ครั้ง
+    if (!err1.status || err1.status >= 500 || err1.status === 429) {
+      try {
+        await new Promise(r => setTimeout(r, 350));
+        return await attemptFetch(proxyUrl, options, Math.max(6000, Math.floor(timeoutMs * 0.75)));
+      } catch (err2) {
+        lastError = err2;
+      }
+    }
   }
+
+  // รอบสำรอง (Fallback): หากเป็น GET และเว็บต้นทางยังปกติแต่ Proxy หลักมีปัญหา ให้ดึงผ่าน Backup Proxies ทันที
+  if (isGet && targetUrl && /^https?:\/\//i.test(targetUrl)) {
+    const fallbackUrls = [
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+      `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`
+    ];
+    for (const fbUrl of fallbackUrls) {
+      try {
+        const text = await attemptFetch(fbUrl, { method: 'GET' }, Math.min(timeoutMs, 10000));
+        if (text && text.trim().length > 80) {
+          return text;
+        }
+      } catch (_) {}
+    }
+  }
+
+  throw lastError || new Error('Failed to fetch via proxy');
 }
 
 // 2. แกะรูปภาพอย่างละเอียดทุก attribute ป้องกันรูปบั๊ก (รองรับ WP Fastest Cache, WP Rocket, LiteSpeed, WebP Picture, Noscript ฯลฯ)
@@ -9130,13 +9174,41 @@ async function openChapterModal(manga, activeSource = null) {
             : currentSource.mangaUrl;
         })())
         : currentSource.mangaUrl;
-      let html = await fetchViaProxy(chapterListingUrl);
-      if (currentReqSeq !== modalRequestSeq) return;
-      if (!manga.synopsis) {
-        const detectedSyn = extractSynopsisFromHtml(html);
-        if (detectedSyn) manga.synopsis = detectedSyn;
+      let html = '';
+      try {
+        html = await fetchViaProxy(chapterListingUrl);
+      } catch (fetchErr) {
+        // หากดึงสดไม่สำเร็จ ให้ตรวจสอบแคชรายการตอนที่เคยเปิดอ่านก่อนหน้าใน sessionStorage / localStorage ทันที
+        let fallbackChapters = null;
+        try {
+          const rawSession = sessionStorage.getItem('cached_chapters_' + currentSource.mangaUrl) ||
+                             (manga && manga.title ? sessionStorage.getItem('cached_chapters_title_' + manga.title) : null);
+          if (rawSession) {
+            const parsed = JSON.parse(rawSession);
+            if (Array.isArray(parsed) && parsed.length > 0) fallbackChapters = parsed;
+          }
+          if (!fallbackChapters) {
+            const recentStore = JSON.parse(localStorage.getItem('clean_manga_recent_chapters_v1') || '{}');
+            const cachedEntry = recentStore[currentSource.mangaUrl] || (manga && manga.title ? recentStore['title:' + manga.title] : null);
+            if (cachedEntry && Array.isArray(cachedEntry.chapters) && cachedEntry.chapters.length > 0) {
+              fallbackChapters = cachedEntry.chapters;
+            }
+          }
+        } catch (_) {}
+        if (fallbackChapters && fallbackChapters.length > 0) {
+          chapters = fallbackChapters;
+        } else {
+          throw fetchErr;
+        }
       }
-      chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
+      if (currentReqSeq !== modalRequestSeq) return;
+      if (html) {
+        if (!manga.synopsis) {
+          const detectedSyn = extractSynopsisFromHtml(html);
+          if (detectedSyn) manga.synopsis = detectedSyn;
+        }
+        chapters = parseChaptersFromHtml(html, currentSource.sourceUrl, currentSource.sourceType, currentSource.mangaUrl);
+      }
 
       // สำหรับเว็บตระกูล Madara หรือเว็บที่โหลดตอนผ่าน AJAX หากยังไม่ได้รายการตอน ให้ดึงผ่าน AJAX Endpoint ทันที
       if (chapters.length === 0 && (currentSource.sourceType === 'madara' || html.includes('wp-manga') || html.includes('ajax/chapters') || html.includes('manga_get_chapters') || html.includes('c-tabs-item__content'))) {
@@ -9357,6 +9429,30 @@ async function openChapterModal(manga, activeSource = null) {
       }
       if (manga && manga.title) {
         sessionStorage.setItem('cached_chapters_title_' + manga.title, JSON.stringify(chapters));
+      }
+      if (chapters.length > 0 && currentSource && currentSource.mangaUrl) {
+        const recentStore = JSON.parse(localStorage.getItem('clean_manga_recent_chapters_v1') || '{}');
+        const nowTs = Date.now();
+        const slimChapters = chapters.slice(0, 300).map(c => ({
+          title: c.title,
+          url: c.url,
+          num: c.num,
+          isLocked: !!c.isLocked,
+          badge: c.badge || '',
+          sourceType: c.sourceType || currentSource.sourceType || ''
+        }));
+        recentStore[currentSource.mangaUrl] = { updatedAt: nowTs, chapters: slimChapters };
+        if (manga && manga.title) {
+          recentStore['title:' + manga.title] = { updatedAt: nowTs, chapters: slimChapters };
+        }
+        const entries = Object.entries(recentStore);
+        if (entries.length > 30) {
+          entries.sort((a, b) => (b[1]?.updatedAt || 0) - (a[1]?.updatedAt || 0));
+          const trimmed = Object.fromEntries(entries.slice(0, 24));
+          localStorage.setItem('clean_manga_recent_chapters_v1', JSON.stringify(trimmed));
+        } else {
+          localStorage.setItem('clean_manga_recent_chapters_v1', JSON.stringify(recentStore));
+        }
       }
     } catch (e) {}
     chapterList.innerHTML = '';

@@ -1475,11 +1475,6 @@ Output ONLY valid JSON in format:
         }
       };
 
-      if (!isLikelyImageUrl) {
-        fetchOptions.cache = "no-store";
-        fetchOptions.cf = { cacheTtl: 0, cacheEverything: false };
-      }
-
       const xRequestedWith = request.headers.get("x-requested-with");
       if (xRequestedWith) {
         fetchOptions.headers["X-Requested-With"] = xRequestedWith;
@@ -1496,8 +1491,38 @@ Output ONLY valid JSON in format:
         }
       }
 
-      // ทำการร้องขอข้อมูลไปยังเว็บต้นทาง พร้อมแนบ Referer ต้นทาง
-      const response = await fetch(targetUrl, fetchOptions);
+      // ทำการร้องขอข้อมูลไปยังเว็บต้นทาง พร้อมแนบ Referer ต้นทาง (มี Retry อัตโนมัติหากต้นทางสะดุด)
+      let response;
+      try {
+        response = await fetch(targetUrl, fetchOptions);
+        if (response.status >= 500 && request.method === "GET") {
+          const retryResp = await fetch(targetUrl, {
+            method: "GET",
+            headers: {
+              "User-Agent": fetchOptions.headers["User-Agent"],
+              "Referer": refererHeader,
+              "Accept": fetchOptions.headers["Accept"],
+              "Accept-Language": fetchOptions.headers["Accept-Language"]
+            }
+          });
+          if (retryResp.ok || retryResp.status < response.status) {
+            response = retryResp;
+          }
+        }
+      } catch (firstFetchErr) {
+        if (request.method === "GET") {
+          response = await fetch(targetUrl, {
+            method: "GET",
+            headers: {
+              "User-Agent": fetchOptions.headers["User-Agent"],
+              "Referer": refererHeader,
+              "Accept": fetchOptions.headers["Accept"]
+            }
+          });
+        } else {
+          throw firstFetchErr;
+        }
+      }
 
       // คัดลอก Headers และเปิด CORS
       const headers = new Headers(response.headers);
