@@ -205,7 +205,7 @@ export default {
     ].filter(Boolean);
 
     const callTenixeChat = async (messages, maxTokens = 600) => {
-      const models = ['claude-haiku-5-5', 'deepseek-v4-flash', 'nemotron-3-ultra'];
+      const models = ['claude-haiku-5-5', 'deepseek-v4-flash'];
       for (const model of models) {
         for (const key of TENIXE_KEYS) {
           try {
@@ -214,24 +214,29 @@ export default {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`
+                'Authorization': `Bearer ${key}`,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
               },
               body: JSON.stringify({
                 model,
                 messages,
                 stream: false,
                 max_tokens: reqMaxTokens
-              })
+              }),
+              signal: AbortSignal.timeout(7000)
             });
 
             if (!resp.ok) {
-              console.warn(`Tenixe ${model} key ${key.slice(0, 8)} returned ${resp.status}`);
+              if (resp.status === 429 || resp.status >= 500) break; // โมเดลต้นทางคิวเต็มหรือล่ม ให้ข้ามไปโมเดลถัดไปทันที
               continue;
             }
 
             const raw = await resp.text();
-            if (raw.includes('"AI_PROVIDER_RATE_LIMITED"') || raw.includes('"upstream_rate_limited"') || raw.includes('"insufficient_quota"') || raw.includes('"AI_PROVIDER_UNAVAILABLE"')) {
-              continue;
+            if (raw.includes('"AI_PROVIDER_RATE_LIMITED"') || raw.includes('"upstream_rate_limited"') || raw.includes('"AI_PROVIDER_UNAVAILABLE"')) {
+              break; // โมเดลต้นทางล่ม ข้ามไปโมเดลถัดไปทันที
+            }
+            if (raw.includes('"insufficient_quota"')) {
+              continue; // คีย์นี้โควตาหมด ลองคีย์ถัดไป
             }
 
             try {
@@ -259,7 +264,7 @@ export default {
               if (full.trim()) return full.trim();
             }
           } catch (e) {
-            console.warn(`Tenixe chat error with ${model}:`, e);
+            break; // Timeout หรือเครือข่ายผิดพลาด ข้ามไปโมเดลถัดไปทันที
           }
         }
       }
@@ -268,11 +273,15 @@ export default {
       try {
         const freeResp = await fetch('https://text.pollinations.ai/openai', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+          },
           body: JSON.stringify({
             model: 'openai',
             messages
-          })
+          }),
+          signal: AbortSignal.timeout(10000)
         });
         if (freeResp.ok) {
           const freeJson = await freeResp.json();

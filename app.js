@@ -8714,7 +8714,9 @@ async function openChapterModal(manga, activeSource = null) {
             genre: genreContext
           });
           if (isForceRefresh) queryParams.set('refresh', '1');
-          const resp = await fetch(`/api/ai/summary?${queryParams.toString()}`);
+          const resp = await fetch(`/api/ai/summary?${queryParams.toString()}`, {
+            signal: AbortSignal.timeout(12000)
+          });
           if (resp.ok) {
             const data = await resp.json();
             if (data.success && data.summary && !isFakeSummary(data.summary)) {
