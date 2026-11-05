@@ -1,13 +1,13 @@
 const CACHE_PREFIX = 'clean-manga-reader-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v24`;
-const IMAGE_CACHE_NAME = 'clean-manga-reader-images-v1';
+const CACHE_NAME = `${CACHE_PREFIX}v25`;
+const IMAGE_CACHE_NAME = 'clean-manga-reader-images-v2';
 const SHELL_ASSETS = [
   '',
   'index.html',
   'reader.html',
-  'style.css?v=4.19',
+  'style.css?v=4.21',
   'config.js?v=4.20',
-  'app.js?v=4.40',
+  'app.js?v=4.42',
   'favicon.svg'
 ];
 
@@ -29,7 +29,7 @@ self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
     await Promise.all(keys
-      .filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+      .filter(key => key !== CACHE_NAME && key !== IMAGE_CACHE_NAME)
       .map(key => caches.delete(key)));
     await self.clients.claim();
   })());
@@ -42,13 +42,17 @@ self.addEventListener('fetch', event => {
   const scope = new URL(self.registration.scope);
   const requestUrl = new URL(request.url);
 
-  // 1. แคชรูปภาพแบบ Cache-First เพื่อประหยัดโควตา Cloudflare Worker สูงสุด
-  const targetParam = requestUrl.searchParams.get('url') || '';
-  const isImageRequest = request.destination === 'image' ||
-    (requestUrl.pathname.includes('/api/proxy') && /\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(targetParam)) ||
-    /\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(requestUrl.pathname);
+  // ข้ามคำขอข้ามโดเมนโดยตรง ให้เบราว์เซอร์จัดการโหลดและส่งสัญญาณ onerror ตามปกติ
+  if (requestUrl.origin !== scope.origin) return;
 
-  if (isImageRequest) {
+  // 1. แคชเฉพาะรูปภาพที่โหลดสำเร็จจริง (status 200) ผ่านต้นทางเดียวกันหรือ /api/proxy
+  const targetParam = requestUrl.searchParams.get('url') || '';
+  const isProxyImage = requestUrl.pathname.includes('/api/proxy') &&
+    (request.destination === 'image' || /\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(targetParam));
+  const isLocalImage = !requestUrl.pathname.startsWith('/api/') &&
+    (request.destination === 'image' || /\.(jpg|jpeg|png|webp|avif|gif|svg)(\?|$)/i.test(requestUrl.pathname));
+
+  if (isProxyImage || isLocalImage) {
     event.respondWith((async () => {
       const imgCache = await caches.open(IMAGE_CACHE_NAME);
       const cached = await imgCache.match(request);
@@ -57,7 +61,8 @@ self.addEventListener('fetch', event => {
       }
       try {
         const netRes = await fetch(request);
-        if (netRes && (netRes.ok || netRes.type === 'opaque')) {
+        const contentType = (netRes.headers.get('content-type') || '').toLowerCase();
+        if (netRes && netRes.ok && netRes.status === 200 && (contentType.startsWith('image/') || isLocalImage)) {
           imgCache.put(request, netRes.clone());
         }
         return netRes;
@@ -69,7 +74,8 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  if (requestUrl.origin !== scope.origin || !requestUrl.pathname.startsWith(scope.pathname)) return;
+  // 2. ข้าม API ทุกชนิดที่ไม่ใช่รูปภาพ (เช่น /api/proxy ดึงหน้าเว็บ HTML, /api/chat, /api/sync) เพื่อให้ดึงข้อมูลสดเสมอ
+  if (requestUrl.pathname.startsWith('/api/') || !requestUrl.pathname.startsWith(scope.pathname)) return;
 
   event.respondWith((async () => {
     const isNavigation = request.mode === 'navigate';

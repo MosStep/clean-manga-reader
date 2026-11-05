@@ -1360,10 +1360,11 @@ Output ONLY valid JSON in format:
         });
       }
 
-      // ตรวจสอบ Cloudflare Edge Cache สำหรับคำขอแบบ GET ก่อนเสมอ
+      // ตรวจสอบ Cloudflare Edge Cache เฉพาะคำขอรูปภาพ (ส่วนหน้าเว็บ HTML/JSON ดึงสดเสมอเพื่อให้อัปเดตตามเว็บต้นทางทันที)
+      const isLikelyImageUrl = /\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(targetUrl);
       const cache = typeof caches !== 'undefined' ? caches.default : null;
       const cacheKey = new Request(request.url, { method: "GET" });
-      if (cache && request.method === "GET") {
+      if (cache && request.method === "GET" && isLikelyImageUrl) {
         try {
           const cachedResponse = await cache.match(cacheKey);
           if (cachedResponse) {
@@ -1381,6 +1382,8 @@ Output ONLY valid JSON in format:
         refererHeader = "https://www.nekopost.net/";
       } else if (customReferer) {
         refererHeader = customReferer;
+      } else if (origin.includes("ntrnaja") || targetUrl.includes("ntrnaja")) {
+        refererHeader = "https://ntrnaja.com/";
       } else if (origin.includes("webtoon168") || targetUrl.includes("webtoon168")) {
         refererHeader = "https://ped-manga.com/";
       } else if (origin.includes("chibi-manga") || targetUrl.includes("chibi-manga")) {
@@ -1397,6 +1400,10 @@ Output ONLY valid JSON in format:
         refererHeader = "https://www.oremanga.net/";
       } else if (origin.includes("duketoon") || targetUrl.includes("duketoon")) {
         refererHeader = "https://duketoon.com/";
+      } else if (origin.includes("whytoon") || targetUrl.includes("whytoon")) {
+        refererHeader = "https://whytoon.com/";
+      } else if (origin.includes("dongmanga") || targetUrl.includes("dongmanga")) {
+        refererHeader = "https://dongmanga.com/";
       } else if (origin.includes("mangakimi") || targetUrl.includes("mangakimi")) {
         refererHeader = "https://www.mangakimi.com/";
       }
@@ -1480,32 +1487,39 @@ Output ONLY valid JSON in format:
         }
       }
       
-      // เพิ่มการแคชสำหรับ GET เพื่อความเร็ว และป้องกันไม่ให้เบราว์เซอร์ส่ง Request ซ้ำ
+      // แคชเฉพาะรูปภาพ (7 วัน) ส่วนหน้าเว็บ HTML/JSON ไม่แคชเพื่อให้รายการมังงะอัปเดตสดตามเว็บต้นทางเสมอ
       if (request.method === "GET" && response.status === 200) {
         const contentType = (headers.get("Content-Type") || "").toLowerCase();
-        const isImage = contentType.startsWith("image/") || /\.(jpg|jpeg|png|webp|avif|gif)(\?|$)/i.test(targetUrl);
-        const cacheSeconds = isImage ? 604800 : 900; // 7 วันสำหรับรูปภาพ, 15 นาทีสำหรับเว็บเพจ
+        const isImage = contentType.startsWith("image/") || isLikelyImageUrl;
 
-        // ลบ Headers ที่บล็อกการจำแคชจากเว็บต้นทาง
         headers.delete("pragma");
         headers.delete("expires");
         headers.delete("set-cookie");
         headers.delete("vary");
-        headers.set("Cache-Control", `public, max-age=${cacheSeconds}, s-maxage=${cacheSeconds}`);
 
-        const responseToReturn = new Response(response.body, {
-          status: response.status,
-          headers: headers
-        });
+        if (isImage) {
+          const cacheSeconds = 604800; // 7 วันสำหรับรูปภาพ
+          headers.set("Cache-Control", `public, max-age=${cacheSeconds}, s-maxage=${cacheSeconds}`);
 
-        // บันทึกลง Cloudflare Edge Cache ในเบื้องหลัง
-        if (cache && ctx && typeof ctx.waitUntil === 'function') {
-          try {
-            ctx.waitUntil(cache.put(cacheKey, responseToReturn.clone()));
-          } catch (_) {}
+          const responseToReturn = new Response(response.body, {
+            status: response.status,
+            headers: headers
+          });
+
+          if (cache && ctx && typeof ctx.waitUntil === 'function') {
+            try {
+              ctx.waitUntil(cache.put(cacheKey, responseToReturn.clone()));
+            } catch (_) {}
+          }
+
+          return responseToReturn;
+        } else {
+          headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+          return new Response(response.body, {
+            status: response.status,
+            headers: headers
+          });
         }
-
-        return responseToReturn;
       }
 
       return new Response(response.body, {
