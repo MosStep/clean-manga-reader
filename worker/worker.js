@@ -204,52 +204,85 @@ export default {
       (env && env.TENIXE_KEY_3) || 'txc_bd70db10dc2355f995bc3f9ad81558b3'
     ].filter(Boolean);
 
-    const callTenixeChat = async (messages, maxTokens = 350) => {
-      for (const key of TENIXE_KEYS) {
-        try {
-          const resp = await fetch('https://api.tenixe.com/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${key}`
-            },
-            body: JSON.stringify({
-              model: 'nemotron-3-ultra',
-              messages,
-              stream: false,
-              max_tokens: maxTokens
-            })
-          });
-
-          if (!resp.ok) {
-            console.warn(`Tenixe key ${key.slice(0, 8)} returned ${resp.status}`);
-            continue;
-          }
-
-          const raw = await resp.text();
+    const callTenixeChat = async (messages, maxTokens = 600) => {
+      const models = ['claude-haiku-5-5', 'deepseek-v4-flash', 'nemotron-3-ultra'];
+      for (const model of models) {
+        for (const key of TENIXE_KEYS) {
           try {
-            const j = JSON.parse(raw);
-            const content = j.choices?.[0]?.message?.content;
-            if (content && content.trim()) return content.trim();
-          } catch (e) {
-            // Fallback parsing SSE chunks if returned as stream
-            let full = '';
-            const lines = raw.split('\n');
-            for (const line of lines) {
-              if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-                try {
-                  const j = JSON.parse(line.slice(6));
-                  const delta = j.choices?.[0]?.delta?.content || '';
-                  full += delta;
-                } catch (err) {}
-              }
+            const reqMaxTokens = model.includes('deepseek') ? Math.max(maxTokens, 3500) : maxTokens;
+            const resp = await fetch('https://api.tenixe.com/api/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${key}`
+              },
+              body: JSON.stringify({
+                model,
+                messages,
+                stream: false,
+                max_tokens: reqMaxTokens
+              })
+            });
+
+            if (!resp.ok) {
+              console.warn(`Tenixe ${model} key ${key.slice(0, 8)} returned ${resp.status}`);
+              continue;
             }
-            if (full.trim()) return full.trim();
+
+            const raw = await resp.text();
+            if (raw.includes('"AI_PROVIDER_RATE_LIMITED"') || raw.includes('"upstream_rate_limited"') || raw.includes('"insufficient_quota"') || raw.includes('"AI_PROVIDER_UNAVAILABLE"')) {
+              continue;
+            }
+
+            try {
+              const j = JSON.parse(raw);
+              if (j.error) continue;
+              const content = j.choices?.[0]?.message?.content;
+              if (content && content.trim()) return content.trim();
+            } catch (e) {
+              // Fallback parsing SSE chunks if returned as stream
+              let full = '';
+              const lines = raw.split('\n');
+              for (const line of lines) {
+                if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+                  try {
+                    const j = JSON.parse(line.slice(6));
+                    if (j.error) {
+                      full = '';
+                      break;
+                    }
+                    const delta = j.choices?.[0]?.delta?.content || '';
+                    full += delta;
+                  } catch (err) {}
+                }
+              }
+              if (full.trim()) return full.trim();
+            }
+          } catch (e) {
+            console.warn(`Tenixe chat error with ${model}:`, e);
           }
-        } catch (e) {
-          console.warn(`Tenixe chat error with key:`, e);
         }
       }
+
+      // ด่านสำรองเมื่อ Tenixe API ปิดให้บริการหรือคีย์ทั้งหมดติดจำกัด: ใช้ Pollinations OpenAI-compatible ฟรีโดยไม่ต้องใช้คีย์
+      try {
+        const freeResp = await fetch('https://text.pollinations.ai/openai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'openai',
+            messages
+          })
+        });
+        if (freeResp.ok) {
+          const freeJson = await freeResp.json();
+          const freeContent = freeJson.choices?.[0]?.message?.content;
+          if (freeContent && freeContent.trim()) return freeContent.trim();
+        }
+      } catch (freeErr) {
+        console.warn('Free AI fallback error:', freeErr);
+      }
+
       return null;
     };
 
@@ -1196,15 +1229,18 @@ Output ONLY valid JSON in format:
     if (url.pathname === '/api/ai/summary') {
       let title = url.searchParams.get('title') || '';
       let synopsis = url.searchParams.get('synopsis') || '';
+      let genre = url.searchParams.get('genre') || '';
       if (!title && request.method === 'POST') {
         try {
           const body = await request.json();
           title = body.title || '';
           synopsis = body.synopsis || synopsis;
+          genre = body.genre || genre;
         } catch (e) {}
       }
       title = String(title).trim().slice(0, 150);
       synopsis = String(synopsis).trim().slice(0, 1500);
+      genre = String(genre).trim().slice(0, 250);
 
       if (!title) {
         return new Response(JSON.stringify({ success: false, error: "กรุณาระบุชื่อเรื่องมังงะ" }), {
@@ -1213,55 +1249,42 @@ Output ONLY valid JSON in format:
         });
       }
 
+      const isFakeSummaryText = (txt) => {
+        if (!txt) return true;
+        return txt.includes('การเดินทางสุดเข้มข้นของ') ||
+               txt.includes('• เรื่องย่อของ "') ||
+               txt.includes('• เรื่องราวการเดินทาง') ||
+               txt.includes('เผชิญกับศัตรูและปริศนาที่ท้าทายขีดจำกัด');
+      };
+
       const forceRefresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('refresh') === 'true';
-      const cacheKey = 'ai_summary_v3_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
+      const cacheKey = 'ai_summary_v4_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
 
       // ตรวจสอบ Edge Cache / RAM (ข้ามถ้าสั่ง forceRefresh — ใช้โควตา KV = 0)
       if (!forceRefresh) {
         const cached = await getEdgeCacheJson(cacheKey);
-        if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ') && !cached.summary.includes('• เรื่องย่อของ "') && !cached.summary.includes('• เรื่องราวการเดินทาง')) {
+        if (cached && cached.summary && !isFakeSummaryText(cached.summary)) {
           return new Response(JSON.stringify({ success: true, ...cached, fromCache: true }), {
             headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
           });
         }
       }
 
-      // หากไม่มีเรื่องย่อส่งมา ให้ลองค้นหาจาก MangaDex API โดยตรง
-      if (!synopsis || synopsis.length < 25) {
-        try {
-          const dexRes = await fetch(`https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=3`);
-          if (dexRes.ok) {
-            const dexJson = await dexRes.json();
-            if (Array.isArray(dexJson.data) && dexJson.data.length > 0) {
-              for (const item of dexJson.data) {
-                const desc = item.attributes?.description?.th || item.attributes?.description?.en || Object.values(item.attributes?.description || {})[0];
-                if (desc && desc.trim().length > 25) {
-                  synopsis = desc.trim().slice(0, 1500);
-                  break;
-                }
-              }
-            }
-          }
-        } catch (e) {
-          console.warn('MangaDex synopsis lookup error:', e);
-        }
-      }
-
-      const summaryPrompt = `คุณคือผู้เชี่ยวชาญการ์ตูนและมังงะตัวจริง สรุปเนื้อเรื่องย่อของมังงะเรื่องนี้ให้กระชับ ดึงดูด ได้ใจความจริง ไม่สปอยล์จุดไคลแมกซ์
-ความยาว 3 บรรทัดพอดี (แต่ละบรรทัดขึ้นต้นด้วย bullet •)
-• บรรทัด 1: แนะนำตัวเอก ภูมิหลัง และจุดเริ่มต้นของเรื่อง
-• บรรทัด 2: ปัญหา อุปสรรค พลังพิเศษ หรือความขัดแย้งหลัก
-• บรรทัด 3: จุดเปลี่ยน เป้าหมาย หรือความน่าติดตามที่ห้ามพลาด
+      const summaryPrompt = `คุณคือผู้เชี่ยวชาญการ์ตูน มังงะ และมังฮวาเกาหลีตัวจริง สรุปเนื้อเรื่องย่อของเรื่องนี้ให้กระชับ ดึงดูด ได้ใจความจริง ตรงตามแนวเรื่องจริง
+ความยาว 3 บรรทัดพอดี (แต่ละบรรทัดสั้นกระชับ 1-2 ประโยค และขึ้นต้นด้วย bullet •)
+• บรรทัด 1: แนะนำตัวเอก ภูมิหลัง และจุดเริ่มต้นของเรื่องราวหรือความสัมพันธ์
+• บรรทัด 2: เหตุการณ์สำคัญ ความลับ ปัญหา หรือความขัดแย้งหลักที่เกิดขึ้น
+• บรรทัด 3: จุดเปลี่ยน เป้าหมาย หรือความน่าติดตามที่ทำให้เรื่องนี้เข้มข้นขึ้น
 พร้อมแท็กอารมณ์เรื่อง (Mood Tags) 3 แท็ก และคำโปรย 1 ประโยค (oneLiner)
-ข้อห้ามเด็ดขาด: ห้ามใช้ข้อความสำเร็จรูปทั่วไป เช่น "เรื่องราวการเดินทางสุดเข้มข้นของ..." หรือประโยคลอยๆ เด็ดขาด ต้องอิงเนื้อหาจริงของเรื่องนี้เท่านั้น
+ข้อห้ามเด็ดขาด: ห้ามใช้ข้อความสำเร็จรูปทั่วไป เช่น "เรื่องย่อของ... ติดตามการผจญภัยและการต่อสู้สุดเข้มข้น" และห้ามแต่งเป็นแนวต่อสู้หากชื่อเรื่องหรือหมวดหมู่เป็นแนวโรแมนติก/ดราม่า/ชีวิตมหาลัย/ผู้ใหญ่ ต้องสรุปให้ตรงกับธีมของเรื่องเท่านั้น
 ตอบเป็น JSON เท่านั้นในรูปแบบ:
 {"summary":"• บรรทัดที่ 1...\\n• บรรทัดที่ 2...\\n• บรรทัดที่ 3...","moodTags":["#แท็ก1","#แท็ก2","#แท็ก3"],"oneLiner":"คำโปรย 1 ประโยค"}`;
 
-      const promptUserContent = `มังงะ: "${title}"${synopsis ? `\nเนื้อเรื่องย่อจริงจากต้นทาง:\n${synopsis}` : ''}`;
+      const promptUserContent = `มังงะ/มังฮวา: "${title}"${genre ? `\nประเภท/หมวดหมู่: ${genre}` : ''}${synopsis ? `\nเนื้อเรื่องย่ออ้างอิง:\n${synopsis}` : ''}`;
       const aiText = await callTenixeChat([
         { role: 'system', content: summaryPrompt },
         { role: 'user', content: promptUserContent }
-      ], 700);
+      ], 1200);
 
       let parsedResult = null;
       if (aiText) {
@@ -1270,19 +1293,23 @@ Output ONLY valid JSON in format:
           if (jsonMatch) parsedResult = JSON.parse(jsonMatch[0]);
         } catch (e) {}
 
+        if (!parsedResult || !parsedResult.summary) {
+          parsedResult = repairTruncatedJson(aiText);
+        }
+
         // กรณี JSON โดนตัดท้าย ให้ดึงฟิลด์ summary ออกมาด้วย regex
         if (!parsedResult || !parsedResult.summary) {
-          const summaryMatch = aiText.match(/"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+          const summaryMatch = aiText.match(/"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)/);
           if (summaryMatch) {
             try {
-              const extractedSummary = JSON.parse(`"${summaryMatch[1]}"`);
+              const extractedSummary = summaryMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').trim();
               const moodMatch = aiText.match(/"moodTags"\s*:\s*\[([\s\S]*?)\]/);
               let moodTags = ["#น่าติดตาม", "#เรื่องเด็ด", "#มังงะแนะนำ"];
               if (moodMatch) {
                 try { moodTags = JSON.parse(`[${moodMatch[1]}]`); } catch (e) {}
               }
-              const oneLinerMatch = aiText.match(/"oneLiner"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-              let oneLiner = oneLinerMatch ? JSON.parse(`"${oneLinerMatch[1]}"`) : `เรื่องราวของ ${title}`;
+              const oneLinerMatch = aiText.match(/"oneLiner"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)/);
+              let oneLiner = oneLinerMatch ? oneLinerMatch[1].replace(/\\"/g, '"').trim() : `เรื่องราวเข้มข้นของ ${title}`;
               parsedResult = { summary: extractedSummary, moodTags, oneLiner };
             } catch (e) {}
           }
@@ -1290,12 +1317,11 @@ Output ONLY valid JSON in format:
       }
 
       if (!parsedResult || !parsedResult.summary) {
-        // หากมี bullet แต่ไม่ได้ JSON ให้ดึงเฉพาะบรรทัด bullet
         const bulletLines = (aiText || '').split('\n')
           .map(l => l.trim())
           .filter(l => l.startsWith('•'))
           .map(l => l.replace(/^•\s*/, '• '));
-        
+
         if (bulletLines.length > 0) {
           parsedResult = {
             summary: bulletLines.slice(0, 3).join('\n'),
@@ -1309,16 +1335,20 @@ Output ONLY valid JSON in format:
             moodTags: ["#เรื่องย่อ", "#แนะนำ", "#น่าติดตาม"],
             oneLiner: sentences[0] || `เรื่องราวของ ${title}`
           };
-        } else {
-          parsedResult = {
-            summary: `• เรื่องย่อของ "${title}" ติดตามการผจญภัยและการต่อสู้สุดเข้มข้น\n• เผชิญกับศัตรูและปริศนาที่ท้าทายขีดจำกัดของตัวละคร\n• จุดเปลี่ยนสำคัญที่จะเปลี่ยนชะตากรรมของเรื่องราว`,
-            moodTags: ["#การ์ตูน", "#น่าติดตาม", "#เรื่องฮิต"],
-            oneLiner: `มังงะเรื่องดัง ${title}`
-          };
         }
       }
 
-      // บันทึกลง Edge Cache + RAM (เก็บไว้ 30 วัน ใช้โควตา KV put = 0)
+      if (!parsedResult || !parsedResult.summary || isFakeSummaryText(parsedResult.summary)) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'AI_UNAVAILABLE'
+        }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
+        });
+      }
+
+      // บันทึกลง Edge Cache + RAM เฉพาะเมื่อได้สรุปจริงเท่านั้น (เก็บไว้ 30 วัน ใช้โควตา KV put = 0)
       await putEdgeCacheJson(cacheKey, parsedResult, 2592000);
 
       return new Response(JSON.stringify({ success: true, ...parsedResult, fromCache: false }), {

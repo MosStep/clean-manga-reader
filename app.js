@@ -67,12 +67,12 @@ function cleanupStaleSummaryCache() {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && (key.startsWith('manga_ai_summary_') || key.startsWith('ai_summary_'))) {
-        if (!key.startsWith('manga_ai_summary_v3_')) {
+        if (!key.startsWith('manga_ai_summary_v4_')) {
           toRemove.push(key);
         } else {
           try {
             const val = localStorage.getItem(key);
-            if (val && (val.includes('การเดินทางสุดเข้มข้นของ') || val.includes('• เรื่องราวการเดินทาง') || val.includes('• เรื่องย่อของ "'))) {
+            if (val && (val.includes('การเดินทางสุดเข้มข้นของ') || val.includes('• เรื่องราวการเดินทาง') || val.includes('• เรื่องย่อของ "') || val.includes('เผชิญกับศัตรูและปริศนาที่ท้าทายขีดจำกัด'))) {
               toRemove.push(key);
             }
           } catch (_) {}
@@ -8548,12 +8548,146 @@ async function openChapterModal(manga, activeSource = null) {
       summaryBox.style.display = 'block';
       btnAiSummary.classList.add('active');
 
-      const cacheKey = 'manga_ai_summary_v3_' + encodeURIComponent(manga.title || '');
+      // ปุ่มสรุปเรื่องย่อ 3 บรรทัดด้วย AI (Manga Synopsis & Mood Tags — ไม่ดึงหน้าเว็บผ่าน Cloudflare เพิ่ม และมีระบบยิงตรงจากเบราว์เซอร์สำรองเมื่อ API หลักหยุดให้บริการ)
+      const cacheKey = 'manga_ai_summary_v4_' + encodeURIComponent(manga.title || '');
       let cached = null;
       try {
         const raw = localStorage.getItem(cacheKey);
         if (raw) cached = JSON.parse(raw);
       } catch (err) {}
+
+      const isFakeSummary = (txt) => {
+        if (!txt) return true;
+        return txt.includes('การเดินทางสุดเข้มข้นของ') ||
+               txt.includes('• เรื่องราวการเดินทาง') ||
+               txt.includes('• เรื่องย่อของ "') ||
+               txt.includes('เผชิญกับศัตรูและปริศนาที่ท้าทายขีดจำกัด');
+      };
+
+      const buildMangaGenreContext = () => {
+        const parts = [];
+        if (manga.type) parts.push(manga.type);
+        if (Array.isArray(manga.tags) && manga.tags.length > 0) parts.push(manga.tags.join(', '));
+        const srcId = (currentSource?.sourceId || manga.sourceId || '').toLowerCase();
+        if (manga.isAdult || /ntr|ecchi|doujin/i.test(srcId)) {
+          parts.push('โรแมนติกผู้ใหญ่ / ดราม่าความสัมพันธ์ (18+ Manhwa)');
+        }
+        return parts.join(' · ');
+      };
+
+      // ค้นหาเรื่องย่อจากฐานข้อมูลสาธารณะโดยตรงจากเบราว์เซอร์ของผู้ใช้ (ใช้โควตา Cloudflare = 0)
+      const lookupPublicSynopsisDirect = async (rawTitle) => {
+        const cleanSearch = String(rawTitle || '')
+          .replace(/\[.*?\]|\(.*?\)/g, '')
+          .replace(/แปลไทย|ตอนที่\s*\d+|ch\.\s*\d+|ep\.\s*\d+/gi, '')
+          .trim();
+        if (!cleanSearch) return '';
+
+        // 1. MangaDex Direct (CORS: *)
+        try {
+          const mdRes = await fetch(`https://api.mangadex.org/manga?title=${encodeURIComponent(cleanSearch)}&limit=2`, {
+            signal: AbortSignal.timeout(3500)
+          });
+          if (mdRes.ok) {
+            const mdData = await mdRes.json();
+            for (const item of (mdData.data || [])) {
+              const desc = item.attributes?.description?.th || item.attributes?.description?.en || Object.values(item.attributes?.description || {})[0];
+              if (desc && desc.trim().length > 30) return desc.trim().slice(0, 1200);
+            }
+          }
+        } catch (_) {}
+
+        // 2. AniList GraphQL Direct (CORS: *)
+        try {
+          const aniRes = await fetch('https://graphql.anilist.co', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              query: 'query($s:String){Media(search:$s,type:MANGA){description(asHtml:false) genres}}',
+              variables: { s: cleanSearch }
+            }),
+            signal: AbortSignal.timeout(3500)
+          });
+          if (aniRes.ok) {
+            const aniData = await aniRes.json();
+            const media = aniData?.data?.Media;
+            if (media?.description && media.description.trim().length > 30) {
+              return media.description.replace(/<[^>]+>/g, '').trim().slice(0, 1200);
+            }
+          }
+        } catch (_) {}
+
+        // 3. MyAnimeList (Jikan v4) Direct (CORS: *)
+        try {
+          const jikanRes = await fetch(`https://api.jikan.moe/v4/manga?q=${encodeURIComponent(cleanSearch)}&limit=1`, {
+            signal: AbortSignal.timeout(3500)
+          });
+          if (jikanRes.ok) {
+            const jikanData = await jikanRes.json();
+            const syn = jikanData?.data?.[0]?.synopsis;
+            if (syn && syn.trim().length > 30) return syn.trim().slice(0, 1200);
+          }
+        } catch (_) {}
+
+        return '';
+      };
+
+      // ด่านสำรองยิงตรงจากเบราว์เซอร์ผู้ใช้ไปยัง Free AI (ไม่ต้องใช้ API Key และใช้โควตา Cloudflare = 0)
+      const generateSummaryDirectFromBrowser = async (title, synopsisText, genreText) => {
+        const sysPrompt = `คุณคือผู้เชี่ยวชาญการ์ตูน มังงะ และมังฮวาเกาหลีตัวจริง สรุปเนื้อเรื่องย่อของเรื่องนี้ให้กระชับ ดึงดูด ได้ใจความจริง ตรงตามแนวเรื่องจริง
+ความยาว 3 บรรทัดพอดี (แต่ละบรรทัดสั้นกระชับ 1-2 ประโยค และขึ้นต้นด้วย bullet •)
+• บรรทัด 1: แนะนำตัวเอก ภูมิหลัง และจุดเริ่มต้นของเรื่องราวหรือความสัมพันธ์
+• บรรทัด 2: เหตุการณ์สำคัญ ความลับ ปัญหา หรือความขัดแย้งหลักที่เกิดขึ้น
+• บรรทัด 3: จุดเปลี่ยน เป้าหมาย หรือความน่าติดตามที่ทำให้เรื่องนี้เข้มข้นขึ้น
+พร้อมแท็กอารมณ์เรื่อง (Mood Tags) 3 แท็ก และคำโปรย 1 ประโยค (oneLiner)
+ข้อห้ามเด็ดขาด: ห้ามแต่งเป็นแนวต่อสู้ผจญภัยหากชื่อเรื่องหรือหมวดหมู่เป็นแนวโรแมนติก/ดราม่า/ชีวิตมหาลัย/ผู้ใหญ่ ต้องสรุปให้ตรงกับธีมของเรื่องเท่านั้น
+ตอบเป็น JSON เท่านั้นในรูปแบบ:
+{"summary":"• บรรทัดที่ 1...\\n• บรรทัดที่ 2...\\n• บรรทัดที่ 3...","moodTags":["#แท็ก1","#แท็ก2","#แท็ก3"],"oneLiner":"คำโปรย 1 ประโยค"}`;
+
+        const usrPrompt = `มังงะ/มังฮวา: "${title}"${genreText ? `\nประเภท/หมวดหมู่: ${genreText}` : ''}${synopsisText ? `\nเนื้อเรื่องย่ออ้างอิง:\n${synopsisText}` : ''}`;
+        const r = await fetch('https://text.pollinations.ai/openai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'openai',
+            messages: [
+              { role: 'system', content: sysPrompt },
+              { role: 'user', content: usrPrompt }
+            ]
+          })
+        });
+        if (!r.ok) throw new Error(`Free AI HTTP ${r.status}`);
+        const j = await r.json();
+        const aiText = (j.choices?.[0]?.message?.content || '').trim();
+        if (!aiText) throw new Error('Empty AI response');
+
+        try {
+          const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (parsed && parsed.summary) return parsed;
+          }
+        } catch (_) {}
+
+        const summaryMatch = aiText.match(/"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)/);
+        if (summaryMatch) {
+          return {
+            summary: summaryMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').trim(),
+            moodTags: ['#มังงะน่าอ่าน', '#เรื่องเด็ด', '#น่าติดตาม'],
+            oneLiner: `เรื่องราวเข้มข้นของ ${title}`
+          };
+        }
+
+        const bullets = aiText.split('\n').map(l => l.trim()).filter(l => l.startsWith('•'));
+        if (bullets.length > 0) {
+          return {
+            summary: bullets.slice(0, 3).join('\n'),
+            moodTags: ['#มังงะน่าอ่าน', '#เรื่องเด็ด', '#น่าติดตาม'],
+            oneLiner: `เรื่องราวเข้มข้นของ ${title}`
+          };
+        }
+        throw new Error('Invalid summary format');
+      };
 
       const fetchFreshSummary = async (isForceRefresh = false) => {
         if (summaryBody) {
@@ -8561,24 +8695,42 @@ async function openChapterModal(manga, activeSource = null) {
         }
         if (summaryMoodTags) summaryMoodTags.innerHTML = '';
 
+        const genreContext = buildMangaGenreContext();
+        if (!manga.synopsis || manga.synopsis.length < 25) {
+          const publicSyn = await lookupPublicSynopsisDirect(manga.title);
+          if (publicSyn) manga.synopsis = publicSyn;
+        }
+
         try {
           const queryParams = new URLSearchParams({
             title: manga.title || '',
-            synopsis: manga.synopsis || ''
+            synopsis: manga.synopsis || '',
+            genre: genreContext
           });
           if (isForceRefresh) queryParams.set('refresh', '1');
           const resp = await fetch(`/api/ai/summary?${queryParams.toString()}`);
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          const data = await resp.json();
-          if (data.success && data.summary) {
-            try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (err) {}
-            renderSummaryData(data);
-          } else {
-            throw new Error(data.error || 'ไม่สามารถสรุปเนื้อหาได้');
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.success && data.summary && !isFakeSummary(data.summary)) {
+              try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (err) {}
+              renderSummaryData(data);
+              return;
+            }
           }
+          throw new Error('Switching to direct browser AI');
         } catch (err) {
-          if (summaryBody) {
-            summaryBody.innerHTML = `<div style="color: #f87171; padding: 6px 0;">⚠️ ไม่สามารถสรุปเรื่องย่อได้ในขณะนี้ (${escapeHtmlText(err.message)})</div>`;
+          // สลับมายิงตรงจากเบราว์เซอร์ของผู้ใช้หา Free AI ทันที (ไม่ใช้โควตา Cloudflare และทำงานได้แม้ Tenixe หยุดให้บริการ)
+          try {
+            const directData = await generateSummaryDirectFromBrowser(manga.title || '', manga.synopsis || '', genreContext);
+            if (directData && directData.summary && !isFakeSummary(directData.summary)) {
+              try { localStorage.setItem(cacheKey, JSON.stringify(directData)); } catch (_) {}
+              renderSummaryData(directData);
+              return;
+            }
+          } catch (directErr) {
+            if (summaryBody) {
+              summaryBody.innerHTML = `<div style="color: #f87171; padding: 6px 0;">⚠️ ไม่สามารถสรุปเรื่องย่อได้ในขณะนี้ กรุณากดลองใหม่อีกครั้ง</div>`;
+            }
           }
         }
       };
@@ -8605,7 +8757,7 @@ async function openChapterModal(manga, activeSource = null) {
         }
       };
 
-      if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ') && !cached.summary.includes('• เรื่องราวการเดินทาง') && !cached.summary.includes('• เรื่องย่อของ "')) {
+      if (cached && cached.summary && !isFakeSummary(cached.summary)) {
         renderSummaryData(cached);
         return;
       }
