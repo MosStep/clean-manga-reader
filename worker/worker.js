@@ -204,12 +204,12 @@ export default {
       (env && env.TENIXE_KEY_3) || 'txc_bd70db10dc2355f995bc3f9ad81558b3'
     ].filter(Boolean);
 
-    const callTenixeChat = async (messages, maxTokens = 600) => {
+    const callTenixeChat = async (messages, maxTokens = 1200) => {
       const models = ['claude-haiku-5-5', 'deepseek-v4-flash', 'nemotron-3-ultra'];
       for (const model of models) {
         for (const key of TENIXE_KEYS) {
           try {
-            const reqMaxTokens = model.includes('deepseek') ? Math.max(maxTokens, 3500) : maxTokens;
+            const reqMaxTokens = model.includes('deepseek') ? Math.max(maxTokens, 16000) : Math.max(maxTokens, 1200);
             const resp = await fetch('https://api.tenixe.com/api/v1/chat/completions', {
               method: 'POST',
               headers: {
@@ -225,15 +225,16 @@ export default {
             });
 
             if (!resp.ok) {
-              if (resp.status === 429 || resp.status >= 500) break;
+              if (model === 'nemotron-3-ultra' && (resp.status === 429 || resp.status >= 500)) break;
               continue;
             }
 
             const raw = await resp.text();
-            if (raw.includes('"AI_PROVIDER_RATE_LIMITED"') || raw.includes('"upstream_rate_limited"') || raw.includes('"AI_PROVIDER_UNAVAILABLE"')) {
-              break;
+            if (raw.includes('"AI_PROVIDER_RATE_LIMITED"') || raw.includes('"upstream_rate_limited"')) {
+              if (model === 'nemotron-3-ultra') break;
+              continue;
             }
-            if (raw.includes('"insufficient_quota"')) {
+            if (raw.includes('"insufficient_quota"') || raw.includes('"AI_PROVIDER_UNAVAILABLE"')) {
               continue;
             }
 
@@ -1254,7 +1255,9 @@ Output ONLY valid JSON in format:
       }
 
       const isFakeSummaryText = (txt) => {
-        if (!txt) return true;
+        if (!txt || txt.trim().length < 75) return true;
+        const bulletCount = (txt.match(/•/g) || []).length;
+        if (bulletCount < 2) return true;
         return txt.includes('การเดินทางสุดเข้มข้นของ') ||
                txt.includes('• เรื่องย่อของ "') ||
                txt.includes('• เรื่องราวการเดินทาง') ||
@@ -1265,7 +1268,7 @@ Output ONLY valid JSON in format:
       };
 
       const forceRefresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('refresh') === 'true';
-      const cacheKey = 'ai_summary_v5_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
+      const cacheKey = 'ai_summary_v6_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
 
       // ตรวจสอบ Edge Cache / RAM (ข้ามถ้าสั่ง forceRefresh — ใช้โควตา KV = 0)
       if (!forceRefresh) {
@@ -1356,6 +1359,13 @@ Output ONLY valid JSON in format:
           status: 503,
           headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
         });
+      }
+
+      if (!Array.isArray(parsedResult.moodTags) || parsedResult.moodTags.length === 0) {
+        parsedResult.moodTags = ["#น่าติดตาม", "#เรื่องเด็ด", "#มังงะแนะนำ"];
+      }
+      if (!parsedResult.oneLiner) {
+        parsedResult.oneLiner = `เรื่องราวเข้มข้นชวนติดตามของ ${title}`;
       }
 
       // บันทึกลง Edge Cache + RAM เฉพาะเมื่อได้สรุปจริงเท่านั้น (เก็บไว้ 30 วัน ใช้โควตา KV put = 0)

@@ -67,7 +67,7 @@ function cleanupStaleSummaryCache() {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && (key.startsWith('manga_ai_summary_') || key.startsWith('ai_summary_'))) {
-        if (!key.startsWith('manga_ai_summary_v5_')) {
+        if (!key.startsWith('manga_ai_summary_v6_')) {
           toRemove.push(key);
         } else {
           try {
@@ -8549,7 +8549,7 @@ async function openChapterModal(manga, activeSource = null) {
       btnAiSummary.classList.add('active');
 
       // ปุ่มสรุปเรื่องย่อ 3 บรรทัดด้วย AI (Manga Synopsis & Mood Tags — ไม่ดึงหน้าเว็บผ่าน Cloudflare เพิ่ม และมีระบบยิงตรงจากเบราว์เซอร์สำรองเมื่อ API หลักหยุดให้บริการ)
-      const cacheKey = 'manga_ai_summary_v5_' + encodeURIComponent(manga.title || '');
+      const cacheKey = 'manga_ai_summary_v6_' + encodeURIComponent(manga.title || '');
       let cached = null;
       try {
         const raw = localStorage.getItem(cacheKey);
@@ -8557,7 +8557,8 @@ async function openChapterModal(manga, activeSource = null) {
       } catch (err) {}
 
       const isFakeSummary = (txt) => {
-        if (!txt) return true;
+        if (!txt || txt.trim().length < 75) return true;
+        if ((txt.match(/•/g) || []).length < 2) return true;
         return txt.includes('การเดินทางสุดเข้มข้นของ') ||
                txt.includes('• เรื่องราวการเดินทาง') ||
                txt.includes('• เรื่องย่อของ "') ||
