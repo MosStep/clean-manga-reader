@@ -223,7 +223,7 @@ export default {
                 stream: false,
                 max_tokens: reqMaxTokens
               }),
-              signal: AbortSignal.timeout(7000)
+              signal: AbortSignal.timeout(15000)
             });
 
             if (!resp.ok) {
@@ -1299,7 +1299,7 @@ Output ONLY valid JSON in format:
       const aiText = await callTenixeChat([
         { role: 'system', content: summaryPrompt },
         { role: 'user', content: promptUserContent }
-      ], 1200);
+      ], 650);
 
       let parsedResult = null;
       if (aiText) {
