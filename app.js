@@ -160,7 +160,7 @@ function initOfflineAppSupport() {
 
 const MAX_PARALLEL_SOURCE_FETCHES = 10;
 const INITIAL_SOURCE_PAGES = 1;
-const AUTO_FEED_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const AUTO_FEED_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
 const AUTO_FEED_REFRESH_STAMP = 'clean_manga_auto_feed_refresh_at_v1';
 
 async function mapSourceQueue(sources, task, onComplete = null) {
@@ -4605,9 +4605,7 @@ function initAutomaticFeedRefresh() {
   window.__automaticFeedRefreshBound = true;
 
   try {
-    if (!sessionStorage.getItem(AUTO_FEED_REFRESH_STAMP)) {
-      sessionStorage.setItem(AUTO_FEED_REFRESH_STAMP, String(Date.now()));
-    }
+    sessionStorage.setItem(AUTO_FEED_REFRESH_STAMP, String(Date.now()));
   } catch (e) {}
 
   let refreshing = false;
@@ -4632,9 +4630,11 @@ function initAutomaticFeedRefresh() {
         saveCachedMangaFeed();
         updateSourceCounts();
         updateHistoryAndFavCounts();
-        if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery) applyFilters();
+        if (!currentSearchQuery) {
+          applyFilters({ preserveDisplayCount: true });
+        }
       }
-      if (badge && text) text.textContent = `✓ ตรวจอัปเดตล่าสุดแล้ว (${latest.length} รายการ)`;
+      if (badge && text) text.textContent = `✓ อัปเดตเรื่องพึ่งอัพล่าสุดแล้ว (${latest.length} รายการ)`;
     } catch (error) {
       console.warn('Automatic manga feed refresh failed:', error);
       if (badge && text) text.textContent = 'ตรวจอัปเดตไม่สำเร็จ จะลองใหม่รอบถัดไป';
@@ -4645,7 +4645,8 @@ function initAutomaticFeedRefresh() {
   };
 
   document.addEventListener('visibilitychange', refreshIfDue);
-  window.setInterval(refreshIfDue, 2 * 60 * 1000);
+  window.addEventListener('focus', refreshIfDue);
+  window.setInterval(refreshIfDue, 60 * 1000);
 }
 
 // ==========================================================
@@ -4904,7 +4905,7 @@ async function ensureRomanceFeedLoaded() {
 }
 
 // 10. ระบบกรองข้อมูล (Filter Engine)
-function applyFilters() {
+function applyFilters(options = {}) {
   const historyToolbar = document.getElementById('historyToolbar');
   if (historyToolbar) {
     historyToolbar.style.display = currentTagFilter === 'history' ? 'flex' : 'none';
@@ -5040,7 +5041,9 @@ function applyFilters() {
     });
   }
 
-  currentDisplayCount = 40;
+  if (!options || !options.preserveDisplayCount || currentDisplayCount < 40) {
+    currentDisplayCount = 40;
+  }
   renderMangaCards();
   updateSourceCounts();
   updateHistoryAndFavCounts();
@@ -6848,8 +6851,8 @@ async function initAggregatorPage() {
         } else if (isUiInitialized) {
           updateSourceCounts();
           updateSourceHealthUi();
-          if (currentSourceFilter === source.id) {
-            applyFilters();
+          if (currentSourceFilter === source.id || (!currentSearchQuery && (loadedSourceMap.size % 5 === 0 || completedSources >= prioritySources.length))) {
+            applyFilters({ preserveDisplayCount: true });
           }
         }
       } else {
@@ -6884,8 +6887,8 @@ async function initAggregatorPage() {
       setupHeroSpotlight(allMangaList);
       updateSourceCounts();
       updateSourceHealthUi();
-      if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) {
-        applyFilters();
+      if (!currentSearchQuery) {
+        applyFilters({ preserveDisplayCount: true });
       }
     };
     const loadAdditionalPages = async sources => {
@@ -6964,8 +6967,8 @@ async function initAggregatorPage() {
             } else {
               updateSourceCounts();
               updateSourceHealthUi();
-              if (currentTagFilter === 'all' && currentSourceFilter === 'all' && !currentSearchQuery && window.scrollY < 400) {
-                applyFilters();
+              if (!currentSearchQuery) {
+                applyFilters({ preserveDisplayCount: true });
               }
             }
           } else {
@@ -8384,7 +8387,52 @@ async function openChapterModal(manga, activeSource = null) {
   const btnApplyCustomLink = document.getElementById('btnApplyCustomLink');
 
   // ล็อกการเลื่อนของพื้นหลัง และผูก History State สำหรับปุ่มย้อนกลับของอุปกรณ์
+  if (!document.body.classList.contains('modal-open')) {
+    window._modalLockedScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+    document.body.style.top = `-${window._modalLockedScrollY}px`;
+  }
+  document.documentElement.classList.add('modal-open');
   document.body.classList.add('modal-open');
+  if (modal && !modal.dataset.touchLockBound) {
+    modal.dataset.touchLockBound = '1';
+    let modalTouchStartY = 0;
+    let modalTouchStartX = 0;
+    modal.addEventListener('touchstart', (e) => {
+      if (e.touches && e.touches.length === 1) {
+        modalTouchStartY = e.touches[0].clientY;
+        modalTouchStartX = e.touches[0].clientX;
+      }
+    }, { passive: true });
+    modal.addEventListener('touchmove', (e) => {
+      if (!e.touches || e.touches.length !== 1) return;
+      const target = e.target;
+      const deltaY = e.touches[0].clientY - modalTouchStartY;
+      const deltaX = e.touches[0].clientX - modalTouchStartX;
+
+      const hScrollEl = target && target.closest ? target.closest('.source-pills, .modal-meta-row') : null;
+      if (hScrollEl && Math.abs(deltaX) > Math.abs(deltaY)) {
+        return;
+      }
+
+      const bodyEl = target && target.closest ? target.closest('.modal-body') : null;
+      if (!bodyEl) {
+        if (e.cancelable) e.preventDefault();
+        return;
+      }
+
+      const canScrollVertical = bodyEl.scrollHeight > bodyEl.clientHeight + 1;
+      if (!canScrollVertical) {
+        if (e.cancelable) e.preventDefault();
+        return;
+      }
+
+      const atTop = bodyEl.scrollTop <= 0;
+      const atBottom = bodyEl.scrollTop + bodyEl.clientHeight >= bodyEl.scrollHeight - 1;
+      if ((atTop && deltaY > 0) || (atBottom && deltaY < 0)) {
+        if (e.cancelable) e.preventDefault();
+      }
+    }, { passive: false });
+  }
   if (!window.history.state || !window.history.state.modalOpen) {
     try {
       window.history.pushState({ modalOpen: true }, '');
@@ -8495,7 +8543,8 @@ async function openChapterModal(manga, activeSource = null) {
     sessionStorage.setItem('currentManga', JSON.stringify(manga));
     sessionStorage.setItem('currentSource', JSON.stringify(currentSource));
     if (!window.location.pathname.includes('reader.html')) {
-      sessionStorage.setItem('scrollPos', String(window.scrollY));
+      const savedY = typeof window._modalLockedScrollY === 'number' ? window._modalLockedScrollY : window.scrollY;
+      sessionStorage.setItem('scrollPos', String(savedY));
     }
   } catch (e) {}
 
@@ -9430,8 +9479,9 @@ async function openChapterModal(manga, activeSource = null) {
     if (currentReadingChapterUrl) {
       setTimeout(() => {
         const cur = chapterList.querySelector('.chapter-item.current-chapter');
-        if (cur) {
-          cur.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        if (cur && modalBody) {
+          const targetTop = Math.max(0, cur.offsetTop - (modalBody.clientHeight / 2) + (cur.clientHeight / 2));
+          modalBody.scrollTo({ top: targetTop, behavior: 'smooth' });
         }
       }, 100);
     }
@@ -9455,7 +9505,15 @@ function closeChapterModal(shouldBackHistory = true) {
   if (summaryBox) summaryBox.style.display = 'none';
   const btnAiSummary = document.getElementById('btnModalAiSummary');
   if (btnAiSummary) btnAiSummary.classList.remove('active');
+  const wasLocked = document.body.classList.contains('modal-open');
+  const restoreY = typeof window._modalLockedScrollY === 'number' ? window._modalLockedScrollY : null;
+  document.documentElement.classList.remove('modal-open');
   document.body.classList.remove('modal-open');
+  document.body.style.top = '';
+  if (wasLocked && restoreY !== null) {
+    window._modalLockedScrollY = null;
+    window.scrollTo({ top: restoreY, behavior: 'instant' });
+  }
   const scrollControls = document.getElementById('modalScrollControls');
   if (scrollControls) scrollControls.style.display = 'none';
   if (!window.location.pathname.includes('reader.html')) {
@@ -10564,12 +10622,15 @@ async function initReaderPage() {
 
       const rect = target.getBoundingClientRect();
       const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+      const effectiveScrollY = (document.body.classList.contains('modal-open') && typeof window._modalLockedScrollY === 'number')
+        ? window._modalLockedScrollY
+        : window.scrollY;
       curPageIndex = Math.max(0, Number(target.dataset.readerPage) || 0);
       return {
         mode: 'scroll',
         pageIndex: curPageIndex,
         pageOffset: Math.min(1, Math.max(0, (anchorY - rect.top) / Math.max(1, rect.height))),
-        scrollRatio: Math.min(1, Math.max(0, window.scrollY / maxScroll))
+        scrollRatio: Math.min(1, Math.max(0, effectiveScrollY / maxScroll))
       };
     }
 
@@ -10651,6 +10712,7 @@ async function initReaderPage() {
 
     const scrollThreshold = 14;
     window.addEventListener('scroll', () => {
+      if (document.body.classList.contains('modal-open')) return;
       const currentScrollY = window.scrollY || 0;
       if (currentMode === 'scroll') {
         scheduleReadPositionSave();

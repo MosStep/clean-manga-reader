@@ -1475,6 +1475,11 @@ Output ONLY valid JSON in format:
         }
       };
 
+      if (!isLikelyImageUrl) {
+        fetchOptions.cache = "no-store";
+        fetchOptions.cf = { cacheTtl: 0, cacheEverything: false };
+      }
+
       const xRequestedWith = request.headers.get("x-requested-with");
       if (xRequestedWith) {
         fetchOptions.headers["X-Requested-With"] = xRequestedWith;
