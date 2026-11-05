@@ -8656,6 +8656,7 @@ async function openChapterModal(manga, activeSource = null) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: 'openai',
+            reasoning_effort: 'low',
             messages: [
               { role: 'system', content: sysPrompt },
               { role: 'user', content: usrPrompt }
@@ -8714,9 +8715,7 @@ async function openChapterModal(manga, activeSource = null) {
             genre: genreContext
           });
           if (isForceRefresh) queryParams.set('refresh', '1');
-          const resp = await fetch(`/api/ai/summary?${queryParams.toString()}`, {
-            signal: AbortSignal.timeout(18000)
-          });
+          const resp = await fetch(`/api/ai/summary?${queryParams.toString()}`);
           if (resp.ok) {
             const data = await resp.json();
             if (data.success && data.summary && !isFakeSummary(data.summary)) {

@@ -205,7 +205,7 @@ export default {
     ].filter(Boolean);
 
     const callTenixeChat = async (messages, maxTokens = 600) => {
-      const models = ['claude-haiku-5-5', 'deepseek-v4-flash'];
+      const models = ['claude-haiku-5-5', 'deepseek-v4-flash', 'nemotron-3-ultra'];
       for (const model of models) {
         for (const key of TENIXE_KEYS) {
           try {
@@ -214,29 +214,27 @@ export default {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                'Authorization': `Bearer ${key}`
               },
               body: JSON.stringify({
                 model,
                 messages,
                 stream: false,
                 max_tokens: reqMaxTokens
-              }),
-              signal: AbortSignal.timeout(15000)
+              })
             });
 
             if (!resp.ok) {
-              if (resp.status === 429 || resp.status >= 500) break; // โมเดลต้นทางคิวเต็มหรือล่ม ให้ข้ามไปโมเดลถัดไปทันที
+              if (resp.status === 429 || resp.status >= 500) break;
               continue;
             }
 
             const raw = await resp.text();
             if (raw.includes('"AI_PROVIDER_RATE_LIMITED"') || raw.includes('"upstream_rate_limited"') || raw.includes('"AI_PROVIDER_UNAVAILABLE"')) {
-              break; // โมเดลต้นทางล่ม ข้ามไปโมเดลถัดไปทันที
+              break;
             }
             if (raw.includes('"insufficient_quota"')) {
-              continue; // คีย์นี้โควตาหมด ลองคีย์ถัดไป
+              continue;
             }
 
             try {
@@ -264,7 +262,7 @@ export default {
               if (full.trim()) return full.trim();
             }
           } catch (e) {
-            break; // Timeout หรือเครือข่ายผิดพลาด ข้ามไปโมเดลถัดไปทันที
+            console.warn(`Tenixe chat error with ${model}:`, e);
           }
         }
       }
@@ -273,15 +271,12 @@ export default {
       try {
         const freeResp = await fetch('https://text.pollinations.ai/openai', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: 'openai',
+            reasoning_effort: 'low',
             messages
-          }),
-          signal: AbortSignal.timeout(10000)
+          })
         });
         if (freeResp.ok) {
           const freeJson = await freeResp.json();
@@ -1299,7 +1294,7 @@ Output ONLY valid JSON in format:
       const aiText = await callTenixeChat([
         { role: 'system', content: summaryPrompt },
         { role: 'user', content: promptUserContent }
-      ], 650);
+      ], 1000);
 
       let parsedResult = null;
       if (aiText) {
