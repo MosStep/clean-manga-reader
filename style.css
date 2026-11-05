@@ -3505,3 +3505,134 @@ body.modal-open {
   font-size: 0.85rem;
   padding: 6px 0;
 }
+
+/* =========================================================
+   ป้ายแจ้งเตือนตอนใหม่ (🔥 ตอนใหม่) & ชั้นหนังสือในหน้าเรื่องโปรด
+   ========================================================= */
+.manga-badge-new-ep {
+  background: linear-gradient(135deg, #ff3d00, #ff9100);
+  color: #fff;
+  font-size: 0.66rem;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(255, 61, 0, 0.55);
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  animation: newEpPulse 2s infinite ease-in-out;
+}
+
+@keyframes newEpPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 2px 8px rgba(255, 61, 0, 0.55); }
+  50% { transform: scale(1.05); box-shadow: 0 2px 12px rgba(255, 145, 0, 0.85); }
+}
+
+.favorites-shelf-toolbar {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fav-shelf-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.fav-shelf-chip {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #cbd5e1;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+
+.fav-shelf-chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.fav-shelf-chip.active {
+  background: linear-gradient(135deg, rgba(0, 230, 118, 0.22), rgba(0, 176, 255, 0.22));
+  border-color: var(--primary);
+  color: var(--primary);
+  box-shadow: 0 0 10px rgba(0, 230, 118, 0.2);
+}
+
+.fav-shelf-chip[data-shelf="new_ep"].active {
+  background: linear-gradient(135deg, rgba(255, 61, 0, 0.25), rgba(255, 145, 0, 0.25));
+  border-color: #ff6d00;
+  color: #ffab40;
+}
+
+.modal-fav-status-select {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(250, 204, 21, 0.45);
+  color: #fde047;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  outline: none;
+}
+
+.modal-fav-status-select option {
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.fav-card-meta-row {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fav-status-cycle-pill {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #e2e8f0;
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.fav-status-cycle-pill.status-reading {
+  background: rgba(0, 230, 118, 0.12);
+  border-color: rgba(0, 230, 118, 0.35);
+  color: #69f0ae;
+}
+
+.fav-status-cycle-pill.status-on_hold {
+  background: rgba(255, 145, 0, 0.14);
+  border-color: rgba(255, 145, 0, 0.4);
+  color: #ffab40;
+}
+
+.fav-status-cycle-pill.status-completed {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #7dd3fc;
+}
+
+.fav-read-ep-hint {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  white-space: nowrap;
+}

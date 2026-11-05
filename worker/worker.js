@@ -19,6 +19,48 @@ let chatMessages = [
   }
 ];
 let aiChatActiveUntil = 0; // เก็บเวลาหมดอายุของเซสชันคุยเล่นกับ น้องมังงะ AI ✨
+const memoryAiCache = new Map(); // แคชในหน่วยความจำของ Worker ลดการใช้ KV put เป็น 0 สำหรับ AI
+const memorySyncCache = new Map(); // แคชข้อมูลซิงก์ล่าสุดในหน่วยความจำ ป้องกันการเขียน KV ซ้ำซ้อน
+
+async function getEdgeCacheJson(cacheKey) {
+  if (memoryAiCache.has(cacheKey)) {
+    const entry = memoryAiCache.get(cacheKey);
+    if (entry && entry.expiresAt > Date.now()) return entry.value;
+    memoryAiCache.delete(cacheKey);
+  }
+  try {
+    if (typeof caches !== 'undefined' && caches.default) {
+      const req = new Request(`https://edge-cache.cleanmanga.internal/${encodeURIComponent(cacheKey)}`);
+      const res = await caches.default.match(req);
+      if (res && res.ok) {
+        const data = await res.json();
+        memoryAiCache.set(cacheKey, { value: data, expiresAt: Date.now() + 3600 * 1000 });
+        return data;
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+async function putEdgeCacheJson(cacheKey, value, ttlSeconds = 86400) {
+  memoryAiCache.set(cacheKey, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+  if (memoryAiCache.size > 300) {
+    const firstKey = memoryAiCache.keys().next().value;
+    if (firstKey) memoryAiCache.delete(firstKey);
+  }
+  try {
+    if (typeof caches !== 'undefined' && caches.default) {
+      const req = new Request(`https://edge-cache.cleanmanga.internal/${encodeURIComponent(cacheKey)}`);
+      const res = new Response(JSON.stringify(value), {
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": `public, max-age=${ttlSeconds}`
+        }
+      });
+      await caches.default.put(req, res);
+    }
+  } catch (e) {}
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -321,7 +363,46 @@ export default {
 
           // กรองไม่เกิน 2 เดือน และจำกัดสูงสุด 50 ข้อความ
           let updatedMessages = filterValidMessages([newMsg, ...currentList]);
+
+          // ตรวจสอบการเรียกหรือเซสชันคุยเล่นกับ น้องมังงะ AI ✨ (ใช้ RAM + Edge Cache ไม่เปลือง KV put)
+          const isBotNick = nickname.includes('น้องมังงะ') || nickname.includes('Bot') || nickname.includes('AI');
+          const summonPattern = /(?:@ai|@บอท|\/ai|\bai\b|น้องมังงะ|บอท\s|เรียก\s*ai)/i;
+          const isSummon = summonPattern.test(text);
+          const stopPattern = /^(?:บาย|บ๊าย|ไปพัก|ไปนอน|เงียบก่อน|พอแล้ว|stop|\/stop|\/bye)/i;
+          const isStop = stopPattern.test(text.trim());
+
+          let now = Date.now();
+          if (aiChatActiveUntil <= now) {
+            const cachedUntil = await getEdgeCacheJson('ai_chat_active_until');
+            if (cachedUntil && Number(cachedUntil) > now) {
+              aiChatActiveUntil = Number(cachedUntil);
+            }
+          }
+          const isAiSessionActive = aiChatActiveUntil > now;
+
+          let needAiReply = false;
+          if (isStop && (isSummon || isAiSessionActive)) {
+            // สั่งให้น้องมังงะหยุดคุย / ไปพักผ่อน
+            aiChatActiveUntil = 0;
+            await putEdgeCacheJson('ai_chat_active_until', 0, 60);
+            const byeMsg = {
+              id: 'ai_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+              nickname: 'น้องมังงะ AI ✨',
+              text: 'โอเคเลยคับ ไว้เจอกันใหม่นะทุกคน พักผ่อนเยอะๆ น้า! 😴✨',
+              mangaTitle: '',
+              mangaUrl: '',
+              time: Date.now()
+            };
+            updatedMessages = filterValidMessages([byeMsg, ...updatedMessages]);
+          } else if (!isBotNick && (isSummon || isAiSessionActive)) {
+            needAiReply = true;
+            const newActiveUntil = Date.now() + 150000;
+            aiChatActiveUntil = newActiveUntil;
+            await putEdgeCacheJson('ai_chat_active_until', newActiveUntil, 300);
+          }
+
           chatMessages = updatedMessages;
+          await putEdgeCacheJson('chat_messages_edge', updatedMessages, 86400);
 
           let isKvActive = false;
           if (env && env.CHAT_KV) {
@@ -332,64 +413,6 @@ export default {
               isKvActive = true;
             } catch (err) {
               console.warn("KV write error:", err);
-            }
-          }
-
-          // ตรวจสอบการเรียกหรือเซสชันคุยเล่นกับ น้องมังงะ AI ✨
-          const isBotNick = nickname.includes('น้องมังงะ') || nickname.includes('Bot') || nickname.includes('AI');
-          const summonPattern = /(?:@ai|@บอท|\/ai|\bai\b|น้องมังงะ|บอท\s|เรียก\s*ai)/i;
-          const isSummon = summonPattern.test(text);
-          const stopPattern = /^(?:บาย|บ๊าย|ไปพัก|ไปนอน|เงียบก่อน|พอแล้ว|stop|\/stop|\/bye)/i;
-          const isStop = stopPattern.test(text.trim());
-
-          let now = Date.now();
-          let isAiSessionActive = false;
-          if (env && env.CHAT_KV) {
-            try {
-              const kvActiveUntil = await env.CHAT_KV.get('ai_chat_active_until');
-              if (kvActiveUntil && Number(kvActiveUntil) > now) {
-                isAiSessionActive = true;
-              }
-            } catch (e) {}
-          }
-          if (!isAiSessionActive && aiChatActiveUntil > now) {
-            isAiSessionActive = true;
-          }
-
-          let needAiReply = false;
-          if (isStop && (isSummon || isAiSessionActive)) {
-            // สั่งให้น้องมังงะหยุดคุย / ไปพักผ่อน
-            aiChatActiveUntil = 0;
-            if (env && env.CHAT_KV) {
-              try { await env.CHAT_KV.delete('ai_chat_active_until'); } catch (e) {}
-            }
-            const byeMsg = {
-              id: 'ai_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-              nickname: 'น้องมังงะ AI ✨',
-              text: 'โอเคเลยคับ ไว้เจอกันใหม่นะทุกคน พักผ่อนเยอะๆ น้า! 😴✨',
-              mangaTitle: '',
-              mangaUrl: '',
-              time: Date.now()
-            };
-            updatedMessages = filterValidMessages([byeMsg, ...updatedMessages]);
-            chatMessages = updatedMessages;
-            if (env && env.CHAT_KV) {
-              try {
-                await env.CHAT_KV.put('chat_messages', JSON.stringify(updatedMessages), {
-                  expirationTtl: TWO_MONTHS_SECONDS
-                });
-              } catch (e) {}
-            }
-          } else if (!isBotNick && (isSummon || isAiSessionActive)) {
-            needAiReply = true;
-            const newActiveUntil = Date.now() + 150000;
-            aiChatActiveUntil = newActiveUntil;
-            if (env && env.CHAT_KV) {
-              try {
-                await env.CHAT_KV.put('ai_chat_active_until', String(newActiveUntil), {
-                  expirationTtl: 300
-                });
-              } catch (e) {}
             }
           }
 
@@ -482,6 +505,7 @@ export default {
 
         const updatedMessages = filterValidMessages([botMsg, ...currentList]);
         chatMessages = updatedMessages;
+        await putEdgeCacheJson('chat_messages_edge', updatedMessages, 86400);
 
         if (env && env.CHAT_KV) {
           try {
@@ -615,8 +639,20 @@ export default {
           map.set(itemKey, item);
         } else {
           const existing = map.get(itemKey);
-          if (itemSavedAt >= (existing.savedAt || 0)) {
-            map.set(itemKey, item);
+          const itemTouch = Math.max(Number(item.statusUpdatedAt || 0), itemSavedAt);
+          const existTouch = Math.max(Number(existing.statusUpdatedAt || 0), existing.savedAt || 0);
+          if (itemTouch >= existTouch) {
+            map.set(itemKey, {
+              ...existing,
+              ...item,
+              savedAt: Math.max(existing.savedAt || 0, itemSavedAt)
+            });
+          } else {
+            map.set(itemKey, {
+              ...item,
+              ...existing,
+              savedAt: Math.max(existing.savedAt || 0, itemSavedAt)
+            });
           }
         }
       }
@@ -727,6 +763,33 @@ export default {
       }
     }
 
+    // สร้างลายเซ็นเปรียบเทียบข้อมูลซิงก์ เพื่อป้องกันการเขียน KV ซ้ำซ้อนเมื่อข้อมูลหลักไม่เปลี่ยน
+    const computeSyncDigest = (d) => {
+      if (!d) return '';
+      return JSON.stringify({
+        n: (d.nickname || '').trim(),
+        f: (Array.isArray(d.favorites) ? d.favorites : []).map(x => [
+          x.title || '',
+          x.mangaUrl || '',
+          x.savedAt || 0,
+          x.readingStatus || 'reading',
+          x.statusUpdatedAt || 0
+        ]),
+        h: (Array.isArray(d.history) ? d.history : []).map(x => [
+          x.title || '',
+          x.mangaUrl || '',
+          x.lastChapterUrl || '',
+          x.lastChapterTitle || '',
+          Array.isArray(x.readChapters) ? x.readChapters.length : 0,
+          x.lastReadPosition ? `${x.lastReadPosition.chapterUrl || ''}:${x.lastReadPosition.pageIndex || 0}` : ''
+        ]),
+        df: d.deletedFavorites || {},
+        dh: d.deletedHistory || {},
+        hc: Number(d.historyClearedAt || 0),
+        sp: (Array.isArray(d.sourceProfiles) ? d.sourceProfiles : []).map(p => [p.id, p.updatedAt || 0, p.status || ''])
+      });
+    };
+
     // 2.3 ดึงข้อมูล Sync ของคีย์นั้น
     if (url.pathname === '/api/sync/data' && request.method === 'GET') {
       const key = (url.searchParams.get('key') || '').trim().toUpperCase();
@@ -748,26 +811,34 @@ export default {
         sourceSnapshots: []
       };
 
+      let rawStored = memorySyncCache.get(key) || await getEdgeCacheJson(`sync_fallback_${key}`);
+
       if (env && env.CHAT_KV) {
         try {
-          const stored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
-          if (stored) {
-            const delFavs = (typeof stored.deletedFavorites === 'object' && stored.deletedFavorites) ? stored.deletedFavorites : {};
-            const delHist = (typeof stored.deletedHistory === 'object' && stored.deletedHistory) ? stored.deletedHistory : {};
-            const clearedAt = Number(stored.historyClearedAt || 0);
-
-            cloudData = {
-              nickname: (stored.nickname || '').trim(),
-              favorites: Array.isArray(stored.favorites) ? mergeFavoritesList(stored.favorites, [], delFavs) : [],
-              history: Array.isArray(stored.history) ? mergeHistoryList(stored.history, [], delHist, clearedAt) : [],
-              deletedFavorites: delFavs,
-              deletedHistory: delHist,
-              historyClearedAt: clearedAt,
-              sourceProfiles: sanitizeSourceProfiles(stored.sourceProfiles),
-              sourceSnapshots: sanitizeSourceSnapshots(stored.sourceSnapshots)
-            };
+          const kvStored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
+          if (kvStored) {
+            if (!rawStored || (Number(kvStored.lastSyncedAt || 0) >= Number(rawStored.lastSyncedAt || 0))) {
+              rawStored = kvStored;
+            }
           }
         } catch (e) {}
+      }
+
+      if (rawStored) {
+        const delFavs = (typeof rawStored.deletedFavorites === 'object' && rawStored.deletedFavorites) ? rawStored.deletedFavorites : {};
+        const delHist = (typeof rawStored.deletedHistory === 'object' && rawStored.deletedHistory) ? rawStored.deletedHistory : {};
+        const clearedAt = Number(rawStored.historyClearedAt || 0);
+
+        cloudData = {
+          nickname: (rawStored.nickname || '').trim(),
+          favorites: Array.isArray(rawStored.favorites) ? mergeFavoritesList(rawStored.favorites, [], delFavs) : [],
+          history: Array.isArray(rawStored.history) ? mergeHistoryList(rawStored.history, [], delHist, clearedAt) : [],
+          deletedFavorites: delFavs,
+          deletedHistory: delHist,
+          historyClearedAt: clearedAt,
+          sourceProfiles: sanitizeSourceProfiles(rawStored.sourceProfiles),
+          sourceSnapshots: sanitizeSourceSnapshots(rawStored.sourceSnapshots)
+        };
       }
 
       return new Response(JSON.stringify({ success: true, data: cloudData }), {
@@ -775,7 +846,7 @@ export default {
       });
     }
 
-    // 2.4 บันทึกและ Smart Merge ข้อมูลข้ามอุปกรณ์
+    // 2.4 บันทึกและ Smart Merge ข้อมูลข้ามอุปกรณ์ (ประหยัด KV put สูงสุด: เขียนเฉพาะเมื่อข้อมูลเปลี่ยนจริง)
     if (url.pathname === '/api/sync/data' && request.method === 'POST') {
       try {
         const payload = await request.json();
@@ -798,23 +869,32 @@ export default {
           sourceSnapshots: []
         };
 
+        let rawStored = memorySyncCache.get(key) || await getEdgeCacheJson(`sync_fallback_${key}`);
         if (env && env.CHAT_KV) {
           try {
-            const stored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
-            if (stored) {
-              existingData = {
-                nickname: (stored.nickname || '').trim(),
-                favorites: Array.isArray(stored.favorites) ? stored.favorites : [],
-                history: Array.isArray(stored.history) ? stored.history : [],
-                deletedFavorites: (typeof stored.deletedFavorites === 'object' && stored.deletedFavorites) ? stored.deletedFavorites : {},
-                deletedHistory: (typeof stored.deletedHistory === 'object' && stored.deletedHistory) ? stored.deletedHistory : {},
-                historyClearedAt: Number(stored.historyClearedAt || 0),
-                sourceProfiles: sanitizeSourceProfiles(stored.sourceProfiles),
-                sourceSnapshots: sanitizeSourceSnapshots(stored.sourceSnapshots)
-              };
+            const kvStored = await env.CHAT_KV.get(`sync_data_${key}`, { type: 'json' });
+            if (kvStored) {
+              if (!rawStored || (Number(kvStored.lastSyncedAt || 0) >= Number(rawStored.lastSyncedAt || 0))) {
+                rawStored = kvStored;
+              }
             }
           } catch (e) {}
         }
+
+        if (rawStored) {
+          existingData = {
+            nickname: (rawStored.nickname || '').trim(),
+            favorites: Array.isArray(rawStored.favorites) ? rawStored.favorites : [],
+            history: Array.isArray(rawStored.history) ? rawStored.history : [],
+            deletedFavorites: (typeof rawStored.deletedFavorites === 'object' && rawStored.deletedFavorites) ? rawStored.deletedFavorites : {},
+            deletedHistory: (typeof rawStored.deletedHistory === 'object' && rawStored.deletedHistory) ? rawStored.deletedHistory : {},
+            historyClearedAt: Number(rawStored.historyClearedAt || 0),
+            sourceProfiles: sanitizeSourceProfiles(rawStored.sourceProfiles),
+            sourceSnapshots: sanitizeSourceSnapshots(rawStored.sourceSnapshots)
+          };
+        }
+
+        const beforeDigest = computeSyncDigest(existingData);
 
         // ผสานรายการที่ถูกลบ (Tombstones) และเวลาล้างประวัติ
         const mergedDeletedFavs = { ...existingData.deletedFavorites, ...(payload.deletedFavorites || {}) };
@@ -858,13 +938,28 @@ export default {
           lastSyncedAt: Date.now()
         };
 
-        if (env && env.CHAT_KV) {
-          await env.CHAT_KV.put(`sync_data_${key}`, JSON.stringify(resultData), {
-            expirationTtl: TWO_YEARS_SECONDS // 730 วัน (2 ปี)
-          });
+        const afterDigest = computeSyncDigest(resultData);
+
+        // เก็บลงหน่วยความจำและ Edge Cache เสมอ (ฟรี 100% ไม่กินโควตา KV)
+        memorySyncCache.set(key, resultData);
+        if (memorySyncCache.size > 200) {
+          const oldestKey = memorySyncCache.keys().next().value;
+          if (oldestKey) memorySyncCache.delete(oldestKey);
+        }
+        await putEdgeCacheJson(`sync_fallback_${key}`, resultData, 172800);
+
+        // เขียนลง KV เฉพาะเมื่อข้อมูลหลักมีการเปลี่ยนแปลงจากเดิมจริงๆ เท่านั้น!
+        if (env && env.CHAT_KV && beforeDigest !== afterDigest) {
+          try {
+            await env.CHAT_KV.put(`sync_data_${key}`, JSON.stringify(resultData), {
+              expirationTtl: TWO_YEARS_SECONDS // 730 วัน (2 ปี)
+            });
+          } catch (kvErr) {
+            console.warn("Sync KV put skipped (quota or error):", kvErr.message);
+          }
         }
 
-        return new Response(JSON.stringify({ success: true, data: resultData }), {
+        return new Response(JSON.stringify({ success: true, data: resultData, kvWritten: beforeDigest !== afterDigest }), {
           headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" }
         });
       } catch (err) {
@@ -980,16 +1075,12 @@ export default {
 
       const cacheKey = 'ai_search_v3_' + encodeURIComponent(query.toLowerCase().replace(/\s+/g, '_').slice(0, 70));
 
-      // ตรวจสอบ KV Cache (ข้ามถ้าเป็น fallback ว่างเปล่า)
-      if (env && env.CHAT_KV) {
-        try {
-          const cached = await env.CHAT_KV.get(cacheKey, { type: 'json' });
-          if (cached && Array.isArray(cached.keywords) && (Array.isArray(cached.coreKeywords) || Array.isArray(cached.famousTitles) || (cached.genres && cached.genres.length > 0))) {
-            return new Response(JSON.stringify({ success: true, ...cached, fromCache: true }), {
-              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=86400" }
-            });
-          }
-        } catch (e) {}
+      // ตรวจสอบ Edge Cache / RAM (ใช้โควตา KV = 0)
+      const cachedSearch = await getEdgeCacheJson(cacheKey);
+      if (cachedSearch && Array.isArray(cachedSearch.keywords) && (Array.isArray(cachedSearch.coreKeywords) || Array.isArray(cachedSearch.famousTitles) || (cachedSearch.genres && cachedSearch.genres.length > 0))) {
+        return new Response(JSON.stringify({ success: true, ...cachedSearch, fromCache: true }), {
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=86400" }
+        });
       }
 
       const messages = [
@@ -1038,13 +1129,9 @@ Output ONLY valid JSON in format:
         };
       }
 
-      // บันทึกลง KV Cache เฉพาะเมื่อได้ผลลัพธ์ที่มีคุณภาพ ไม่บันทึก fallback ว่างเปล่า
-      if (env && env.CHAT_KV && (parsedResult.coreKeywords?.length > 1 || parsedResult.famousTitles?.length > 0 || parsedResult.genres?.length > 0)) {
-        try {
-          await env.CHAT_KV.put(cacheKey, JSON.stringify(parsedResult), {
-            expirationTtl: 604800 // 7 วัน
-          });
-        } catch (e) {}
+      // บันทึกลง Edge Cache + RAM เฉพาะเมื่อได้ผลลัพธ์ที่มีคุณภาพ (ใช้โควตา KV put = 0)
+      if (parsedResult.coreKeywords?.length > 1 || parsedResult.famousTitles?.length > 0 || parsedResult.genres?.length > 0) {
+        await putEdgeCacheJson(cacheKey, parsedResult, 604800); // 7 วัน
       }
 
       return new Response(JSON.stringify({ success: true, ...parsedResult, fromCache: false }), {
@@ -1072,16 +1159,12 @@ Output ONLY valid JSON in format:
 
       const cacheKey = 'ai_cover_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
 
-      // ตรวจสอบ KV Cache
-      if (env && env.CHAT_KV) {
-        try {
-          const cachedCover = await env.CHAT_KV.get(cacheKey);
-          if (cachedCover) {
-            return new Response(JSON.stringify({ success: true, coverUrl: cachedCover, cached: true }), {
-              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
-            });
-          }
-        } catch (e) {}
+      // ตรวจสอบ Edge Cache / RAM (ไม่กินโควตา KV)
+      const cachedCover = await getEdgeCacheJson(cacheKey);
+      if (cachedCover) {
+        return new Response(JSON.stringify({ success: true, coverUrl: cachedCover, cached: true }), {
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
+        });
       }
 
       // Prompt Engineering สำหรับภาพปกการ์ตูนคุณภาพสูง
@@ -1090,14 +1173,8 @@ Output ONLY valid JSON in format:
       const genResult = await callTenixeImage(imagePrompt);
 
       if (genResult.success && genResult.url) {
-        // บันทึกลง KV Cache (เก็บไว้ 60 วัน ไม่ต้องเจนซ้ำ)
-        if (env && env.CHAT_KV) {
-          try {
-            await env.CHAT_KV.put(cacheKey, genResult.url, {
-              expirationTtl: 5184000 // 60 วัน
-            });
-          } catch (e) {}
-        }
+        // บันทึกลง Edge Cache + RAM (เก็บไว้ 60 วัน ใช้โควตา KV put = 0)
+        await putEdgeCacheJson(cacheKey, genResult.url, 5184000);
 
         return new Response(JSON.stringify({ success: true, coverUrl: genResult.url, cached: false }), {
           headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
@@ -1139,16 +1216,14 @@ Output ONLY valid JSON in format:
       const forceRefresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('refresh') === 'true';
       const cacheKey = 'ai_summary_v3_' + encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '_').slice(0, 70));
 
-      // ตรวจสอบ KV Cache (ข้ามถ้าเป็น template ซ้ำซากเดิม หรือสั่ง forceRefresh)
-      if (!forceRefresh && env && env.CHAT_KV) {
-        try {
-          const cached = await env.CHAT_KV.get(cacheKey, { type: 'json' });
-          if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ') && !cached.summary.includes('• เรื่องย่อของ "') && !cached.summary.includes('• เรื่องราวการเดินทาง')) {
-            return new Response(JSON.stringify({ success: true, ...cached, fromCache: true }), {
-              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
-            });
-          }
-        } catch (e) {}
+      // ตรวจสอบ Edge Cache / RAM (ข้ามถ้าสั่ง forceRefresh — ใช้โควตา KV = 0)
+      if (!forceRefresh) {
+        const cached = await getEdgeCacheJson(cacheKey);
+        if (cached && cached.summary && !cached.summary.includes('การเดินทางสุดเข้มข้นของ') && !cached.summary.includes('• เรื่องย่อของ "') && !cached.summary.includes('• เรื่องราวการเดินทาง')) {
+          return new Response(JSON.stringify({ success: true, ...cached, fromCache: true }), {
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }
+          });
+        }
       }
 
       // หากไม่มีเรื่องย่อส่งมา ให้ลองค้นหาจาก MangaDex API โดยตรง
@@ -1243,14 +1318,8 @@ Output ONLY valid JSON in format:
         }
       }
 
-      // บันทึกลง KV Cache (เก็บไว้ 30 วัน)
-      if (env && env.CHAT_KV) {
-        try {
-          await env.CHAT_KV.put(cacheKey, JSON.stringify(parsedResult), {
-            expirationTtl: 2592000 // 30 วัน
-          });
-        } catch (e) {}
-      }
+      // บันทึกลง Edge Cache + RAM (เก็บไว้ 30 วัน ใช้โควตา KV put = 0)
+      await putEdgeCacheJson(cacheKey, parsedResult, 2592000);
 
       return new Response(JSON.stringify({ success: true, ...parsedResult, fromCache: false }), {
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=2592000" }

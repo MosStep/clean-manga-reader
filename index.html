@@ -6,7 +6,7 @@
   <title>Clean Manga - ศูนย์รวมมังงะแปลไทย ไร้โฆษณา</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2300e676'/%3E%3Cstop offset='100%25' stop-color='%2300b0ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%230c0d12'/%3E%3Crect x='1.5' y='1.5' width='61' height='61' rx='14.5' fill='none' stroke='url(%23g)' stroke-width='2' stroke-opacity='0.6'/%3E%3Cpath d='M36 7 L17 34 L31 34 L26 57 L47 27 L33 27 Z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="style.css?v=4.19">
+  <link rel="stylesheet" href="style.css?v=4.21">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -154,12 +154,16 @@
       <button id="btnClearAllHistory" class="btn-clear-history">🗑️ ล้างประวัติทั้งหมด</button>
     </div>
 
-    <!-- Favorites Toolbar -->
-    <div id="favoritesToolbar" class="history-toolbar" style="display: none;">
-      <div class="history-toolbar-info">
-        <span>⭐ รายการเรื่องโปรดของคุณ (บันทึกและซิงก์ข้ามเครื่องอัตโนมัติ)</span>
+    <!-- Favorites Toolbar (แสดงเฉพาะเมื่อเปิดแท็บ ⭐ เรื่องโปรด เท่านั้น ไม่รกหน้าหลัก) -->
+    <div id="favoritesToolbar" class="history-toolbar favorites-shelf-toolbar" style="display: none;">
+      <div class="fav-shelf-tabs" id="favShelfTabs">
+        <button type="button" class="fav-shelf-chip active" data-shelf="all">ทั้งหมด</button>
+        <button type="button" class="fav-shelf-chip" data-shelf="new_ep">🔥 ตอนใหม่</button>
+        <button type="button" class="fav-shelf-chip" data-shelf="reading">📖 กำลังอ่าน</button>
+        <button type="button" class="fav-shelf-chip" data-shelf="on_hold">🫙 ดองไว้</button>
+        <button type="button" class="fav-shelf-chip" data-shelf="completed">✅ อ่านจบ</button>
       </div>
-      <button id="btnClearAllFavorites" class="btn-clear-history">🗑️ ล้างเรื่องโปรดทั้งหมด</button>
+      <button id="btnClearAllFavorites" class="btn-clear-history">🗑️ ล้างเรื่องโปรด</button>
     </div>
 
     <!-- Status Message -->
@@ -264,6 +268,11 @@
             <button id="btnModalFav" class="btn-modal-fav" title="บันทึกเป็นเรื่องโปรด">
               <span class="fav-icon">⭐</span> <span class="fav-text">เรื่องโปรด</span>
             </button>
+            <select id="modalFavStatusSelect" class="modal-fav-status-select" title="จัดสถานะเรื่องโปรด (กำลังอ่าน / ดองไว้ / อ่านจบ)" style="display: none;">
+              <option value="reading">📖 กำลังอ่าน</option>
+              <option value="on_hold">🫙 ดองไว้ก่อน</option>
+              <option value="completed">✅ อ่านจบแล้ว</option>
+            </select>
             <button id="btnModalAiSummary" class="btn-modal-ai-summary" title="สรุปเรื่องย่อ 3 บรรทัดด้วย AI">
               <span class="ai-sparkle">✨</span> สรุปเรื่องย่อ (AI)
             </button>
@@ -349,7 +358,7 @@
   </dialog>
 
   <script src="config.js?v=4.20"></script>
-  <script src="app.js?v=4.40"></script>
+  <script src="app.js?v=4.41"></script>
   <script>
     document.addEventListener('DOMContentLoaded', initAggregatorPage);
   </script>
