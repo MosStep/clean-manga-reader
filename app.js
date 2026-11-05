@@ -13,8 +13,58 @@ let isInitialSourceLoadBusy = true;
 const OFFLINE_MANGA_FEED_STORAGE = 'clean_manga_offline_feed_v3';
 const OFFLINE_MANGA_FEED_LIMIT = 140;
 
+// ตรวจสอบว่า URL รูปภาพเป็นโลโก้เว็บ, ไอคอน, แบนเนอร์ หรือภาพหน้าตอนยาว (ไม่ใช่ภาพปกเรื่อง) หรือไม่
+function isSiteLogoOrInvalidCover(url) {
+  if (!url || typeof url !== 'string') return true;
+  let clean = url.trim();
+  if (!clean || clean === 'about:blank') return true;
+  if (clean.startsWith('data:image/svg+xml')) return false;
+  if (clean.startsWith('data:image')) return true;
+  try {
+    if (clean.includes('/api/proxy') && clean.includes('url=')) {
+      const u = new URL(clean, window.location.origin);
+      const inner = u.searchParams.get('url');
+      if (inner) clean = decodeURIComponent(inner);
+    } else {
+      clean = decodeURIComponent(clean);
+    }
+  } catch (_) {}
+
+  // 1. ไฟล์โลโก้เว็บ ไอคอน โซเชียล หรือรูป placeholder
+  if (/\/(?:v\d+|logo|site-logo|header-logo|cropped-logo|custom-logo|favicon|apple-touch-icon|avatar|gravatar|blank|no-image|noimage|default-cover|placeholder|readerarea|facebookico|twitterico|discordico)[-_0-9a-z]*\.(?:png|webp|svg|gif|jpg|jpeg)(?:[?#]|$)/i.test(clean)) {
+    return true;
+  }
+  if (/\/wp-content\/uploads\/\d{4}\/\d{2}\/(?:logo|v\d+|header|banner|icon|cropped-)[^/]*\.(?:png|webp|gif|svg)(?:[?#]|$)/i.test(clean)) {
+    return true;
+  }
+  // 2. รูปภาพหน้าตอนมังงะ (เช่น ...-ep11-1.jpg, ...-ch1-01.jpg) ที่มักมีเครดิตโลโก้เว็บคั่นกลางและไม่ใช่รูปปกเรื่อง
+  if (/(?:[-_/](?:ep|ch|chapter|ตอนที่)[-_.]?\d+[-_]\d+\.(?:jpg|jpeg|png|webp))(?:[?#]|$)/i.test(clean)) {
+    return true;
+  }
+  return false;
+}
+
+// ทำความสะอาดชื่อเรื่อง ตัดคำนำหน้า/ต่อท้าย SEO ของเว็บต้นทางออก (เช่น "อ่านมังงะ เรื่อง ... แปลไทย")
+function cleanMangaSeriesTitle(rawTitle) {
+  if (!rawTitle || typeof rawTitle !== 'string') return '';
+  let t = rawTitle.trim();
+  t = t.replace(/^(?:อ่าน\s*มังงะ\s*เรื่อง|อ่านมังงะเรื่อง|อ่าน\s*การ์ตูน\s*เรื่อง|อ่าน\s*มังงะ|อ่าน\s*การ์ตูน|มังงะ\s*เรื่อง)\s*[:\-–|]?\s*/i, '').trim();
+  t = t.replace(/\s*(?:\|\s*[^|]+|\s+-\s+(?:Up-Manga|Go-Manga|Slow-Manga|Ped-Manga|NTR-Manga|Dark-Manga|Fin-Manga|Speed-Manga|Du-Manga|Manga-LC|Sing-Manga|Flash-Manga|Chibi-Manga|Nano-Manga).*)$/i, '').trim();
+  t = t.replace(/\s+แปลไทย(?:\s*TH)?\s*$/i, '').trim();
+  return t || rawTitle.trim();
+}
+
 function sanitizeMangaItem(m) {
   if (!m) return m;
+  if (m.title && /^(?:อ่าน\s*มังงะ|อ่าน\s*การ์ตูน|มังงะ\s*เรื่อง)/i.test(m.title)) {
+    const cleanedTitle = cleanMangaSeriesTitle(m.title);
+    if (cleanedTitle && cleanedTitle.length >= 2) {
+      m.title = cleanedTitle;
+    }
+  }
+  if (m.cover && isSiteLogoOrInvalidCover(m.cover)) {
+    m.cover = '';
+  }
   const sId = (m.sourceId || m.sourceType || '').toLowerCase();
   const sName = (m.sourceName || '').toLowerCase();
   const isAdultSource = sId === 'ntrnaja' || sName.includes('ntrnaja') || sName.includes('ntr');
@@ -460,6 +510,11 @@ async function fetchViaProxy(targetUrl, options = {}, timeoutMs = 15000) {
 // 2. แกะรูปภาพอย่างละเอียดทุก attribute ป้องกันรูปบั๊ก (รองรับ WP Fastest Cache, WP Rocket, LiteSpeed, WebP Picture, Noscript ฯลฯ)
 function extractCoverUrl(imgEl, baseUrl) {
   if (!imgEl) return '';
+  if (typeof imgEl.closest === 'function') {
+    if (imgEl.closest('header, .site-branding, .logox, .logos, .site-logo, .custom-logo-link, nav, #header, .header, footer, .footer, .site-footer')) {
+      return '';
+    }
+  }
   let src = imgEl.getAttribute('data-wpfc-original-src') || 
             imgEl.getAttribute('data-src') || 
             imgEl.getAttribute('data-lazy-src') || 
@@ -530,9 +585,11 @@ function extractCoverUrl(imgEl, baseUrl) {
   // ปรับ decode HTML entity เช่น &amp;
   src = src.replace(/&amp;/g, '&').trim();
 
-  if (src.includes('data:image') || src.includes('blank.gif') || src.includes('gravatar')) {
+  if (src.includes('data:image') || src.includes('blank.gif') || src.includes('gravatar') || isSiteLogoOrInvalidCover(src)) {
     src = '';
   }
+
+  if (!src) return '';
 
   if (src.startsWith('//')) {
     src = 'https:' + src;
@@ -5888,6 +5945,9 @@ function resolveSeriesUrlFromHtml(doc, currentUrl) {
       '.ts-breadcrumb a[href*="/project/"]',
       '.allc a',
       'a.allc',
+      '.daw.backseries a',
+      '.backseries a',
+      '.ts-breadcrumb ol li:nth-child(2) a',
       'a.back-to-series',
       'a.series-link',
       '.breadcrumb-item a[href*="/manga/"]',
@@ -5933,11 +5993,14 @@ function resolveSeriesUrlFromHtml(doc, currentUrl) {
     if (townMatch) return `${origin}${townMatch[1]}/`;
 
     // Madara: /manga/slug/chapter-... หรือ /manga/slug/-XX/ -> /manga/slug/
-    const madaraMatch = parsed.pathname.match(/^(\/manga\/[a-zA-Z0-9_\-]+)\/(?:chapter|ตอนที่|ch|ep|-[0-9]+)/i);
+    const decodedPath = (() => {
+      try { return decodeURIComponent(parsed.pathname); } catch (_) { return parsed.pathname; }
+    })();
+    const madaraMatch = decodedPath.match(/^(\/manga\/[a-zA-Z0-9_\-]+)\/(?:chapter|ตอนที่|ch|ep|-[0-9]+)/i);
     if (madaraMatch) return `${origin}${madaraMatch[1]}/`;
 
     // MangaReader / WordPress: /slug-ตอนที่-XX/ หรือ /slug-chapter-XX/ -> /slug/
-    const mrSlugMatch = parsed.pathname.match(/^\/([a-zA-Z0-9_\-]+?)(?:-(?:ตอนที่|chapter|ch|ep|c)?-?\d+.*|\/\d+.*)\/?$/i);
+    const mrSlugMatch = decodedPath.match(/^\/([a-zA-Z0-9_\-]+?)(?:-(?:ตอนที่|chapter|ch|ep|c)?-?\d+.*|\/\d+.*)\/?$/i);
     if (mrSlugMatch && mrSlugMatch[1] && mrSlugMatch[1].length >= 3 && !['manga', 'series', 'comic', 'project'].includes(mrSlugMatch[1].toLowerCase())) {
       const candidate = `${origin}/${mrSlugMatch[1]}/`;
       if (!isGenericCatalogUrl(candidate)) return candidate;
@@ -6030,14 +6093,14 @@ async function importMangaByDirectUrl(urlStr) {
         }
       }
 
-      // ดึงชื่อเรื่อง
-      const titleEl = doc.querySelector('h1.entry-title, h1, .post-title h1, .series-title, title');
+      // ดึงชื่อเรื่อง (เลือกจาก h1 ในเนื้อหาก่อนเสมอ เพื่อไม่ให้ติดข้อความ SEO ใน <title>)
+      const titleEl = doc.querySelector('h1.entry-title, .post-title h1, .series-title, .seriestuheader h1, h1') || doc.querySelector('title');
       if (titleEl) {
-        mangaTitle = titleEl.textContent.trim().replace(/\s*-\s*.*$/, '').replace(/\|.*$/, '').trim();
+        mangaTitle = cleanMangaSeriesTitle(titleEl.textContent.trim().replace(/\s*-\s*.*$/, '').replace(/\|.*$/, '').trim());
       }
 
-      // ดึงภาพปก
-      const coverEl = doc.querySelector('.thumb img, .summary_image img, .series-thumb img, img');
+      // ดึงภาพปกเฉพาะจากกล่องปกของเรื่องเท่านั้น (ห้ามใช้ selector 'img' ลอยๆ เพราะจะไปดึงโลโก้เว็บใน header)
+      const coverEl = doc.querySelector('.thumb img, .summary_image img, .series-thumb img, .seriestucontl img, .manga-info-pic img, .main-info .info-left img, .box-image img');
       if (coverEl) {
         mangaCover = extractCoverUrl(coverEl, sourceUrl);
       }
@@ -6081,11 +6144,11 @@ async function importMangaByDirectUrl(urlStr) {
         try {
           const seriesHtml = await fetchViaProxy(resolvedSeriesUrl, {}, 10000);
           const seriesDoc = new DOMParser().parseFromString(seriesHtml, 'text/html');
-          const pTitleEl = seriesDoc.querySelector('h1.entry-title, h1, .post-title h1, .series-title, title');
+          const pTitleEl = seriesDoc.querySelector('h1.entry-title, .post-title h1, .series-title, .seriestuheader h1, h1') || seriesDoc.querySelector('title');
           if (pTitleEl) {
-            parentTitle = pTitleEl.textContent.trim().replace(/\s*-\s*.*$/, '').replace(/\|.*$/, '').trim();
+            parentTitle = cleanMangaSeriesTitle(pTitleEl.textContent.trim().replace(/\s*-\s*.*$/, '').replace(/\|.*$/, '').trim());
           }
-          const pCoverEl = seriesDoc.querySelector('.thumb img, .summary_image img, .series-thumb img, img');
+          const pCoverEl = seriesDoc.querySelector('.thumb img, .summary_image img, .series-thumb img, .seriestucontl img, .manga-info-pic img, .main-info .info-left img, .box-image img');
           if (pCoverEl) {
             parentCover = extractCoverUrl(pCoverEl, sourceUrl);
           }
@@ -7286,6 +7349,33 @@ const _workingCoverUrlCache = new Map();
 const _scrapedMangaCoverCache = new Map();
 
 // ดึงภาพปกจากหน้ารายละเอียดของมังงะโดยตรงเมื่อ URL ภาพปกในหน้าฟีดเสียหรือว่างเปล่า
+function extractValidSeriesCoverFromDoc(doc, origin) {
+  if (!doc) return '';
+  const coverEl = doc.querySelector('.thumb img, .summary_image img, .series-thumb img, .seriestucontl img, .manga-info-pic img, .main-info .info-left img, .post-thumbnail img, .box-image img');
+  if (coverEl) {
+    const extracted = extractCoverUrl(coverEl, origin);
+    if (extracted && extracted.startsWith('http') && !isSiteLogoOrInvalidCover(extracted)) {
+      return extracted;
+    }
+  }
+  const ogImg = doc.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
+  if (ogImg) {
+    const ogHeight = parseInt(doc.querySelector('meta[property="og:image:height"]')?.getAttribute('content') || '0', 10);
+    const ogWidth = parseInt(doc.querySelector('meta[property="og:image:width"]')?.getAttribute('content') || '0', 10);
+    // ป้องกันการดึงภาพหน้าตอนยาว (เช่น 720x4000) หรือแบนเนอร์แนวนอนของเว็บมาเป็นปก
+    const isStripOrBanner = (ogHeight > 1600) || (ogWidth > 0 && ogHeight > 0 && (ogWidth / ogHeight > 1.55 || ogHeight / ogWidth > 2.35));
+    if (!isStripOrBanner) {
+      let content = (ogImg.getAttribute('content') || '').trim();
+      if (content && !isSiteLogoOrInvalidCover(content)) {
+        if (content.startsWith('//')) content = 'https:' + content;
+        else if (content.startsWith('/')) content = origin + content;
+        if (content.startsWith('http') && !isSiteLogoOrInvalidCover(content)) return content;
+      }
+    }
+  }
+  return '';
+}
+
 async function scrapeCoverFromMangaPage(mangaUrl) {
   if (!mangaUrl || isGenericCatalogUrl(mangaUrl)) return null;
   if (_scrapedMangaCoverCache.has(mangaUrl)) {
@@ -7297,18 +7387,28 @@ async function scrapeCoverFromMangaPage(mangaUrl) {
       if (!html) return null;
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const origin = new URL(mangaUrl).origin;
-      const ogImg = doc.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
-      if (ogImg) {
-        let content = (ogImg.getAttribute('content') || '').trim();
-        if (content && !/logo|favicon|banner|avatar/i.test(content)) {
-          if (content.startsWith('//')) content = 'https:' + content;
-          else if (content.startsWith('/')) content = origin + content;
-          if (content.startsWith('http')) return content;
+
+      // หากลิงก์เป็นหน้าอ่านตอน (มี ts_reader หรือไม่มีกล่องปกเรื่อง) ให้ย้อนกลับไปดึงจากหน้าหลักของเรื่องเสมอ
+      const isLikelyChapterDoc = html.includes('ts_reader.run') || !!doc.querySelector('#readerarea, .reading-content');
+      if (!isLikelyChapterDoc) {
+        const directCover = extractValidSeriesCoverFromDoc(doc, origin);
+        if (directCover) return directCover;
+      }
+
+      const parentSeriesUrl = resolveSeriesUrlFromHtml(doc, mangaUrl);
+      if (parentSeriesUrl && parentSeriesUrl !== mangaUrl && !isGenericCatalogUrl(parentSeriesUrl)) {
+        const seriesHtml = await fetchViaProxy(parentSeriesUrl, {}, 8000);
+        if (seriesHtml) {
+          const seriesDoc = new DOMParser().parseFromString(seriesHtml, 'text/html');
+          const seriesCover = extractValidSeriesCoverFromDoc(seriesDoc, new URL(parentSeriesUrl).origin);
+          if (seriesCover) return seriesCover;
         }
       }
-      const coverEl = doc.querySelector('.summary_image img, .thumb img, .seriestucontl img, .manga-info-pic img, .wp-post-image, article img');
-      const extracted = extractCoverUrl(coverEl, origin);
-      if (extracted && extracted.startsWith('http')) return extracted;
+
+      if (isLikelyChapterDoc) {
+        const fallbackCover = extractValidSeriesCoverFromDoc(doc, origin);
+        if (fallbackCover) return fallbackCover;
+      }
     } catch (e) {}
     return null;
   })();
@@ -7337,13 +7437,68 @@ function getOptimizedCoverUrl(cover, sourceId) {
   return cover;
 }
 
+function persistRecoveredCoverToStorage(mangaUrl, rawTitle, resolvedUrl) {
+  if (!resolvedUrl || isSiteLogoOrInvalidCover(resolvedUrl)) return;
+  try {
+    let hist = JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
+    if (Array.isArray(hist)) {
+      let changed = false;
+      hist.forEach(h => {
+        if (h && ((mangaUrl && h.mangaUrl === mangaUrl) || (rawTitle && (h.title === rawTitle || areMangaSameStory(h.title, rawTitle))))) {
+          if (h.cover !== resolvedUrl) {
+            h.cover = resolvedUrl;
+            changed = true;
+          }
+        }
+      });
+      if (changed) localStorage.setItem(STORAGE_HISTORY, JSON.stringify(hist));
+    }
+  } catch (_) {}
+  try {
+    let favs = JSON.parse(localStorage.getItem(STORAGE_FAVORITES) || '[]');
+    if (Array.isArray(favs)) {
+      let changed = false;
+      favs.forEach(f => {
+        if (f && ((mangaUrl && f.mangaUrl === mangaUrl) || (rawTitle && (f.title === rawTitle || areMangaSameStory(f.title, rawTitle))))) {
+          if (f.cover !== resolvedUrl) {
+            f.cover = resolvedUrl;
+            changed = true;
+          }
+        }
+      });
+      if (changed) localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(favs));
+    }
+  } catch (_) {}
+}
+
+window.handleCoverLoad = function(img) {
+  if (!img || img.dataset.logoChecked === '1') return;
+  const src = img.src || '';
+  if (!src || src === DEFAULT_COVER_PLACEHOLDER || src.startsWith('data:image/svg+xml')) return;
+  const w = img.naturalWidth || 0;
+  const h = img.naturalHeight || 0;
+  if (w > 0 && h > 0) {
+    // ตรวจจับโลโก้เว็บแนวนอน (เช่น 500x123), แถบภาพตอนมังงะแนวยาว (เช่น 720x4000 ที่มีแบนเนอร์เครดิตเว็บคั่นกลาง) หรือไอคอนขนาดเล็ก
+    const isHorizontalLogoOrBanner = (w / h > 1.55);
+    const isLongChapterStrip = (h / w > 2.35);
+    const isTinyIcon = (w < 60 || h < 60);
+    if (isHorizontalLogoOrBanner || isLongChapterStrip || isTinyIcon) {
+      img.dataset.logoChecked = '1';
+      img.dataset.proxyRetried = '1';
+      img.dataset.unscaledRetried = '1';
+      img.setAttribute('data-original-cover', '');
+      window.handleCoverError(img);
+    }
+  }
+};
+
 window.handleCoverError = function(img) {
   if (!img) return;
   const originalCover = img.getAttribute('data-original-cover') || '';
   const currentSrc = img.src || '';
 
   // 1. ถ้าดึงตรงแล้วไม่ขึ้น ให้สลับมาลองผ่าน Proxy 1 ครั้ง
-  if (originalCover && !img.dataset.proxyRetried) {
+  if (originalCover && !img.dataset.proxyRetried && !isSiteLogoOrInvalidCover(originalCover)) {
     img.dataset.proxyRetried = '1';
     if (!currentSrc.includes('/api/proxy')) {
       const proxyUrl = getProxyUrl(originalCover);
@@ -7354,7 +7509,7 @@ window.handleCoverError = function(img) {
   }
 
   // 2. ถ้าภาพปกติดขนาดย่อของ WordPress (เช่น -193x278.jpg) แล้ว 404 ให้ลองตัดขนาดย่อออกแล้วดึงภาพต้นฉบับผ่าน Proxy
-  if (originalCover && !img.dataset.unscaledRetried) {
+  if (originalCover && !img.dataset.unscaledRetried && !isSiteLogoOrInvalidCover(originalCover)) {
     img.dataset.unscaledRetried = '1';
     const unscaled = originalCover.replace(/-\d+x\d+(?=\.(?:jpg|jpeg|png|webp|avif|gif)(?:[?#]|$))/i, '');
     if (unscaled !== originalCover) {
@@ -7372,7 +7527,7 @@ window.handleCoverError = function(img) {
   const rawTitle = (img.getAttribute('data-title') || '').trim();
   const mangaUrl = (img.getAttribute('data-manga-url') || '').trim();
 
-  const applyRecoveredCover = (resolvedUrl) => {
+  const applyRecoveredCover = (resolvedUrl, rawResolvedUrl = '') => {
     if (!resolvedUrl || !img.isConnected) return;
     if (originalCover) _workingCoverUrlCache.set(originalCover, resolvedUrl);
     img.onerror = () => {
@@ -7380,19 +7535,29 @@ window.handleCoverError = function(img) {
       img.src = DEFAULT_COVER_PLACEHOLDER;
     };
     img.src = resolvedUrl;
+    const toSave = rawResolvedUrl || resolvedUrl;
     if (typeof allMangaList !== 'undefined' && Array.isArray(allMangaList)) {
       const item = allMangaList.find(x => (mangaUrl && x.mangaUrl === mangaUrl) || (rawTitle && x.title === rawTitle));
-      if (item) item.cover = resolvedUrl;
+      if (item) item.cover = toSave;
     }
+    persistRecoveredCoverToStorage(mangaUrl, rawTitle, toSave);
   };
 
-  // 3. ลองดึง og:image จากหน้ามังงะต้นทางก่อน หากไม่ได้ค่อย fallback ไป MangaDex และ AI Cover
+  // 3. ลองดึงปกจริงจากหน้าหลักของเรื่องต้นทางก่อน หากไม่ได้ค่อย fallback ไปคลังในหน้าเว็บ, MangaDex และ AI Cover
   (async () => {
+    if (typeof allMangaList !== 'undefined' && Array.isArray(allMangaList)) {
+      const feedMatch = allMangaList.find(am => am.cover && !isSiteLogoOrInvalidCover(am.cover) && ((mangaUrl && am.mangaUrl === mangaUrl) || (rawTitle && (am.title === rawTitle || areMangaSameStory(am.title, rawTitle)))));
+      if (feedMatch && feedMatch.cover && feedMatch.cover !== originalCover) {
+        applyRecoveredCover(getOptimizedCoverUrl(feedMatch.cover, feedMatch.sourceId), feedMatch.cover);
+        return;
+      }
+    }
+
     if (mangaUrl && !img.dataset.scrapedRetried) {
       img.dataset.scrapedRetried = '1';
       const scraped = await scrapeCoverFromMangaPage(mangaUrl);
-      if (scraped && scraped !== originalCover) {
-        applyRecoveredCover(getProxyUrl(scraped));
+      if (scraped && scraped !== originalCover && !isSiteLogoOrInvalidCover(scraped)) {
+        applyRecoveredCover(getProxyUrl(scraped), scraped);
         return;
       }
     }
@@ -7401,20 +7566,20 @@ window.handleCoverError = function(img) {
     try {
       const cachedAiCover = localStorage.getItem('ai_cover_' + rawTitle);
       if (cachedAiCover) {
-        applyRecoveredCover(cachedAiCover);
+        applyRecoveredCover(cachedAiCover, cachedAiCover);
         return;
       }
     } catch (_) {}
 
     const mdCover = await fetchMangaDexCoverByTitle(rawTitle);
     if (mdCover) {
-      applyRecoveredCover(mdCover);
+      applyRecoveredCover(mdCover, mdCover);
       return;
     }
 
     const aiCover = await fetchAiCoverByTitle(rawTitle);
     if (aiCover) {
-      applyRecoveredCover(aiCover);
+      applyRecoveredCover(aiCover, aiCover);
     }
   })().catch(() => {});
 };
@@ -7601,7 +7766,7 @@ function renderMangaCards() {
         <button class="btn-card-fav ${isFav ? 'active' : ''}" data-title="${encodeURIComponent(m.title)}" title="${isFav ? 'นำออกจากเรื่องโปรด' : 'บันทึกเป็นเรื่องโปรด'}">
           ${isFav ? '★' : '⭐'}
         </button>
-        <img src="${coverUrl}" alt="" data-title="${escapeHtmlText(m.title)}" data-original-cover="${escapeHtmlText(m.cover || '')}" data-manga-url="${escapeHtmlText(m.mangaUrl || '')}" loading="${cardIndex < 12 ? 'eager' : 'lazy'}" referrerpolicy="no-referrer" onerror="handleCoverError(this);">
+        <img src="${coverUrl}" alt="" data-title="${escapeHtmlText(m.title)}" data-original-cover="${escapeHtmlText(m.cover || '')}" data-manga-url="${escapeHtmlText(m.mangaUrl || '')}" loading="${cardIndex < 12 ? 'eager' : 'lazy'}" referrerpolicy="no-referrer" onload="handleCoverLoad(this);" onerror="handleCoverError(this);">
         <span class="manga-source-pill">${m.sourceName}</span>
       </div>
       <div class="manga-info">
@@ -7666,35 +7831,15 @@ function renderMangaCards() {
         }).catch(() => {});
       }
       if (m.mangaUrl) {
-        fetchViaProxy(m.mangaUrl, {}, 6000).then(html => {
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(html, 'text/html');
-          const ogImg = doc.querySelector('meta[property="og:image"]')?.getAttribute('content') ||
-                        doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content') ||
-                        doc.querySelector('link[rel="image_src"]')?.getAttribute('href');
-          const coverEl = doc.querySelector('.thumb img, .summary_image img, .series-thumb img, .post-thumbnail img, img[class*="wp-post-image"], .box-image img');
-          let foundCover = '';
-          if (coverEl) {
-            foundCover = extractCoverUrl(coverEl, m.sourceUrl || m.mangaUrl);
-          }
-          if (!foundCover && ogImg) {
-            foundCover = extractCoverUrl({ getAttribute: () => ogImg }, m.sourceUrl || m.mangaUrl);
-          }
-          if (foundCover) {
+        scrapeCoverFromMangaPage(m.mangaUrl).then(foundCover => {
+          if (foundCover && !isSiteLogoOrInvalidCover(foundCover)) {
             m.cover = foundCover;
             const cardImg = card.querySelector('.manga-cover img');
             if (cardImg) {
               cardImg.setAttribute('data-original-cover', foundCover);
               cardImg.src = getOptimizedCoverUrl(foundCover, m.sourceId);
             }
-            try {
-              let hist = JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
-              const hItem = hist.find(h => h.title === m.title || h.mangaUrl === m.mangaUrl || areMangaSameStory(h.title, m.title));
-              if (hItem) {
-                hItem.cover = foundCover;
-                localStorage.setItem(STORAGE_HISTORY, JSON.stringify(hist));
-              }
-            } catch (e) {}
+            persistRecoveredCoverToStorage(m.mangaUrl, m.title, foundCover);
           }
         }).catch(() => {});
       }
