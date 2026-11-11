@@ -2389,17 +2389,19 @@ body {
   box-shadow: 0 0 12px rgba(255, 202, 40, 0.4);
 }
 
-/* Remove button on history and favorites card */
+/* Remove button on history and favorites card (วางข้างปุ่มดาวด้านขวา ไม่ทับป้ายแหล่งที่มาด้านซ้าย) */
 .btn-card-remove-hist,
 .btn-card-remove-fav {
   position: absolute;
   top: 10px;
-  left: 10px;
+  right: 44px;
+  left: auto;
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: rgba(255, 68, 68, 0.85);
-  border: none;
+  background: rgba(239, 68, 68, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
   color: #fff;
   font-size: 0.8rem;
   display: flex;
@@ -2409,7 +2411,7 @@ body {
   z-index: 3;
   transition: all 0.2s;
   padding: 0;
-  opacity: 0.85;
+  opacity: 0.9;
 }
 
 .btn-card-remove-hist:hover,

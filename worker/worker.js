@@ -1255,13 +1255,15 @@ Output ONLY valid JSON in format:
       }
 
       const isFakeSummaryText = (txt) => {
-        if (!txt || txt.trim().length < 75) return true;
+        if (!txt || txt.trim().length < 60) return true;
         const bulletCount = (txt.match(/•/g) || []).length;
         if (bulletCount < 2) return true;
         return txt.includes('การเดินทางสุดเข้มข้นของ') ||
                txt.includes('• เรื่องย่อของ "') ||
                txt.includes('• เรื่องราวการเดินทาง') ||
+               txt.includes('การผจญภัยและการต่อสู้สุดเข้มข้น') ||
                txt.includes('เผชิญกับศัตรูและปริศนาที่ท้าทายขีดจำกัด') ||
+               txt.includes('จุดเปลี่ยนสำคัญที่จะเปลี่ยนชะตากรรมของเรื่องราว') ||
                txt.includes('ฉันไม่มีข้อมูล') ||
                txt.includes('ไม่สามารถสรุปเนื้อเรื่อง') ||
                txt.includes('หากคุณส่งเรื่องย่อ');
