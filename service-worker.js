@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'clean-manga-reader-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v35`;
+const CACHE_NAME = `${CACHE_PREFIX}v36`;
 const IMAGE_CACHE_NAME = 'clean-manga-reader-images-v2';
 const SHELL_ASSETS = [
   '',
@@ -7,7 +7,7 @@ const SHELL_ASSETS = [
   'reader.html',
   'style.css?v=4.22',
   'config.js?v=4.20',
-  'app.js?v=4.51',
+  'app.js?v=4.54',
   'favicon.svg'
 ];
 

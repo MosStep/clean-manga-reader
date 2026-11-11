@@ -2891,9 +2891,11 @@ async function pullAndMergeSyncData(options = {}) {
 
         const mergedFavs = [...localFavs];
         cloudFavs.forEach(cf => {
+          const ccfTitle = cleanMangaSimpleKey(cf.title);
           const existIdx = mergedFavs.findIndex(lf => {
             if (lf.title === cf.title || (lf.mangaUrl && cf.mangaUrl && lf.mangaUrl === cf.mangaUrl)) return true;
-            return areMangaSameStory(lf.title, cf.title);
+            if (ccfTitle && cleanMangaSimpleKey(lf.title) === ccfTitle) return true;
+            return false;
           });
           if (existIdx >= 0) {
             const lf = mergedFavs[existIdx];
@@ -2907,6 +2909,7 @@ async function pullAndMergeSyncData(options = {}) {
           }
         });
         localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(mergedFavs));
+        invalidateFavoritesCache();
 
         // 2. รวมประวัติการอ่าน: กรองรายการที่ถูกลบออก หรือเวลาเก่ากว่าคำสั่งล้างทั้งหมด
         const cloudHist = (result.data.history || []).filter(ch => {
@@ -2920,9 +2923,11 @@ async function pullAndMergeSyncData(options = {}) {
 
         const mergedHist = [...localHist];
         cloudHist.forEach(ch => {
+          const cchTitle = cleanMangaSimpleKey(ch.title);
           const existIdx = mergedHist.findIndex(lh => {
             if (lh.title === ch.title || (lh.mangaUrl && ch.mangaUrl && lh.mangaUrl === ch.mangaUrl)) return true;
-            return areMangaSameStory(lh.title, ch.title);
+            if (cchTitle && cleanMangaSimpleKey(lh.title) === cchTitle) return true;
+            return false;
           });
           if (existIdx >= 0) {
             const exist = mergedHist[existIdx];
@@ -2944,6 +2949,7 @@ async function pullAndMergeSyncData(options = {}) {
         // จำกัด 500 เรื่อง เรียงตามเวลาอ่านล่าสุด
         mergedHist.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
         localStorage.setItem(STORAGE_HISTORY, JSON.stringify(mergedHist.slice(0, 500)));
+        invalidateHistoryCache();
 
         updateHistoryAndFavCounts();
         const mergedLocalRevision = getCloudSyncRevision({
@@ -3074,8 +3080,25 @@ function copySyncKey() {
 }
 
 // ฟังก์ชันบันทึกประวัติการอ่านลง LocalStorage อย่างปลอดภัย 100% พร้อมระบบ Auto-Pruning เมื่อพื้นที่ใกล้เต็ม
+let _cachedHistory = null;
+let _cachedFavorites = null;
+
+function invalidateHistoryCache() {
+  _cachedHistory = null;
+}
+
+function invalidateFavoritesCache() {
+  _cachedFavorites = null;
+}
+
+function cleanMangaSimpleKey(s) {
+  if (!s || typeof s !== 'string') return '';
+  return s.toLowerCase().replace(/แปลไทย|ตอนที่.*|\[.*?\]|\(.*?\)|[^\u0E00-\u0E7Fa-z0-9]/gi, '').trim();
+}
+
 function saveHistoryToStorage(history) {
   if (!Array.isArray(history)) return false;
+  invalidateHistoryCache();
   // กรองเรื่องหลอกออก
   const cleanList = history.filter(h => h && h.title && h.title !== 'มังงะ' && h.title !== 'อ่านการ์ตูน');
   
@@ -3167,106 +3190,32 @@ function extractMangaTitleFromReaderContext(params, chapterUrl, rawTitle) {
   return '';
 }
 
-// ดึงประวัติการอ่าน พร้อมระบบตัดและรวมเรื่องซ้ำอัตโนมัติ (Smart Deduplication ข้ามเว็บต้นทาง)
+// ดึงประวัติการอ่าน พร้อมแคชในแรมและความเร็ว O(1) ไร้การหน่วงหน้าจอ
 function getReadingHistory() {
+  if (_cachedHistory) return _cachedHistory;
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
-    if (!Array.isArray(raw) || raw.length === 0) return [];
+    if (!Array.isArray(raw) || raw.length === 0) {
+      _cachedHistory = [];
+      return _cachedHistory;
+    }
 
-    // กรอง dummy titles ออกทันที และทำความสะอาดชื่อเรื่อง/ปก
-    const validRaw = raw.filter(item => item && item.title && item.title !== 'มังงะ' && item.title !== 'อ่านการ์ตูน');
-    if (validRaw.length === 0) return [];
-
-    validRaw.forEach(item => sanitizeMangaItem(item));
-
-    const map = new Map();
+    const seenUrls = new Set();
+    const seenTitles = new Set();
     const result = [];
-    let hasMerged = false;
 
-    validRaw.forEach(item => {
-      if (!item || !item.title) return;
-      
-      let foundExisting = null;
-      // 1. ตรวจสอบจาก URL ที่ตรงกันก่อน
-      if (item.mangaUrl) {
-        foundExisting = result.find(r => r.mangaUrl === item.mangaUrl);
-      }
-      // 2. ตรวจสอบว่าชื่อเรื่องเป็นเรื่องเดียวกันแท้จริงหรือไม่
-      if (!foundExisting) {
-        foundExisting = result.find(r => areMangaSameStory(item.title, r.title));
-      }
+    for (const item of raw) {
+      if (!item || !item.title || item.title === 'มังงะ' || item.title === 'อ่านการ์ตูน') continue;
+      sanitizeMangaItem(item);
+      const url = item.mangaUrl ? item.mangaUrl.trim() : '';
+      const cTitle = cleanMangaSimpleKey(item.title);
 
-      if (foundExisting) {
-        const existing = foundExisting;
-        hasMerged = true;
-        const existingRead = Array.isArray(existing.readChapters) ? existing.readChapters : [];
-        const itemRead = Array.isArray(item.readChapters) ? item.readChapters : [];
-        const mergedRead = Array.from(new Set([...existingRead, ...itemRead])).slice(-50);
+      if (url && seenUrls.has(url)) continue;
+      if (cTitle && seenTitles.has(cTitle)) continue;
 
-        // เลือกรายการที่อ่านล่าสุดกว่า
-        const newer = (item.updatedAt || 0) >= (existing.updatedAt || 0) ? item : existing;
-        const older = newer === item ? existing : item;
+      if (url) seenUrls.add(url);
+      if (cTitle) seenTitles.add(cTitle);
 
-        // รวมรายการเว็บสำรอง (altSources) แบบปลอดภัย ไม่ซ้อนวัตถุใหญ่
-        const rawNewerAlt = Array.isArray(newer.altSources) ? newer.altSources : [];
-        const rawOlderAlt = Array.isArray(older.altSources) ? older.altSources : [];
-        const combinedAlt = [
-          ...rawNewerAlt,
-          ...rawOlderAlt,
-          ...(older.mangaUrl && older.mangaUrl !== newer.mangaUrl ? [{
-            sourceId: older.sourceId || '',
-            sourceName: older.sourceName || 'Online',
-            mangaUrl: older.mangaUrl,
-            sourceType: older.sourceType || 'mangareader'
-          }] : [])
-        ].map(a => ({
-          sourceId: a.sourceId || '',
-          sourceName: a.sourceName || 'Online',
-          mangaUrl: a.mangaUrl || '',
-          sourceType: a.sourceType || 'mangareader'
-        })).filter((a, idx, arr) => a.mangaUrl && arr.findIndex(x => x.mangaUrl === a.mangaUrl) === idx);
-
-        const merged = {
-          ...newer,
-          readChapters: mergedRead,
-          altSources: combinedAlt,
-          updatedAt: Math.max(existing.updatedAt || 0, item.updatedAt || 0)
-        };
-
-        const idx = result.indexOf(existing);
-        if (idx !== -1) result[idx] = merged;
-      } else {
-        result.push(item);
-      }
-    });
-
-    // กู้คืนมังงะคนละเรื่องที่อาจเคยถูกกลืนเข้าไปใน altSources ของเรื่องอื่นโดยผิดพลาด
-    const rescuedFromAlt = [];
-    result.forEach(r => {
-      if (Array.isArray(r.altSources) && r.altSources.length > 0) {
-        r.altSources = r.altSources.filter(alt => {
-          if (!alt || !alt.title) return true; // เก็บ altSource แบบย่อไว้ตามปกติ
-          if (!areMangaSameStory(alt.title, r.title)) {
-            if (!result.some(existing => existing.title === alt.title || areMangaSameStory(existing.title, alt.title))) {
-              sanitizeMangaItem(alt);
-              rescuedFromAlt.push(alt);
-            }
-            hasMerged = true;
-            return false;
-          }
-          return true;
-        });
-      }
-    });
-    if (rescuedFromAlt.length > 0) {
-      result.push(...rescuedFromAlt);
-      hasMerged = true;
-    }
-
-    if (hasMerged) {
-      saveHistoryToStorage(result);
-    }
-    result.forEach(item => {
       if (!item.lang) {
         if (item.sourceId === 'mangadex' || (item.mangaUrl && item.mangaUrl.includes('mangadex.org')) || (item.lastChapterUrl && item.lastChapterUrl.includes('mangadex'))) {
           item.lang = 'en';
@@ -3274,21 +3223,39 @@ function getReadingHistory() {
           item.lang = 'th';
         }
       }
-    });
+      result.push(item);
+    }
+
     result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    return result;
+    _cachedHistory = result;
+    return _cachedHistory;
   } catch (e) {
-    return [];
+    _cachedHistory = [];
+    return _cachedHistory;
   }
 }
 
-// ดึงรายการโปรด
+// ดึงรายการโปรด พร้อมแคชในแรม
 function getFavorites() {
+  if (_cachedFavorites) return _cachedFavorites;
   try {
     const list = JSON.parse(localStorage.getItem(STORAGE_FAVORITES) || '[]');
-    if (!Array.isArray(list)) return [];
-    return list.map(item => {
+    if (!Array.isArray(list)) {
+      _cachedFavorites = [];
+      return _cachedFavorites;
+    }
+    const result = [];
+    const seenUrls = new Set();
+    const seenTitles = new Set();
+    for (const item of list) {
+      if (!item || !item.title) continue;
       sanitizeMangaItem(item);
+      const url = item.mangaUrl ? item.mangaUrl.trim() : '';
+      const cTitle = cleanMangaSimpleKey(item.title);
+      if (url && seenUrls.has(url)) continue;
+      if (cTitle && seenTitles.has(cTitle)) continue;
+      if (url) seenUrls.add(url);
+      if (cTitle) seenTitles.add(cTitle);
       if (!item.lang) {
         if (item.sourceId === 'mangadex' || (item.mangaUrl && item.mangaUrl.includes('mangadex.org'))) {
           item.lang = 'en';
@@ -3296,24 +3263,30 @@ function getFavorites() {
           item.lang = 'th';
         }
       }
-      return item;
-    });
+      result.push(item);
+    }
+    _cachedFavorites = result;
+    return _cachedFavorites;
   } catch (e) {
-    return [];
+    _cachedFavorites = [];
+    return _cachedFavorites;
   }
 }
 
 let currentFavShelfFilter = 'all'; // 'all' | 'new_ep' | 'reading' | 'on_hold' | 'completed'
 
-function findFavoriteItem(mangaOrTitle, favs = getFavorites()) {
+function findFavoriteItem(mangaOrTitle, favs = null) {
   if (!mangaOrTitle) return null;
+  const fList = favs || getFavorites();
   const targetTitle = typeof mangaOrTitle === 'object' ? (mangaOrTitle.title || '') : String(mangaOrTitle);
   const targetUrl = typeof mangaOrTitle === 'object' ? (mangaOrTitle.mangaUrl || '') : '';
   if (!targetTitle && !targetUrl) return null;
-  return favs.find(f => {
+  const cTitle = cleanMangaSimpleKey(targetTitle);
+  return fList.find(f => {
     if (targetUrl && f.mangaUrl && f.mangaUrl === targetUrl) return true;
     if (targetTitle && f.title === targetTitle) return true;
-    return targetTitle ? areMangaSameStory(f.title, targetTitle) : false;
+    if (cTitle && cleanMangaSimpleKey(f.title) === cTitle) return true;
+    return false;
   }) || null;
 }
 
@@ -3332,6 +3305,7 @@ function setFavoriteReadingStatus(mangaOrTitle, newStatus) {
   target.statusUpdatedAt = Date.now();
   try {
     localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(favs));
+    invalidateFavoritesCache();
   } catch (e) {}
   updateHistoryAndFavCounts();
   pushSyncData();
@@ -3359,10 +3333,12 @@ function getMangaNewEpisodeInfo(manga, histList = null, favList = null) {
 
   let liveMatch = null;
   if (Array.isArray(allMangaList) && allMangaList.length > 0) {
+    const cTitle = cleanMangaSimpleKey(manga.title);
     liveMatch = allMangaList.find(am => {
       if (manga.mangaUrl && am.mangaUrl && am.mangaUrl === manga.mangaUrl) return true;
       if (am.title === manga.title) return true;
-      return areMangaSameStory(am.title, manga.title);
+      if (cTitle && cleanMangaSimpleKey(am.title) === cTitle) return true;
+      return false;
     }) || null;
   }
 
@@ -3405,12 +3381,14 @@ function getMangaNewEpisodeInfo(manga, histList = null, favList = null) {
 }
 
 // ตรวจสอบว่าเป็นเรื่องโปรดหรือไม่
-function isFavorite(mangaTitle) {
+function isFavorite(mangaTitle, favList = null) {
   if (!mangaTitle) return false;
-  const favs = getFavorites();
+  const favs = favList || getFavorites();
+  const cTitle = cleanMangaSimpleKey(mangaTitle);
   return favs.some(f => {
     if (f.title === mangaTitle) return true;
-    return areMangaSameStory(f.title, mangaTitle);
+    if (cTitle && cleanMangaSimpleKey(f.title) === cTitle) return true;
+    return false;
   });
 }
 
@@ -3462,6 +3440,7 @@ function toggleFavorite(manga) {
 
   try {
     localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(favs));
+    invalidateFavoritesCache();
   } catch (e) {}
 
   updateHistoryAndFavCounts();
@@ -3506,6 +3485,7 @@ function deleteFavoriteItem(manga) {
 
   try {
     localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(favs));
+    invalidateFavoritesCache();
   } catch (e) {}
 
   updateHistoryAndFavCounts();
@@ -3535,6 +3515,7 @@ function clearAllFavorites() {
     favs.forEach(f => recordFavoriteDeletion(f));
     try {
       localStorage.removeItem(STORAGE_FAVORITES);
+      invalidateFavoritesCache();
     } catch (e) {}
     updateHistoryAndFavCounts();
     pushSyncData();
@@ -3675,6 +3656,7 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl, options = {}) {
         }
         if (favChanged) {
           localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(favs));
+          invalidateFavoritesCache();
         }
       }
     } catch (e) {}
@@ -3689,11 +3671,14 @@ function recordReadingHistory(manga, chapterTitle, chapterUrl, options = {}) {
   }
 }
 
-function findReadingHistoryItem(manga, history = getReadingHistory()) {
+function findReadingHistoryItem(manga, history = null) {
   if (!manga || !manga.title) return null;
-  return history.find(item => {
+  const hList = history || getReadingHistory();
+  const cTitle = cleanMangaSimpleKey(manga.title);
+  return hList.find(item => {
     if (item.title === manga.title || (manga.mangaUrl && item.mangaUrl === manga.mangaUrl)) return true;
-    return areMangaSameStory(item.title, manga.title);
+    if (cTitle && cleanMangaSimpleKey(item.title) === cTitle) return true;
+    return false;
   }) || null;
 }
 
@@ -3755,6 +3740,7 @@ function saveReadingPosition(manga, chapterTitle, chapterUrl, progress, options 
   history.unshift(item);
   try {
     localStorage.setItem(STORAGE_HISTORY, JSON.stringify(history.slice(0, 500)));
+    invalidateHistoryCache();
   } catch (e) {}
   updateHistoryAndFavCounts();
   scheduleReadingPositionCloudSync(Boolean(options.forceCloudSync));
@@ -3766,15 +3752,17 @@ function deleteHistoryItem(itemIdentifier) {
   let history = getReadingHistory();
   const targetKey = typeof itemIdentifier === 'object' ? (itemIdentifier.mangaUrl || itemIdentifier.title) : itemIdentifier;
   const targetTitle = typeof itemIdentifier === 'object' ? itemIdentifier.title : itemIdentifier;
+  const cTargetTitle = cleanMangaSimpleKey(targetTitle);
 
   history = history.filter(h => {
     if (h.mangaUrl === targetKey || h.title === targetTitle) return false;
-    if (targetTitle && areMangaSameStory(h.title, targetTitle)) return false;
+    if (cTargetTitle && cleanMangaSimpleKey(h.title) === cTargetTitle) return false;
     return true;
   });
 
   try {
     localStorage.setItem(STORAGE_HISTORY, JSON.stringify(history));
+    invalidateHistoryCache();
   } catch (e) {}
   updateHistoryAndFavCounts();
   pushSyncData(); // ซิงก์ขึ้น Cloudflare KV
@@ -3790,6 +3778,7 @@ function clearAllHistory() {
     try {
       localStorage.removeItem(STORAGE_HISTORY);
       localStorage.setItem(STORAGE_HISTORY_CLEARED_AT, String(now));
+      invalidateHistoryCache();
     } catch (e) {}
     updateHistoryAndFavCounts();
     pushSyncData(); // ซิงก์ขึ้น Cloudflare KV
@@ -7510,19 +7499,23 @@ function getOptimizedCoverUrl(cover, sourceId) {
 
 function persistRecoveredCoverToStorage(mangaUrl, rawTitle, resolvedUrl) {
   if (!resolvedUrl || isSiteLogoOrInvalidCover(resolvedUrl)) return;
+  const cTitle = cleanMangaSimpleKey(rawTitle);
   try {
     let hist = JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]');
     if (Array.isArray(hist)) {
       let changed = false;
       hist.forEach(h => {
-        if (h && ((mangaUrl && h.mangaUrl === mangaUrl) || (rawTitle && (h.title === rawTitle || areMangaSameStory(h.title, rawTitle))))) {
+        if (h && ((mangaUrl && h.mangaUrl === mangaUrl) || (rawTitle && (h.title === rawTitle || (cTitle && cleanMangaSimpleKey(h.title) === cTitle))))) {
           if (h.cover !== resolvedUrl) {
             h.cover = resolvedUrl;
             changed = true;
           }
         }
       });
-      if (changed) localStorage.setItem(STORAGE_HISTORY, JSON.stringify(hist));
+      if (changed) {
+        localStorage.setItem(STORAGE_HISTORY, JSON.stringify(hist));
+        invalidateHistoryCache();
+      }
     }
   } catch (_) {}
   try {
@@ -7530,14 +7523,17 @@ function persistRecoveredCoverToStorage(mangaUrl, rawTitle, resolvedUrl) {
     if (Array.isArray(favs)) {
       let changed = false;
       favs.forEach(f => {
-        if (f && ((mangaUrl && f.mangaUrl === mangaUrl) || (rawTitle && (f.title === rawTitle || areMangaSameStory(f.title, rawTitle))))) {
+        if (f && ((mangaUrl && f.mangaUrl === mangaUrl) || (rawTitle && (f.title === rawTitle || (cTitle && cleanMangaSimpleKey(f.title) === cTitle))))) {
           if (f.cover !== resolvedUrl) {
             f.cover = resolvedUrl;
             changed = true;
           }
         }
       });
-      if (changed) localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(favs));
+      if (changed) {
+        localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(favs));
+        invalidateFavoritesCache();
+      }
     }
   } catch (_) {}
 }
@@ -7730,6 +7726,8 @@ function renderMangaCards() {
 
   const isHistoryView = currentTagFilter === 'history';
   const isFavView = currentTagFilter === 'favorites';
+  const currentFavs = getFavorites();
+  const currentHist = getReadingHistory();
 
   slice.forEach((m, cardIndex) => {
     sanitizeMangaItem(m);
@@ -7738,9 +7736,10 @@ function renderMangaCards() {
     if (m.mangaUrl) card.dataset.url = m.mangaUrl;
     if (m.title) card.dataset.title = m.title;
 
-    // กู้คืนภาพปกอัตโนมัติหากปกเดิมว่าง
+    // กู้คืนภาพปกอัตโนมัติหากปกเดิมว่าง (เร็วระดับ O(1) ไร้การเรียก regex ซ้ำซ้อน)
     if (!m.cover && allMangaList && allMangaList.length > 0) {
-      const match = allMangaList.find(am => am.title === m.title || getMangaTitleKeys(am.title).some(k => getMangaTitleKeys(m.title).includes(k)));
+      const cTitle = cleanMangaSimpleKey(m.title);
+      const match = allMangaList.find(am => am.cover && (am.title === m.title || (m.mangaUrl && am.mangaUrl === m.mangaUrl) || (cTitle && cleanMangaSimpleKey(am.title) === cTitle)));
       if (match && match.cover) {
         m.cover = match.cover;
       }
@@ -7757,8 +7756,8 @@ function renderMangaCards() {
 
     const placeholder = DEFAULT_COVER_PLACEHOLDER;
     const coverUrl = m.cover ? getOptimizedCoverUrl(m.cover, m.sourceId) : placeholder;
-    const isFav = isFavorite(m.title);
-    const newEpInfo = getMangaNewEpisodeInfo(m);
+    const isFav = isFavorite(m.title, currentFavs);
+    const newEpInfo = getMangaNewEpisodeInfo(m, currentHist, currentFavs);
 
     let historyBadgeHtml = '';
     if (isHistoryView) {
